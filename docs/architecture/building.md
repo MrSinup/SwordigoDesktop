@@ -8,7 +8,7 @@
 
 ### Required System Packages (Fedora / Debian / Ubuntu)
 - **Host Compiler**: GCC / G++ (C++17 support)
-- **ARM64 Cross Compiler**: `aarch64-linux-gnu-gcc` (compiles `libsre.so`)
+- **ARM64 Cross Compiler**: `aarch64-linux-gnu-gcc` (compiles `libsre12.so` / `libsre13.so`)
 - **Libraries**: `SDL3`, `SDL3_image`, `OpenGL` (`libGL`), `Unicorn Engine` (`libunicorn`), `Dynarmic`, `OpenAL Soft`, `libvorbisfile`, `zlib`, `pthreads`.
 
 #### Fedora Install Command:
@@ -35,7 +35,7 @@ sudo apt install build-essential gcc-aarch64-linux-gnu \
 ├── Makefile                    # GNU Make build system
 ├── run_swordigo.sh             # Build + Install + Launch script
 ├── swordigo_boot               # Main desktop runtime binary (x86_64)
-├── libsre.so                   # ARM64 guest SRE library
+├── libsre12.so / libsre13.so   # ARM64 guest SRE libraries (per engine ABI)
 ├── src/                        # Source codebase
 │   ├── main.cpp                # Main boot sequence & loop
 │   ├── jni/                    # JNI bridge marshalling
@@ -55,7 +55,7 @@ make -j$(nproc)
 
 # Build specific components
 make swordigo_boot      # Main host executable
-make libsre.so          # ARM64 guest library
+make sre / make sre13   # ARM64 guest libraries (libsre12.so / libsre13.so)
 
 # Install SRE guest library to local engine cache
 make install-sre
