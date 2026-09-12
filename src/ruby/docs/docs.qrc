@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/docs">
+        <file>engine_architecture.md</file>
+        <file>components_catalog.md</file>
+        <file>lua_scripting_api.md</file>
+        <file>enums_and_constants.md</file>
+        <file>filerift_format_specification.md</file>
+    </qresource>
+</RCC>

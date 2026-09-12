@@ -39,7 +39,7 @@ Display::~Display() {
     SDL_Quit();
 }
 
-bool Display::init(int w, int h, const std::string& title) {
+bool Display::init(int w, int h, const std::string& title, bool hidden) {
     width = w;
     height = h;
     
@@ -60,21 +60,48 @@ bool Display::init(int w, int h, const std::string& title) {
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     
-    window = SDL_CreateWindow(
-        title.c_str(),
-        width, height,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
-    );
+    SDL_WindowFlags wflags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (hidden) wflags |= SDL_WINDOW_HIDDEN;
+    window = SDL_CreateWindow(title.c_str(), width, height, wflags);
     
     if (!window) {
         std::cerr << "[Display] Window creation failed: " << SDL_GetError() << std::endl;
         return false;
     }
     
+    // The strict 2.1 + Compatibility-profile request is honored by Mesa EGL on
+    // both X11 and Wayland, but some drivers reject the profile attribute
+    // (EGL_BAD_ATTRIBUTE) — notably NVIDIA EGL under Wayland (KDE Plasma
+    // Wayland is the most common place this bites). A 2.1 context is a
+    // compatibility context by definition (there is no core profile below
+    // 3.2), so retrying without the explicit profile mask is lossless and
+    // lets the pod boot on those machines instead of "always failing".
     gl_context = SDL_GL_CreateContext(window);
     if (!gl_context) {
-        std::cerr << "[Display] GL context creation failed: " << SDL_GetError() << std::endl;
-        return false;
+        const std::string first_err = SDL_GetError();
+        std::cerr << "[Display] GL context creation failed (2.1+compat): " << first_err << std::endl;
+        SDL_ClearError();
+
+        // Fallback 1: same version, no profile mask (driver picks the only
+        // profile 2.1 can be — compatibility).
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, 0);
+        gl_context = SDL_GL_CreateContext(window);
+        if (!gl_context) {
+            std::cerr << "[Display] GL context creation failed (2.1): " << SDL_GetError() << std::endl;
+            SDL_ClearError();
+
+            // Fallback 2: let SDL pick default attributes entirely.
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 0);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+            gl_context = SDL_GL_CreateContext(window);
+            if (!gl_context) {
+                std::cerr << "[Display] GL context creation failed (defaults): "
+                          << SDL_GetError() << std::endl;
+                return false;
+            }
+        }
+        std::cerr << "[Display] GL context created via relaxed attributes (2.1 fallback)"
+                  << std::endl;
     }
     
     SDL_GL_MakeCurrent(window, gl_context);

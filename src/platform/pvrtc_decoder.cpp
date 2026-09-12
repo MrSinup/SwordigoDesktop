@@ -1,4 +1,5 @@
 #include "pvrtc_decoder.h"
+#include "astc_decoder.h"
 #include <cstdlib>
 #include <cstdio>
 #include <climits>
@@ -828,6 +829,9 @@ int ParsePVRv3Format(uint64_t pixel_format, uint32_t& gl_format, uint32_t& gl_ty
 			return 5; // DXT3
 		} else if (fmt_low == 11) {
 			return 6; // DXT5
+		} else if (fmt_low >= 27 && fmt_low <= 40) {
+			bpp = 4;
+			return 20 + int(fmt_low - 27); // ASTC formats (20 = 4x4, ..., 33 = 12x12)
 		}
 		return -1; // Unsupported compressed format
 	}
@@ -990,6 +994,57 @@ int ParsePVRv2Format(uint32_t flags, uint32_t& gl_format, uint32_t& gl_type, int
 			gl_format = 0x1908; bpp = 4;
 			return 1;
 	}
+}
+
+bool is_astc_format(int format_type, int& block_w, int& block_h) {
+	static const int s_astc_blocks[14][2] = {
+		{ 4,  4}, // 20: ASTC 4x4
+		{ 5,  4}, // 21: ASTC 5x4
+		{ 5,  5}, // 22: ASTC 5x5
+		{ 6,  5}, // 23: ASTC 6x5
+		{ 6,  6}, // 24: ASTC 6x6
+		{ 8,  5}, // 25: ASTC 8x5
+		{ 8,  6}, // 26: ASTC 8x6
+		{ 8,  8}, // 27: ASTC 8x8
+		{10,  5}, // 28: ASTC 10x5
+		{10,  6}, // 29: ASTC 10x6
+		{10,  8}, // 30: ASTC 10x8
+		{10, 10}, // 31: ASTC 10x10
+		{12, 10}, // 32: ASTC 12x10
+		{12, 12}, // 33: ASTC 12x12
+	};
+	if (format_type >= 20 && format_type <= 33) {
+		block_w = s_astc_blocks[format_type - 20][0];
+		block_h = s_astc_blocks[format_type - 20][1];
+		return true;
+	}
+	return false;
+}
+
+uint32_t PVRTDecompressASTC(const void* srcData, uint32_t width, uint32_t height, uint8_t* dstData, int block_w, int block_h) {
+	if (!srcData || !dstData || width == 0 || height == 0 || block_w <= 0 || block_h <= 0) return 0;
+	const uint8_t* payload = static_cast<const uint8_t*>(srcData);
+	const int blocks_x = (int(width) + block_w - 1) / block_w;
+	const int blocks_y = (int(height) + block_h - 1) / block_h;
+	
+	std::vector<uint8_t> block_buf(static_cast<size_t>(block_w) * static_cast<size_t>(block_h) * 4);
+	for (int by = 0; by < blocks_y; ++by) {
+		for (int bx = 0; bx < blocks_x; ++bx) {
+			const uint8_t* block_data = payload + (by * blocks_x + bx) * 16;
+			bool ok = pvr::decompress_astc_block(block_buf.data(), block_data, false, block_w, block_h);
+			if (!ok) {
+				std::memset(block_buf.data(), 0xFF, block_buf.size());
+			}
+			for (int r = 0; r < block_h && (by * block_h + r) < int(height); ++r) {
+				int dst_y = by * block_h + r;
+				int dst_x = bx * block_w;
+				int copy_w = std::min(block_w, int(width) - dst_x);
+				std::memcpy(&dstData[(dst_y * int(width) + dst_x) * 4],
+				            &block_buf[r * block_w * 4], static_cast<size_t>(copy_w) * 4);
+			}
+		}
+	}
+	return width * height * 4;
 }
 
 } // namespace pvr

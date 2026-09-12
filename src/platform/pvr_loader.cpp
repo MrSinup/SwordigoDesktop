@@ -247,12 +247,15 @@ bool pvr_decode_to_rgba(const uint8_t* file_data, size_t file_size, std::vector<
     }
 
     bool is_pvr = false;
-    if (active_size >= 52) {
-        uint32_t magic_v3 = *(const uint32_t*)active_data;
-        uint32_t magic_v2 = *(const uint32_t*)(active_data + 44);
-        if (magic_v3 == PVR3_VERSION || magic_v2 == PVR2_MAGIC) {
-            is_pvr = true;
-        }
+    uint32_t magic_v3 = 0, magic_v2 = 0;
+    if (active_size >= 4) {
+        memcpy(&magic_v3, active_data, sizeof(uint32_t));
+    }
+    if (active_size >= 48) {
+        memcpy(&magic_v2, active_data + 44, sizeof(uint32_t));
+    }
+    if (magic_v3 == PVR3_VERSION || magic_v2 == PVR2_MAGIC) {
+        is_pvr = true;
     }
 
     if (is_pvr) {
@@ -265,22 +268,47 @@ bool pvr_decode_to_rgba(const uint8_t* file_data, size_t file_size, std::vector<
         char c0 = 0, c1 = 0, c2 = 0, c3 = 0;
         uint8_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 
-        const PVRv3Header* v3 = (const PVRv3Header*)active_data;
-        if (v3->version == PVR3_VERSION) {
+        if (magic_v3 == PVR3_VERSION && active_size >= sizeof(PVRv3Header)) {
+            const PVRv3Header* v3 = (const PVRv3Header*)active_data;
             w = v3->width;
             h = v3->height;
+            // Validate metadata_size to prevent buffer overflow
+            if (v3->metadata_size > active_size - sizeof(PVRv3Header)) {
+                std::cerr << "[PVR-Decoder] Invalid metadata_size: " << v3->metadata_size << std::endl;
+                return false;
+            }
             pixel_data = active_data + sizeof(PVRv3Header) + v3->metadata_size;
             format_type = pvr::ParsePVRv3Format(v3->pixel_format, gl_format, gl_type, bpp, c0, c1, c2, c3, d0, d1, d2, d3);
-        } else {
+        } else if (magic_v2 == PVR2_MAGIC && active_size >= sizeof(PVRv2Header)) {
             const PVRv2Header* v2 = (const PVRv2Header*)active_data;
             w = v2->width;
             h = v2->height;
+            // Validate header_size to prevent buffer overflow
+            if (v2->header_size > active_size) {
+                std::cerr << "[PVR-Decoder] Invalid header_size: " << v2->header_size << std::endl;
+                return false;
+            }
             pixel_data = active_data + v2->header_size;
             format_type = pvr::ParsePVRv2Format(v2->flags, gl_format, gl_type, bpp, c0, c1, c2, c3, d0, d1, d2, d3);
+        } else {
+            std::cerr << "[PVR-Decoder] Buffer too small for PVR header" << std::endl;
+            return false;
         }
 
         if (format_type < 0 || w <= 0 || h <= 0) {
             std::cerr << "[PVR-Decoder] Unsupported PVR format_type or invalid dimensions" << std::endl;
+            return false;
+        }
+        
+        // Validate dimensions to prevent excessive memory allocation
+        if (w > 8192 || h > 8192) {
+            std::cerr << "[PVR-Decoder] Dimensions too large: " << w << "x" << h << std::endl;
+            return false;
+        }
+        
+        // Validate pixel_data is within bounds
+        if (pixel_data < active_data || pixel_data >= active_data + active_size) {
+            std::cerr << "[PVR-Decoder] pixel_data out of bounds" << std::endl;
             return false;
         }
 
@@ -302,6 +330,12 @@ bool pvr_decode_to_rgba(const uint8_t* file_data, size_t file_size, std::vector<
             decode_success = true;
         } else if (format_type == 10) { // Uncompressed
             decode_success = pvr::PVRTDecodeUncompressed(pixel_data, width, height, c0, c1, c2, c3, d0, d1, d2, d3, rgba_out.data());
+        } else {
+            int block_w = 0, block_h = 0;
+            if (pvr::is_astc_format(format_type, block_w, block_h)) {
+                pvr::PVRTDecompressASTC(pixel_data, width, height, rgba_out.data(), block_w, block_h);
+                decode_success = true;
+            }
         }
 
         return decode_success;

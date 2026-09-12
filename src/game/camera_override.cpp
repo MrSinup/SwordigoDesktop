@@ -28,20 +28,27 @@ bool     g_cam_smooth    = false;   // false = instant, true = smooth interp
 float    g_cam_speed_base= 90.0f;  // Units per second at 1x speed
 bool     g_cam_pov_mode  = false;
 float    g_cam_pov_facing = 1.0f;
+float    g_cam_zoom       = 1.0f;
+
+// ── Beyond sre12: host-controllable projection & free-look ───────────────
+float    g_cam_fov        = 0.0f;   // 0 = engine preset (45°/70°)
+float    g_cam_yaw        = 0.0f;   // free-look, 0 = legacy ±45° facing
+float    g_cam_pitch      = 0.0f;
+float    g_cam_roll       = 0.0f;
 
 CamPreset g_cam_presets[5] = {};    // All initialized to {0,0,0,false}
 
 // Internal: acceleration tracking
 static float s_accel_timer = 0.0f;  // How long movement keys have been held
-static const float ACCEL_RAMP = 3.0f;  // Seconds to reach max speed
-static const float ACCEL_MAX  = 3.3f;  // Max speed multiplier from acceleration
+static const float ACCEL_RAMP = 2.5f;  // Seconds to reach max speed
+static const float ACCEL_MAX  = 4.5f;  // Max speed multiplier from acceleration
 
-// Limits
-static const float CAM_LIMIT_XZ = 2000.0f;
-static const float CAM_LIMIT_Y  = 1000.0f;
+// Limits (expanded for large outdoor and dungeon levels)
+static const float CAM_LIMIT_XZ = 30000.0f;
+static const float CAM_LIMIT_Y  = 20000.0f;
 
 // Scroll zoom speed
-static const float SCROLL_ZOOM_SPEED = 24.0f;
+static const float SCROLL_ZOOM_SPEED = 48.0f;
 
 // ----- Helpers -----------------------------------------------
 
@@ -126,6 +133,26 @@ void cam_toggle_smooth() {
     std::cout << "[Camera] Smooth mode: " << (g_cam_smooth ? "ON" : "OFF") << std::endl;
 }
 
+void cam_look(float dyaw, float dpitch) {
+    if (!g_cam_active || !g_cam_pov_mode) return;
+    // Sensible look speed: full mouse sweep ≈ 180°
+    const float SENS = 0.0022f;
+    g_cam_yaw   += dyaw * SENS;
+    g_cam_pitch += dpitch * SENS;
+    if (g_cam_pitch >  1.553f) g_cam_pitch =  1.553f;  // ±89°
+    if (g_cam_pitch < -1.553f) g_cam_pitch = -1.553f;
+    cam_write_to_guest();
+}
+
+void cam_set_fov(float fov_rad) {
+    g_cam_fov = fov_rad;
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Camera FOV: %.1f°",
+             fov_rad > 0.0f ? fov_rad * 57.29578f : 45.0f);
+    mod_toast(msg, 1.0f);
+    cam_write_to_guest();
+}
+
 void cam_reset() {
     g_cam_off_x = g_cam_off_y = g_cam_off_z = 0.0f;
     s_accel_timer = 0.0f;
@@ -180,6 +207,15 @@ void cam_write_to_guest() {
     static uint64_t aspect_addr = 0;
     static uint64_t pov_mode_addr = 0;
     static uint64_t pov_facing_addr = 0;
+    static uint64_t fov_addr = 0;
+    static uint64_t yaw_addr = 0;
+    static uint64_t pitch_addr = 0;
+    static uint64_t roll_addr = 0;
+    static uint64_t zoom_addr = 0;
+    static uint64_t follow_addr = 0;
+    static uint64_t up_x_addr = 0;
+    static uint64_t up_y_addr = 0;
+    static uint64_t up_z_addr = 0;
 
     if (active_addr == 0) {
         active_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_active");
@@ -189,6 +225,15 @@ void cam_write_to_guest() {
         aspect_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_aspect");
         pov_mode_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_pov_mode");
         pov_facing_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_pov_facing");
+        fov_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_fov");
+        yaw_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_yaw");
+        pitch_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_pitch");
+        roll_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_roll");
+        zoom_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_zoom");
+        follow_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_follow");
+        up_x_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_up_x");
+        up_y_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_up_y");
+        up_z_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_cam_up_z");
     }
 
     if (active_addr) *(int*)(g_guest_memory + active_addr) = g_cam_active ? 1 : 0;
@@ -197,6 +242,17 @@ void cam_write_to_guest() {
     if (off_z_addr) *(float*)(g_guest_memory + off_z_addr) = g_cam_off_z;
     if (pov_mode_addr) *(int*)(g_guest_memory + pov_mode_addr) = g_cam_pov_mode ? 1 : 0;
     if (pov_facing_addr) *(float*)(g_guest_memory + pov_facing_addr) = g_cam_pov_facing;
+    if (fov_addr) *(float*)(g_guest_memory + fov_addr) = g_cam_fov;
+    if (yaw_addr) *(float*)(g_guest_memory + yaw_addr) = g_cam_yaw;
+    if (pitch_addr) *(float*)(g_guest_memory + pitch_addr) = g_cam_pitch;
+    if (roll_addr) *(float*)(g_guest_memory + roll_addr) = g_cam_roll;
+    if (zoom_addr) *(float*)(g_guest_memory + zoom_addr) = g_cam_zoom;
+    if (follow_addr) *(int*)(g_guest_memory + follow_addr) = (g_cam_mode == CamMode::FREE) ? 0 : 1;
+    if (up_y_addr) {
+        *(float*)(g_guest_memory + up_x_addr) = 0.0f;
+        *(float*)(g_guest_memory + up_y_addr) = 1.0f;
+        *(float*)(g_guest_memory + up_z_addr) = 0.0f;
+    }
     if (aspect_addr) {
         extern int g_win_w;
         extern int g_win_h;

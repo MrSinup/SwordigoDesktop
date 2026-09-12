@@ -333,6 +333,12 @@ struct PBRMaterial {
     float glossiness   = 0.6f;
     unsigned int specular_tex = 0;
     unsigned int glossiness_tex = 0;
+
+    // glTF alpha handling (A4). 0 = OPAQUE, 1 = MASK (alpha test at
+    // alpha_cutoff, depth write stays on), 2 = BLEND (blend on, depth
+    // write OFF so transparent surfaces can't depth-cull geometry behind).
+    int   alpha_mode   = 0;
+    float alpha_cutoff = 0.5f;
 };
 
 /// GPU joint matrices for vertex-shader skinning in the PBR program.
@@ -496,5 +502,24 @@ void camera_get_view_matrix(const Camera& cam, float out[16]);
 
 /// Convenience: compute projection matrix from Camera state.
 void camera_get_projection(const Camera& cam, float aspect, float out[16]);
+
+/// Copy the view/projection matrices of the most recent begin_3d() pass
+/// (column-major). The editor overlay/picking code uses these to stay in sync
+/// with what was actually rendered.
+void get_vp_matrices(float view[16], float proj[16]);
+
+/// Unproject a viewport pixel to a world-space ray.
+/// @param vp_w, vp_h     Logical viewport size in pixels.
+/// @param vp_x, vp_y     Top-left corner of the viewport in screen coords.
+/// @param sx, sy         Mouse position in screen coords (same origin as
+///                       @p vp_x/@p vp_y — pass ImGui::GetMousePos() minus the
+///                       viewport's screen offset).
+/// @param out_origin[3]  World position of the ray origin (camera eye).
+/// @param out_dir[3]     Normalized world direction of the ray.
+/// Works for both perspective and orthographic cameras (unprojects through
+/// the inverse view-projection rather than a perspective-only analytic path).
+void unproject_ray(const Camera& cam, int vp_w, int vp_h,
+                   float vp_x, float vp_y, float sx, float sy,
+                   float out_origin[3], float out_dir[3]);
 
 } // namespace av

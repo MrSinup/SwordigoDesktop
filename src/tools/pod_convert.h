@@ -55,6 +55,32 @@ struct PodConvertOptions {
 
     // Target PVR texture resolution (0 = original source resolution, 512, 1024 [HD], 2048 [Ultra HD], 4096).
     int pvr_resolution = 0;
+
+    // Animation clip resample rate for glTF/GLB. The game engine hardcodes
+    // 24.0 FPS in Caver::PODLoader::CreateAnimationFromFile, so clips sampled
+    // at their authored 30/60 fps play at the wrong speed in-game. Default 24
+    // (engine parity); 0 = derive the rate from the source key density
+    // (legacy behaviour). CLI: --anim-fps <rate>.
+    float anim_fps = 24.0f;
+
+    // S1: dominant-bone (rigid) skin bake for glTF/GLB. The game's
+    // C_Matrix4Vector3ArraySkin reads ONE bone index per vertex and ignores
+    // weights, so smooth-skinned rigs with 2-4 influences deform wrong in-game.
+    // When true, every vertex is pre-baked to its max-weight joint at weight
+    // 1.0 before writing the POD. Default on for game-destined conversion;
+    // disable only to inspect the smooth-skin data. CLI: --smooth-skin.
+    bool rigid_skin = true;
+
+    // Filter out non-diffuse maps (normal maps, roughness, metallic, AO, specular).
+    // Swordigo only supports single-diffuse materials. When true, normal maps
+    // (purple/blue textures) and other PBR auxiliary maps are ignored. Default true.
+    bool filter_non_diffuse = true;
+
+    // Smart texture naming: for generic texture names like "texture0", "texture1",
+    // replace with "<model_prefix>_0" (using up to the first 5 words of the model),
+    // preventing name collisions between converted models in the game resources folder.
+    // Explicit names remain untouched. Default true.
+    bool smart_texture_naming = true;
 };
 
 // Convert an FBX into a game POD. On success the newly written game textures
@@ -74,6 +100,24 @@ bool glb_to_pod(const std::string& glb_path,
                 std::vector<std::string>* written_textures = nullptr,
                 std::vector<std::string>* written_clips = nullptr,
                 std::string* err = nullptr);
+
+// Convert a Wavefront .obj (+ optional .mtl) into a game POD (E17). Static
+// geometry only — OBJ carries no rigs. Reuses obj_load → bake_and_center →
+// pod_write, with the same texture re-encoding as the FBX/GLB paths.
+bool obj_to_pod(const std::string& obj_path,
+                const std::string& pod_path,
+                const PodConvertOptions& opts,
+                std::vector<std::string>* written_textures = nullptr,
+                std::string* err = nullptr);
+
+// Smart texture naming & filtering helpers
+bool is_generic_texture_name(const std::string& name_or_stem, std::string* out_suffix = nullptr);
+bool is_non_diffuse_texture_name(const std::string& name_or_stem);
+std::string get_model_prefix_first_5_words(const std::string& model_name_or_stem);
+std::string resolve_output_texture_stem(const std::string& model_stem,
+                                       const std::string& tex_stem,
+                                       size_t tex_index,
+                                       bool smart_naming);
 
 // CLI entry point driven by `bin/ruby --fbx2pod …` or `bin/ruby --glb2pod …`.
 int pod_convert_cli(int argc, char** argv);

@@ -158,7 +158,24 @@ bool ray_plane_y(const float origin[3], const float dir[3], float plane_y, float
 void object_world_matrix(const av::SceneObject& obj, float out[16]) {
     float T[16], R[16], S[16], temp[16];
     av::mat4_translate(T, obj.pos_x, obj.pos_y, obj.pos_z);
-    av::mat4_rotate_z(R, obj.rot_y * 180.0f / kPi);
+
+    // Full 3-axis rotation. Historically only rot_y was applied (about Z — the
+    // 2.5D in-plane spin, Tag 6 in the file format), which is why the gizmo
+    // only ever rotated around the blue axis: X/Y drags had nowhere to go.
+    // rot_x / rot_z are editor-only extra rotations (not persisted; the .scene
+    // format still stores exactly one rotation, Tag 6 == rot_y). The compose
+    // order MUST match ImGuizmo's RecomposeMatrixFromComponents, which does
+    // Rx * Ry * Rz with rotation = {X, Y, Z} in degrees. We map the gizmo's
+    // decomposed Euler as: X->rot_x, Y->rot_z, Z->rot_y (rot_y stays the
+    // persisted about-Z spin), so recompose here in the identical Rx*Ry*Rz
+    // order to stay round-trip stable with DecomposeMatrixToComponents.
+    float Rx[16], Ry[16], Rz[16], r_xy[16];
+    av::mat4_rotate_x(Rx, obj.rot_x * 180.0f / kPi);   // gizmo red   (m_rot[0])
+    av::mat4_rotate_y(Ry, obj.rot_z * 180.0f / kPi);   // gizmo green (m_rot[1])
+    av::mat4_rotate_z(Rz, obj.rot_y * 180.0f / kPi);   // gizmo blue  (m_rot[2], persisted Tag 6)
+    av::mat4_multiply(r_xy, Rx, Ry);                   // Rx * Ry
+    av::mat4_multiply(R, r_xy, Rz);                    // (Rx * Ry) * Rz
+
     av::mat4_identity(S);
     S[0]  = obj.scale_x * obj.template_scaling;
     S[5]  = obj.scale_y * obj.template_scaling;

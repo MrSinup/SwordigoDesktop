@@ -509,9 +509,100 @@ extern "C" uint32_t get_guest_heap_size_64() {
     return g_guest_heap_ptr - 0x20000000;
 }
 
+// Diagnostic: track where the guest builds large buffers. The RLSW crash is a
+// vector/string growing past GUEST_MALLOC_MAX (0x1e000000 -> rejected realloc
+// -> bad-fetch loop); logging the first big allocation's caller identifies the
+// guest function that computes the huge size.
+static void log_large_alloc(IEmulatorArm64* emu, uint32_t size, const char* tag) {
+    static int large_log = 0;
+    if (size < 0x2000000) return;            // only >= 32MB
+    if (large_log++ >= 6) return;
+    uint64_t pc = emu->get_pc();
+    uint64_t lr = emu->get_reg(30);
+    std::cerr << "[SRE/Heap] LARGE " << tag << " size=0x" << std::hex << size
+              << " PC=0x" << pc << " LR=0x" << lr
+              << " X0=0x" << emu->get_reg(0)
+              << " X1=0x" << emu->get_reg(1)
+              << " X2=0x" << emu->get_reg(2)
+              << " X3=0x" << emu->get_reg(3)
+              << " X19=0x" << emu->get_reg(19)
+              << " X20=0x" << emu->get_reg(20) << std::dec << std::endl;
+}
+
+// Diagnostic: when the guest requests an allocation the heap guard rejects
+// (> GUEST_MALLOC_MAX), dump the guest PC/LR and key registers so the caller
+// computing the bogus size can be identified (RLSW: "Rejecting corrupt malloc
+// size 0x1e000000 -> bad fetch loop" class of bugs).
+static void log_oversize_malloc(IEmulatorArm64* emu, uint32_t size, const char* tag) {
+    static int oversize_log = 0;
+    if (oversize_log++ >= 8) return;
+    uint64_t pc = emu->get_pc();
+    uint64_t lr = emu->get_reg(30);
+    std::cerr << "[SRE/Heap] OVERSIZE " << tag << " size=0x" << std::hex << size
+              << " PC=0x" << pc << " LR=0x" << lr
+              << " X0=0x" << emu->get_reg(0)
+              << " X1=0x" << emu->get_reg(1)
+              << " X2=0x" << emu->get_reg(2)
+              << " X3=0x" << emu->get_reg(3)
+              << " X19=0x" << emu->get_reg(19)
+              << " X20=0x" << emu->get_reg(20)
+              << " X21=0x" << emu->get_reg(21)
+              << " X22=0x" << emu->get_reg(22)
+              << " X29=0x" << emu->get_reg(29)
+              << " SP=0x" << emu->get_reg(31) << std::dec << std::endl;
+    // Dump the stream/object in X22 (candidate ZIO: reader @ +16, data @ +24)
+    uint64_t x22 = emu->get_reg(22);
+    uint8_t* mem = emu->get_memory_base();
+    if (x22 >= 0x10000 && x22 < 0xF0000000ULL) {
+        std::cerr << "[SRE/Heap]   object@X22=0x" << std::hex << x22 << ":";
+        for (int i = 0; i < 8; i++) {
+            uint64_t v = *(uint64_t*)(mem + (uint32_t)x22 + i * 8);
+            std::cerr << " [+0x" << std::hex << (i * 8) << "]=0x" << v;
+        }
+        std::cerr << std::dec << std::endl;
+    }
+    // Walk the frame chain to identify the caller of the read/grow helper.
+    uint64_t fp = emu->get_reg(29);
+    std::cerr << "[SRE/Heap]   stack:";
+    for (int f = 0; f < 10 && fp >= 0x10000 && fp < 0xF0000000ULL; f++) {
+        uint64_t prev_fp = *(uint64_t*)(mem + (uint32_t)fp);
+        uint64_t ret = *(uint64_t*)(mem + (uint32_t)fp + 8);
+        std::cerr << "  fp=0x" << std::hex << fp << " ret=0x" << ret;
+        if (!(ret >= 0x1000000ULL && ret < 0x3000000ULL)) break;
+        fp = prev_fp;
+    }
+    std::cerr << std::dec << std::endl;
+    // Heuristic: find the executing Lua chunk name. X21 holds the lua_State;
+    // scan its qwords and follow plausible pointers, printing any C strings we
+    // land on (the running Proto's source/chunkname).
+    uint64_t L = emu->get_reg(21);
+    if (L >= 0x10000 && L < 0xF0000000ULL) {
+        std::cerr << "[SRE/Heap]   lua_State=0x" << std::hex << L << " strings:";
+        for (int off = 0; off < 0x180; off += 8) {
+            uint64_t v = *(uint64_t*)(mem + (uint32_t)L + off);
+            if (v >= 0x10000 && v < 0xF0000000ULL) {
+                const char* s = (const char*)(mem + (uint32_t)v);
+                size_t sl = strnlen(s, 64);
+                if (sl >= 3 && sl < 64) {
+                    bool printable = true;
+                    for (size_t k = 0; k < sl; k++)
+                        if (s[k] < 0x20 || s[k] > 0x7e) { printable = false; break; }
+                    if (printable) {
+                        std::cerr << "  [L+" << std::hex << off << "]->0x" << v
+                                  << "=\"" << s << "\"";
+                    }
+                }
+            }
+        }
+        std::cerr << std::dec << std::endl;
+    }
+}
+
 static void bridge_malloc(void* emu_ptr) {
     IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
     uint32_t size = emu->get_reg(0);
+    if (size > GUEST_MALLOC_MAX) log_oversize_malloc(emu, size, "malloc");
+    else log_large_alloc(emu, size, "malloc");
     std::lock_guard<std::mutex> lock(g_heap_mutex);
     uint32_t addr = host_malloc_locked(size);
 
@@ -541,6 +632,8 @@ static void bridge_calloc(void* emu_ptr) {
     uint64_t total64 = num * size;
     std::lock_guard<std::mutex> lock(g_heap_mutex);
     uint32_t total = (total64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)total64;
+    if (total > GUEST_MALLOC_MAX) log_oversize_malloc(emu, total, "calloc");
+    else log_large_alloc(emu, total, "calloc");
     uint32_t addr = host_malloc_locked(total);
     // host_malloc_locked returns 0 on OOM / corrupt size — do NOT memset then.
     if (addr != 0 && addr >= 0x10000) std::memset(emu->get_memory_base() + addr, 0, total);
@@ -565,6 +658,8 @@ static void bridge_realloc(void* emu_ptr) {
     IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
     uint32_t ptr = emu->get_reg(0);
     uint32_t size = emu->get_reg(1);
+    if (size > GUEST_MALLOC_MAX) log_oversize_malloc(emu, size, "realloc");
+    else log_large_alloc(emu, size, "realloc");
     std::lock_guard<std::mutex> lock(g_heap_mutex);
 
     // --- TVPG Vanilla Realloc ---
@@ -600,6 +695,14 @@ static void bridge_realloc(void* emu_ptr) {
         if (g_guest_allocs.count(ptr)) {
             uint32_t old_size = g_guest_allocs[ptr];
             uint32_t addr = host_malloc_locked(size);
+            // OOM guard: on allocation failure realloc must leave the old
+            // block untouched and return NULL — memcpy'ing into address 0
+            // would smash the guest null page/TLS/env region and freeing the
+            // old block would leave the caller with a dangling pointer.
+            if (addr == 0) {
+                emu->set_reg(0, 0);
+                return;
+            }
             uint32_t copy_size = (old_size < size) ? old_size : size;
             if (copy_size > 0) {
                 std::memcpy(emu->get_memory_base() + addr, emu->get_memory_base() + ptr, copy_size);
@@ -616,6 +719,11 @@ static void bridge_realloc(void* emu_ptr) {
             emu->set_reg(0, addr);
         } else {
             uint32_t addr = host_malloc_locked(size);
+            // OOM guard (see above): never memcpy to a NULL (rejected) target.
+            if (addr == 0) {
+                emu->set_reg(0, 0);
+                return;
+            }
             if (size > 0) {
                 std::memcpy(emu->get_memory_base() + addr, emu->get_memory_base() + ptr, size);
             }
@@ -692,6 +800,14 @@ static void bridge_realloc(void* emu_ptr) {
         }
         
         uint32_t addr = host_malloc_locked(size);
+        // OOM guard: on allocation failure realloc must leave the old block
+        // untouched and return NULL — memcpy'ing into address 0 would smash
+        // the guest null page/TLS/env region and freeing the old block would
+        // leave the caller with a dangling pointer.
+        if (addr == 0) {
+            emu->set_reg(0, 0);
+            return;
+        }
         uint32_t copy_size = (old_size < size) ? old_size : size;
         if (copy_size > 0) {
             std::memcpy(emu->get_memory_base() + addr, emu->get_memory_base() + ptr, copy_size);
@@ -708,6 +824,12 @@ static void bridge_realloc(void* emu_ptr) {
         emu->set_reg(0, addr);
     } else {
         uint32_t addr = host_malloc_locked(size);
+        // OOM guard (see above): never memcpy to a NULL (rejected) target and
+        // never drop the caller's old block on the floor.
+        if (addr == 0) {
+            emu->set_reg(0, 0);
+            return;
+        }
         if (size > 0) {
             std::memcpy(emu->get_memory_base() + addr, emu->get_memory_base() + ptr, size);
         }
@@ -2967,7 +3089,14 @@ static void bridge_fputs(void* emu_ptr) {
     uint8_t* memory = emu->get_memory_base();
     uint32_t str_ptr = emu->get_reg(0);
     const char* str = (const char*)(memory + str_ptr);
-    std::cerr << "[GUEST fputs] " << str;
+    static int fputs_pc_log = 0;
+    if (fputs_pc_log < 20) {
+        fputs_pc_log++;
+        std::cerr << "[GUEST fputs@0x" << std::hex << emu->get_pc()
+                  << " LR=0x" << emu->get_reg(30) << std::dec << "] " << str;
+    } else {
+        std::cerr << "[GUEST fputs] " << str;
+    }
     emu->set_reg(0, 0); // success
 }
 

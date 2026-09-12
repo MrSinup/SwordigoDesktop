@@ -333,8 +333,8 @@ uint64_t ElfLoaderArm64::get_symbol_vaddr(so_module_arm64* mod, const std::strin
 // elf_lookup_symbol — real ProHook Phase 2 symbol resolver
 //
 // Exposed as extern "C" so srehost_impl.cpp's weak stub is overridden at
-// link time. Searches both libswordigo.so (g_main_mod_64) and libsre.so
-// (g_sre_mod) dynamic symbol tables.
+// link time. Searches both libswordigo.so (g_main_mod_64) and the loaded
+// SRE version module (g_sre_mod = libsre12.so / libsre13.so) dynsym tables.
 //
 // Returns guest virtual address, or 0 if not found.
 // ============================================================================
@@ -342,7 +342,7 @@ uint64_t ElfLoaderArm64::get_symbol_vaddr(so_module_arm64* mod, const std::strin
 
 // Defined in main.cpp — the loaded ARM64 ELF module descriptors
 extern so_module_arm64 g_main_mod_64;  // libswordigo.so
-extern so_module_arm64 g_sre_mod;      // libsre.so
+extern so_module_arm64 g_sre_mod;      // libsre12/libsre13 (version SRE module)
 extern so_module_arm64 g_sre_extras_mod; // libsre-extras.so (optional addon)
 
 extern "C" uint64_t elf_lookup_symbol(const char* name) {
@@ -360,7 +360,7 @@ extern "C" uint64_t elf_lookup_symbol(const char* name) {
         }
     }
 
-    // Fallback: search libsre.so (e.g. for sre-internal hooks)
+    // Fallback: search the SRE version module (e.g. for sre-internal hooks)
     if (g_sre_mod.dynstr && g_sre_mod.dynsym && g_sre_mod.num_dynsym > 0) {
         for (int i = 0; i < g_sre_mod.num_dynsym; i++) {
             if (g_sre_mod.dynsym[i].st_name == 0) continue;

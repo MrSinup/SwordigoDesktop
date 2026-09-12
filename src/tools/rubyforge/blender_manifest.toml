@@ -1,0 +1,27 @@
+schema_version = "1.0.0"
+
+id = "rubyforge"
+name = "RubyForge: Swordigo Studio"
+version = "1.0.0"
+tagline = "Professional Blender <-> Swordigo POD round-trip toolchain"
+maintainer = "OpenSwordigo Team"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+tags = ["Import-Export", "Game Engine", "Rigging", "Animation"]
+
+# ────────────────────────────────────────────────────────────────────────────
+# RubyForge preserves the chunk-exact PowerVR POD grammar (tags 1000-6030) as
+# decoded from the Swordigo libswordigo.so and the Imagination PowerVR SDK
+# (see src/tools/pod_loader.cpp / pod_writer.cpp, the golden C++ references).
+# Stage 1 ships the pure-Python POD reader/writer and the File -> Import/Export
+# operators; no permissions beyond files are required.
+# ────────────────────────────────────────────────────────────────────────────
+
+[permissions]
+files = "Import and export Swordigo .pod, .glb, and .pvr assets"
+clipboard = "Copy diagnostic and validation reports"
+
+[platforms]
+# Pure-Python; runs everywhere the Blender extension runtime runs. No
+# optional platforms / wheels are required.

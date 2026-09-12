@@ -363,25 +363,46 @@ bool gltf_export_glb(const PODModel& model,
         return out;
     };
 
-    if (model.num_frames > 0) {
+    // Frame count for animation export. Clip PODs set model.num_frames, but a
+    // BASE POD stores per-node channels with num_frames == 0 (verified across
+    // the 394-POD stock corpus). Gating export on num_frames>0 silently drops
+    // every base model's animation, breaking POD->glTF->POD round-trips. When
+    // num_frames is unset, derive it from the longest channel present so those
+    // channels export. (pod_master/05 §4; gltf_bridge_roundtrip_test.)
+    int anim_frames = model.num_frames;
+    if (anim_frames <= 0) {
+        size_t maxk = 0;
+        for (const auto& n : model.nodes) {
+            if (!n.anim_translation.empty()) maxk = std::max(maxk, n.anim_translation.size() / 3);
+            if (!n.anim_rotation.empty())    maxk = std::max(maxk, n.anim_rotation.size() / 4);
+            if (!n.anim_scale.empty()) {
+                size_t stride = (n.anim_scale.size() % 7 == 0) ? 7 : 3;
+                maxk = std::max(maxk, n.anim_scale.size() / stride);
+            }
+            if (!n.anim_matrix.empty())      maxk = std::max(maxk, n.anim_matrix.size() / 16);
+        }
+        anim_frames = static_cast<int>(maxk);
+    }
+
+    if (anim_frames > 0) {
         for (size_t ni = 0; ni < model.nodes.size(); ++ni) {
             const auto& node = model.nodes[ni];
             std::vector<float> posv, rotv, sclv;
             bool hp = false, hr = false, hs = false;
             if (!node.anim_translation.empty()) {
-                posv = expand_stream(node.anim_translation, node.anim_translation_idx, 3, model.num_frames);
-                hp = posv.size() >= (size_t)model.num_frames * 3;
+                posv = expand_stream(node.anim_translation, node.anim_translation_idx, 3, anim_frames);
+                hp = posv.size() >= (size_t)anim_frames * 3;
             }
             if (!node.anim_rotation.empty()) {
-                rotv = expand_stream(node.anim_rotation, node.anim_rotation_idx, 4, model.num_frames);
-                hr = rotv.size() >= (size_t)model.num_frames * 4;
+                rotv = expand_stream(node.anim_rotation, node.anim_rotation_idx, 4, anim_frames);
+                hr = rotv.size() >= (size_t)anim_frames * 4;
             }
             if (!node.anim_scale.empty()) {
                 int stride = (node.anim_scale.size() % 7 == 0) ? 7 : 3;
-                std::vector<float> full = expand_stream(node.anim_scale, node.anim_scale_idx, stride, model.num_frames);
-                if (full.size() >= (size_t)model.num_frames * stride) {
-                    sclv.resize((size_t)model.num_frames * 3);
-                    for (int f = 0; f < model.num_frames; ++f) {
+                std::vector<float> full = expand_stream(node.anim_scale, node.anim_scale_idx, stride, anim_frames);
+                if (full.size() >= (size_t)anim_frames * stride) {
+                    sclv.resize((size_t)anim_frames * 3);
+                    for (int f = 0; f < anim_frames; ++f) {
                         sclv[f * 3 + 0] = full[f * stride + 0];
                         sclv[f * 3 + 1] = full[f * stride + 1];
                         sclv[f * 3 + 2] = full[f * stride + 2];
@@ -390,12 +411,12 @@ bool gltf_export_glb(const PODModel& model,
                 }
             }
             if (!node.anim_matrix.empty()) {
-                std::vector<float> full = expand_stream(node.anim_matrix, node.anim_matrix_idx, 16, model.num_frames);
-                if (full.size() >= (size_t)model.num_frames * 16) {
-                    posv.resize((size_t)model.num_frames * 3);
-                    rotv.resize((size_t)model.num_frames * 4);
-                    sclv.resize((size_t)model.num_frames * 3);
-                    for (int f = 0; f < model.num_frames; ++f) {
+                std::vector<float> full = expand_stream(node.anim_matrix, node.anim_matrix_idx, 16, anim_frames);
+                if (full.size() >= (size_t)anim_frames * 16) {
+                    posv.resize((size_t)anim_frames * 3);
+                    rotv.resize((size_t)anim_frames * 4);
+                    sclv.resize((size_t)anim_frames * 3);
+                    for (int f = 0; f < anim_frames; ++f) {
                         float t[3], q[4], s[3];
                         mat_decompose(&full[f * 16], t, q, s);
                         std::memcpy(&posv[f * 3], t, 12);
@@ -407,10 +428,10 @@ bool gltf_export_glb(const PODModel& model,
             }
             if (!(hp || hr || hs)) continue;
 
-            Accessor ta; ta.component_type = 5126; ta.type = "SCALAR"; ta.count = model.num_frames;
+            Accessor ta; ta.component_type = 5126; ta.type = "SCALAR"; ta.count = anim_frames;
             {
-                std::vector<float> times(model.num_frames);
-                for (int f = 0; f < model.num_frames; ++f) times[f] = (float)f / fps;
+                std::vector<float> times(anim_frames);
+                for (int f = 0; f < anim_frames; ++f) times[f] = (float)f / fps;
                 ta.payload.assign((const uint8_t*)times.data(), (const uint8_t*)times.data() + times.size() * 4);
             }
             int time_acc = add_accessor(std::move(ta));

@@ -30,8 +30,9 @@
 // ============================================================================
 // Host-side sre_longjmp / sre_setjmp
 //
-// The guest-side sre_longjmp is an ARM64 asm function inside libsre.so and
-// cannot be called from x86_64 host code. This host wrapper forwards to the
+// The guest-side sre_longjmp is an ARM64 asm function inside the SRE guest
+// module (libsre12.so / libsre13.so) and cannot be called from x86_64 host
+// code. This host wrapper forwards to the
 // standard C library longjmp/setjmp, satisfying the extern "C" symbol that
 // emulator_dynarmic64.cpp declares for the render-guard recovery path.
 //

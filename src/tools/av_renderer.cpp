@@ -2269,6 +2269,65 @@ void begin_3d(unsigned int fbo, int w, int h, const Camera& cam) {
     s_cam_eye[2] = cam.target[2] + cam.distance * cosf(cam.pitch * 3.14159265358979323846f / 180.0f) * cosf(cam.yaw * 3.14159265358979323846f / 180.0f);
 }
 
+void get_vp_matrices(float view[16], float proj[16]) {
+    std::memcpy(view, s_view, 16 * sizeof(float));
+    std::memcpy(proj, s_proj, 16 * sizeof(float));
+}
+
+void unproject_ray(const Camera& cam, int vp_w, int vp_h,
+                   float vp_x, float vp_y, float sx, float sy,
+                   float out_origin[3], float out_dir[3]) {
+    // NDC from the viewport pixel (Y flipped — ImGui origin is top-left).
+    const float ndc_x = ((sx - vp_x) / std::max(1, vp_w)) * 2.0f - 1.0f;
+    const float ndc_y = 1.0f - ((sy - vp_y) / std::max(1, vp_h)) * 2.0f;
+
+    // View-projection of the most recent begin_3d pass, inverted.
+    float view[16], proj[16], vp[16], inv_vp[16];
+    camera_get_view_matrix(cam, view);
+    const float aspect = (vp_h > 0) ? (float)vp_w / (float)vp_h : 1.0f;
+    camera_get_projection(cam, aspect, proj);
+    mat4_multiply(vp, proj, view);
+    if (!mat4_inverse(inv_vp, vp)) {
+        // Singular matrix (degenerate camera): fall back to the view axis.
+        out_origin[0] = cam.target[0]; out_origin[1] = cam.target[1]; out_origin[2] = cam.target[2];
+        out_dir[0] = 0.0f; out_dir[1] = 0.0f; out_dir[2] = 1.0f;
+        return;
+    }
+
+    // Unproject two clip-space depths (NDC z = -1 near, +1 far) to get a
+    // world-space segment; the normalized delta is the ray direction.
+    auto unproject_ndc = [&](float ndc_z, float out[3]) {
+        const float clip[4] = {ndc_x, ndc_y, ndc_z, 1.0f};
+        float world[4];
+        for (int r = 0; r < 4; ++r)
+            world[r] = inv_vp[r] * clip[0] + inv_vp[4 + r] * clip[1] +
+                       inv_vp[8 + r] * clip[2] + inv_vp[12 + r] * clip[3];
+        const float w = world[3];
+        out[0] = (std::fabs(w) > 1e-12f) ? world[0] / w : 0.0f;
+        out[1] = (std::fabs(w) > 1e-12f) ? world[1] / w : 0.0f;
+        out[2] = (std::fabs(w) > 1e-12f) ? world[2] / w : 0.0f;
+    };
+    float near_p[3], far_p[3];
+    unproject_ndc(-1.0f, near_p);
+    unproject_ndc(1.0f, far_p);
+
+    // Ray origin = camera eye (same analytic formulation begin_3d uses for
+    // point lights / swk::camera_basis).
+    const float yaw   = cam.yaw * 3.14159265358979323846f / 180.0f;
+    const float pitch = cam.pitch * 3.14159265358979323846f / 180.0f;
+    const float cp = cosf(pitch);
+    out_origin[0] = cam.target[0] + cam.distance * cp * sinf(yaw);
+    out_origin[1] = cam.target[1] + cam.distance * sinf(pitch);
+    out_origin[2] = cam.target[2] + cam.distance * cp * cosf(yaw);
+
+    float dx = far_p[0] - near_p[0];
+    float dy = far_p[1] - near_p[1];
+    float dz = far_p[2] - near_p[2];
+    const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (len > 1e-12f) { dx /= len; dy /= len; dz /= len; }
+    out_dir[0] = dx; out_dir[1] = dy; out_dir[2] = dz;
+}
+
 void render_mesh(const GPUMesh& mesh, const float* model_matrix,
                  const float color[4], bool wireframe) {
     if (!mesh.vao || !s_model_prog) return;
@@ -2437,8 +2496,22 @@ void pbr_render_mesh(const GPUMesh& mesh, const float* model_matrix,
                      const PBRMaterial& mat, bool wireframe) {
     if (!mesh.vao || !s_pbr.prog) return;
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Alpha handling per glTF alphaMode (A4):
+    //   OPAQUE — no blending, depth write on.
+    //   MASK   — alpha test at the material cutoff, depth write on (cutout
+    //            geometry must still occlude, e.g. foliage).
+    //   BLEND  — blending on, depth write OFF. With depth write on, the
+    //            transparent pass depth-culls geometry behind it (horns,
+    //            capes, wings rendered as black holes / missing polys).
+    const bool blend_mode  = (mat.alpha_mode == 2);
+    const bool mask_mode   = (mat.alpha_mode == 1);
+    if (blend_mode) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+    } else {
+        glDisable(GL_BLEND);
+    }
 
     float model[16];
     if (model_matrix) std::memcpy(model, model_matrix, 16 * sizeof(float));
@@ -2470,7 +2543,11 @@ void pbr_render_mesh(const GPUMesh& mesh, const float* model_matrix,
     glUniform1f(s_pbr.occ, mat.occlusion);
     glUniform3fv(s_pbr.emiss, 1, mat.emission);
     glUniform1i(s_pbr.workflow, mat.workflow);
-    glUniform1f(s_pbr.alpha_cutoff, 0.0f);   // 0 = alpha test disabled (blend instead)
+    // A4: 0 = alpha test disabled (BLEND uses alpha blending instead);
+    // MASK materials alpha-test at their authored cutoff so cutout
+    // geometry keeps depth-writing and still occludes.
+    glUniform1f(s_pbr.alpha_cutoff,
+                mask_mode ? (mat.alpha_cutoff > 0.0f ? mat.alpha_cutoff : 0.5f) : 0.0f);
 
     // Shared light state (same arrays the legacy model path uses).
     glUniform3fv(s_pbr.light_dir, 1, g_light_dir);
@@ -2542,6 +2619,8 @@ void pbr_render_mesh(const GPUMesh& mesh, const float* model_matrix,
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glDisable(GL_CULL_FACE);
     }
+    // A4: restore global state the alpha path changed.
+    if (blend_mode) glDepthMask(GL_TRUE);
     glBindVertexArray(0);
     glUseProgram(0);
 }

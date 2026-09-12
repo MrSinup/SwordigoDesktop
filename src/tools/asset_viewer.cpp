@@ -97,6 +97,9 @@
 #include "tools/gltf_glb.h"
 #include "tools/pod_writer.h"
 #include "tools/fbx_import.h"
+#include "tools/scene_collision_mesh.h"
+#include "tools/rubymesh.h"
+#include "tools/rubymesh_editor.h"
 
 namespace fs = std::filesystem;
 
@@ -492,6 +495,7 @@ struct ViewerState {
     av::ScnScene                  vendor_scn;                   // parsed vendor scene
     std::vector<av::PBRMaterial>  gltf_pbr_materials;           // per PODModel material (.glb)
     std::vector<std::string>      gltf_pbr_img_paths;           // glTF image index -> temp path
+    std::vector<char>             gltf_pbr_img_nearest;         // glTF image index -> sampler wants GL_NEAREST (A3)
     std::vector<GLuint>           vendor_owned_textures;        // PBR map textures to free on close
     float                         vendor_prev_bg[3] = {0, 0, 0};   // viewport bg before vendor .scn
     bool                          vendor_bg_saved = false;
@@ -507,6 +511,7 @@ struct ViewerState {
     // glTF (GLB) preview: embedded textures spilled to temp files.
     std::vector<std::string> model_temp_files;
     std::map<std::string, std::string> model_gltf_alias;  // embedded name -> temp path
+    std::map<std::string, char> model_gltf_alias_nearest; // embedded name -> glTF sampler wants GL_NEAREST (A3)
 
     // Scene preview
     av::SceneData scene;
@@ -542,6 +547,7 @@ struct ViewerState {
     sp::Player scene_player;
     bool       scene_player_window_open = false;
     bool       scene_xray = false;      // ghost see-through viewport mode
+    bool       scene_col_xray = false;  // show invisible collision meshes (_col_*) as neon-green semi-transparent
 
     // Post-processing (bloom / DOF / HD grade / vignette / grain)
     bool            postfx_enabled = true;
@@ -926,6 +932,20 @@ pid_t                    pty_child_pid   = -1;
     char        scene_obj_template_buf[256]= {}; // editable template field
     std::vector<av::SceneData> scene_undo_stack;
     std::vector<av::SceneData> scene_redo_stack;
+
+    // --- RubyMesh Workspace (manual .rbm collision zones) ---
+    // Replaces the old "Populate with Collision Mesh [EXPT]" auto-slicer: the
+    // workspace is a full-screen 3D editor where the modder click-places zone
+    // vertices on the POD, then applies them as GroundMesh objects.
+    rbm::RubyMesh         rmb_rubymesh;
+    rbmed::WorkspaceState rmb_ws;
+    std::string           rmb_mesh_stem;     // model stem of the open workspace
+    int                   rmb_source_obj = -1; // scene object the workspace opened on
+    // Camera snapshot restored when the workspace closes (the workspace shares
+    // st.camera for its orbit view).
+    bool                  rmb_saved_cam_valid = false;
+    av::Camera            rmb_saved_cam;
+
     
     // --- IntelliJ Text Editor state ---
     intel::IntelliJ intellij_editor;
@@ -1557,6 +1577,7 @@ static void free_preview_resources(ViewerState& st) {
     }
     st.model_temp_files.clear();
     st.model_gltf_alias.clear();
+    st.model_gltf_alias_nearest.clear();
 
     // Vendored formats + glTF PBR: free owned textures and reset state.
     for (auto tex : st.vendor_owned_textures) {
@@ -1777,7 +1798,7 @@ static void flip_surface_vertical(SDL_Surface* s) {
     }
 }
 
-static GLuint load_texture_file(const std::string& path, int* out_w = nullptr, int* out_h = nullptr, std::string* out_format = nullptr) {
+static GLuint load_texture_file(const std::string& path, int* out_w = nullptr, int* out_h = nullptr, std::string* out_format = nullptr, bool nearest = false) {
     std::string ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
 
@@ -1820,15 +1841,30 @@ static GLuint load_texture_file(const std::string& path, int* out_w = nullptr, i
     glBindTexture(GL_TEXTURE_2D, tex_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, conv->w, conv->h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, conv->pixels);
-    // Trilinear mipmapping for the cohesive, softer vanilla look.
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4.0f);
+    // FIX (ds_d_si mario world & other tileset atlases): explicitly wrap REPEAT.
+    // glTF sampler default is REPEAT and these tileset UVs legitimately tile far
+    // outside [0,1] (U -19..21, V -9..2). Without an explicit wrap the texture
+    // relied on GL defaults that (with mipmapping) smeared/clamped tiles at the
+    // atlas edges. REPEAT is the correct, source-faithful behaviour.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    if (nearest) {
+        // The glTF sampler asked for GL_NEAREST (pixel-art asset). crisp
+        // texels beat the cohesive vanilla blur here — honour the file (A3).
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        if (out_format) *out_format = "RGBA8 (nearest, glTF sampler)";
+    } else {
+        // Trilinear mipmapping for the cohesive, softer vanilla look.
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4.0f);
+    }
 
     if (out_w) *out_w = conv->w;
     if (out_h) *out_h = conv->h;
-    if (out_format) *out_format = "RGBA8 (standard)";
+    if (out_format && !nearest) *out_format = "RGBA8 (standard)";
 
     SDL_DestroySurface(conv);
     return tex_id;
@@ -1885,7 +1921,12 @@ static void resolve_model_textures(ViewerState& st, const std::string& model_pat
         bool found = false;
         for (const auto& cand : candidates) {
             if (fs::exists(cand)) {
-                tex_id = load_texture_file(cand.string());
+                // A3: honour the glTF sampler's NEAREST request when this
+                // texture came from an embedded GLB payload.
+                auto nit = st.model_gltf_alias_nearest.find(tex_name);
+                const bool nearest = (nit != st.model_gltf_alias_nearest.end()) &&
+                                     (nit->second != 0);
+                tex_id = load_texture_file(cand.string(), nullptr, nullptr, nullptr, nearest);
                 if (tex_id) {
                     found = true;
                     break;
@@ -1961,6 +2002,7 @@ static bool open_vendor_scn(ViewerState& st, const std::string& path, const std:
     st.missing_textures.clear();
     st.model_temp_files.clear();
     st.model_gltf_alias.clear();
+    st.model_gltf_alias_nearest.clear();
     st.scene = av::SceneData{};
     av::pbr_set_joint_matrices(nullptr, 0);
 
@@ -2140,6 +2182,10 @@ static bool open_vendor_scn(ViewerState& st, const std::string& path, const std:
     return true;
 }
 
+// Forward declarations — defined later in this file (near draw_model_viewport).
+static void apply_model_preview_zoom(ViewerState& st, float factor);
+static void update_model_preview_clip(ViewerState& st);
+
 static void select_file(ViewerState& st, const FileEntry& fe) {
     if (fe.is_dir) {
         st.current_dir = fe.full_path;
@@ -2176,6 +2222,7 @@ static void select_file(ViewerState& st, const FileEntry& fe) {
 
         st.model_temp_files.clear();
         st.model_gltf_alias.clear();
+        st.model_gltf_alias_nearest.clear();
 
         // Reset vendored-format state from any previous preview.
         for (auto tex : st.vendor_owned_textures) {
@@ -2184,6 +2231,7 @@ static void select_file(ViewerState& st, const FileEntry& fe) {
         st.vendor_owned_textures.clear();
         st.gltf_pbr_materials.clear();
         st.gltf_pbr_img_paths.clear();
+        st.gltf_pbr_img_nearest.clear();
         st.vendor_mode = false;
         st.vendor_anim_time = 0.0f;
         st.vendor_anim_playing = true;
@@ -2217,6 +2265,12 @@ static void select_file(ViewerState& st, const FileEntry& fe) {
                     size_t max_img = 0;
                     for (int gi : pbr.image_gltf_index) max_img = std::max(max_img, (size_t)gi);
                     st.gltf_pbr_img_paths.assign(max_img + 1, "");
+                    st.gltf_pbr_img_nearest.assign(max_img + 1, 0);
+                    for (size_t ii = 0; ii < pbr.images.size() && ii < pbr.image_gltf_index.size(); ++ii) {
+                        int gimg = pbr.image_gltf_index[ii];
+                        if (gimg >= 0 && gimg <= (int)max_img && pbr.images[ii].nearest)
+                            st.gltf_pbr_img_nearest[gimg] = 1;
+                    }
                 }
                 static int s_pbr_gltf_seq = 0;
                 for (size_t pi = 0; pi < pbr.images.size(); ++pi) {
@@ -2238,7 +2292,10 @@ static void select_file(ViewerState& st, const FileEntry& fe) {
                     if (img_idx < 0 || img_idx >= (int)st.gltf_pbr_img_paths.size()) return 0;
                     const std::string& p = st.gltf_pbr_img_paths[img_idx];
                     if (p.empty()) return 0;
-                    GLuint t = load_texture_file(p);
+                    const bool nearest =
+                        img_idx < (int)st.gltf_pbr_img_nearest.size() &&
+                        st.gltf_pbr_img_nearest[img_idx] != 0;
+                    GLuint t = load_texture_file(p, nullptr, nullptr, nullptr, nearest);
                     if (t) st.vendor_owned_textures.push_back(t);
                     return t;
                 };
@@ -2250,6 +2307,10 @@ static void select_file(ViewerState& st, const FileEntry& fe) {
                     mat.roughness = pm.roughness;
                     mat.occlusion = pm.occlusion;
                     std::memcpy(mat.emission, pm.emissive, sizeof(float) * 3);
+                    // A4: carry the glTF alpha mode + cutoff so the renderer
+                    // can disable depth-write for BLEND and alpha-test MASK.
+                    mat.alpha_mode = pm.alpha_mode;
+                    mat.alpha_cutoff = pm.alpha_cutoff;
                     mat.normal_tex = load_slot(pm.normal_tex);
                     mat.emission_tex = load_slot(pm.emissive_tex);
                     const int mr_idx = pm.metalrough_tex;
@@ -2283,8 +2344,18 @@ static void select_file(ViewerState& st, const FileEntry& fe) {
                     { std::ofstream f(tmp, std::ios::binary);
                       if (f) f.write((const char*)imgs[i].data.data(),
                                      (std::streamsize)imgs[i].data.size()); }
-                    if (i < st.model.texture_filenames.size())
+                    if (i < st.model.texture_filenames.size()) {
                         st.model_gltf_alias[st.model.texture_filenames[i]] = tmp;
+                        // A3: carry the sampler's NEAREST wish through the
+                        // alias so resolve_model_textures can honour it.
+                        bool tex_nearest = false;
+                        if (i < pbr.materials.size()) {
+                            int bt = pbr.materials[i].base_tex;
+                            if (bt >= 0 && bt < (int)pbr.images.size())
+                                tex_nearest = pbr.images[bt].nearest;
+                        }
+                        st.model_gltf_alias_nearest[st.model.texture_filenames[i]] = tex_nearest ? 1 : 0;
+                    }
                     st.model_temp_files.push_back(tmp);
                 }
             } else {
@@ -2362,6 +2433,7 @@ static void select_file(ViewerState& st, const FileEntry& fe) {
         st.camera.target[2] = st.model.center_z;
         st.camera.distance  = st.model.radius * 2.5f;
         if (st.camera.distance < 1.0f) st.camera.distance = 3.0f;
+        update_model_preview_clip(st);
         st.camera.yaw   = 30.0f;   // professional 3/4 preview angle
         st.camera.pitch = 18.0f;
         st.model_auto_rotate = false;
@@ -2964,6 +3036,29 @@ static GLuint postfx_display_tex(ViewerState& st) {
                             (float)ImGui::GetTime());
 }
 
+// ── Model-preview camera: dynamic zoom + clipping (A1) ────────────────
+// The old code clamped preview zoom to a fixed 500u ceiling and left the
+// far plane at its default 1000u. Any model with radius > 500 (bee rigs,
+// statues, world maps) therefore snapped the camera inside the geometry on
+// the first wheel tick and could never zoom back out; large models were
+// also sliced by the far plane. Both bounds now follow the model's actual
+// radius so framing stays sane for a 1-unit bolt and a 5000-unit level.
+static void apply_model_preview_zoom(ViewerState& st, float factor) {
+    const float r = (st.model.radius > 0.0f) ? st.model.radius : 1.0f;
+    const float min_dist = std::max(0.01f, r * 0.01f);
+    const float max_dist = std::max(2000.0f, r * 20.0f);
+    st.camera.distance = std::clamp(st.camera.distance * factor, min_dist, max_dist);
+    st.camera.near_plane = std::max(0.01f, st.camera.distance / 10000.0f);
+    st.camera.far_plane  = std::max(2000.0f, st.camera.distance + r * 10.0f);
+}
+
+// Frame near/far planes from the current distance for the model preview
+// (used right after any distance assignment from load / F-key reframe).
+static void update_model_preview_clip(ViewerState& st) {
+    const float r = (st.model.radius > 0.0f) ? st.model.radius : 1.0f;
+    st.camera.near_plane = std::max(0.01f, st.camera.distance / 10000.0f);
+    st.camera.far_plane  = std::max(2000.0f, st.camera.distance + r * 10.0f);
+}
 static void draw_model_viewport(ViewerState& st) {
     ImVec2 avail = ImGui::GetContentRegionAvail();
     // Logical size drives the displayed image and any mouse math.
@@ -2991,6 +3086,7 @@ static void draw_model_viewport(ViewerState& st) {
         st.camera.target[1] = st.model.center_y;
         st.camera.target[2] = st.model.center_z;
         st.camera.distance = std::max(1.0f, st.model.radius * 2.5f);
+        update_model_preview_clip(st);
     }
 
     if (!st.fbo) {
@@ -3391,10 +3487,7 @@ static void draw_model_viewport(ViewerState& st) {
         ImGuiIO& io = ImGui::GetIO();
 
         if (io.MouseWheel != 0.0f) {
-            const float factor = std::pow(0.94f, io.MouseWheel * st.cam_zoom_speed);
-            st.camera.distance *= factor;
-            if (st.camera.distance < 0.1f) st.camera.distance = 0.1f;
-            if (st.camera.distance > 500.0f) st.camera.distance = 500.0f;
+            apply_model_preview_zoom(st, std::pow(0.94f, io.MouseWheel * st.cam_zoom_speed));
         }
 
         if (ImGui::IsMouseDragging(0)) {
@@ -4995,8 +5088,12 @@ static GLuint load_scene_background_texture(ViewerState& st, const std::string& 
     const fs::path data_dir = fs::path(expand_home("~/.local/share/swordigo-desktop/assets"));
     std::vector<fs::path> search_dirs = {
         scene_dir,
+        scene_dir / "resources",
         scene_dir.parent_path(),
         scene_dir.parent_path() / "resources",
+        fs::path(expand_home("~/resources")),
+        fs::path(expand_home("~/SwordigoRefresh/assets/resources")),
+        fs::path(expand_home("~/SwordigoDesktop/assets")),
         data_dir / "resources",
         data_dir / "background",
         data_dir / "resources" / "background",
@@ -6175,8 +6272,226 @@ static void request_begin_ground_mesh_edit(ViewerState& st) {
         gm_begin_inline_edit(st);
     }
 }
+// ============================================================
+// RubyMesh Workspace — open + apply helpers.
+// The manual collision-zone editor UI lives in rubymesh_editor.cpp;
+// these two functions bridge it to the scene (menu entry + Apply).
+// ============================================================
+
+// Model stem for the .rbm path: the resolved POD's file stem (no directory
+// components, no .pod/.POD extension).
+static std::string rmb_model_stem(const std::string& mesh_name) {
+    std::string stem = mesh_name;
+    const size_t slash = stem.find_last_of("/\\");
+    if (slash != std::string::npos) stem = stem.substr(slash + 1);
+    for (const char* ext : {".pod", ".POD", ".Pod"}) {
+        if (stem.size() > 4 && stem.compare(stem.size() - 4, 4, ext) == 0) {
+            stem = stem.substr(0, stem.size() - 4);
+            break;
+        }
+    }
+    return stem;
+}
+
+// Game identifiers are ASCII-safe and short (≤32 chars) — zone names may
+// contain spaces/emoji, so they get sanitized here.
+static std::string rmb_object_identifier(const std::string& model_stem,
+                                         const std::string& zone_name) {
+    auto sanitize = [](std::string s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                            (c >= '0' && c <= '9') || c == '_';
+            out.push_back(ok ? c : '_');
+        }
+        while (!out.empty() && out.front() == '_') out.erase(out.begin());
+        while (!out.empty() && out.back() == '_') out.pop_back();
+        return out;
+    };
+    std::string name = "_col_" + sanitize(model_stem) + "_" + sanitize(zone_name);
+    if (name.size() > 32) name = name.substr(0, 32);
+    while (name.size() > 1 && name.back() == '_') name.pop_back();
+    return name;
+}
+
+// §8.2 — open the workspace for the selected scene object's POD.
+static void open_rubymesh_workspace(ViewerState& st) {
+    const int idx = st.selected_object;
+    if (idx < 0 || idx >= (int)st.scene.objects.size()) return;
+    const auto& sobj = st.scene.objects[idx];
+    if (sobj.mesh_name.empty() || st.scene.filepath.empty()) {
+        st.status_msg = "Select a model object in an open scene first.";
+        return;
+    }
+    const std::string scene_dir = fs::path(st.scene.filepath).parent_path().string();
+    if (!load_scene_model_to_cache(st, sobj.mesh_name, scene_dir)) {
+        st.status_msg = "RubyMesh: couldn't load model '" + sobj.mesh_name + "'.";
+        return;
+    }
+    const std::string stem = rmb_model_stem(sobj.mesh_name);
+
+    st.rmb_source_obj = idx;
+    st.rmb_mesh_stem  = stem;
+    st.rmb_rubymesh   = rbm::rbm_load_or_default(stem, scene_dir);
+    st.rmb_ws         = rbmed::WorkspaceState{};   // fresh session (undo/FBO cleared)
+    st.rmb_ws.open    = true;
+    st.rmb_ws.active_zone = -1;
+
+    // The workspace shares st.camera — remember the scene view to restore it
+    // when the workspace closes.
+    st.rmb_saved_cam = st.camera;
+    st.rmb_saved_cam_valid = true;
+
+    // Frame the camera on the model (authored pose at the object's depth).
+    const av::PODModel& model = st.scene_model_cache[sobj.mesh_name];
+    st.camera.target[0] = (model.min_x + model.max_x) * 0.5f;
+    st.camera.target[1] = (model.min_y + model.max_y) * 0.5f;
+    st.camera.target[2] = (model.min_z + model.max_z) * 0.5f + sobj.pos_z;
+    const float extent = std::max(model.max_x - model.min_x,
+                          std::max(model.max_y - model.min_y, model.max_z - model.min_z));
+    st.camera.distance = std::max(2.0f, std::max(1.0f, extent) * 1.6f);
+    st.camera.near_plane = std::max(0.01f, st.camera.distance / 10000.0f);
+    st.camera.far_plane  = std::max(1000.0f, st.camera.distance + 4000.0f);
+
+    st.status_msg = "RubyMesh Workspace: " + stem +
+                    " — place zone vertices on the model, then Apply to Scene.";
+}
+
+// §7 — generate a Swordigo GroundMesh object per enabled zone (≥3 vertices)
+// and add it to the open scene at the source object's placement.
+static bool apply_rubymesh_to_scene(ViewerState& st) {
+    // Failure keeps the workspace open, so mirror messages into its own notice
+    // line (the scene status bar is hidden beneath the full-screen overlay).
+    auto fail = [&](const std::string& msg) {
+        st.status_msg = msg;
+        st.rmb_ws.notice = msg;
+        st.rmb_ws.notice_timer = 6.0f;
+    };
+    if (st.rmb_source_obj < 0 || st.rmb_source_obj >= (int)st.scene.objects.size()) {
+        fail("RubyMesh: the source scene object is gone — reopen the workspace.");
+        return false;
+    }
+    if (st.scene.filepath.empty()) {
+        fail("RubyMesh: open a scene file first.");
+        return false;
+    }
+    const auto& sobj = st.scene.objects[st.rmb_source_obj];
+    const std::string scene_dir = fs::path(st.scene.filepath).parent_path().string();
+
+    int valid = 0;
+    for (const auto& zone : st.rmb_rubymesh.zones)
+        if (zone.enabled && zone.vertices.size() >= 3) ++valid;
+    if (valid == 0) {
+        fail("RubyMesh: no enabled zone with ≥3 vertices to apply.");
+        return false;
+    }
+
+    // 1. Persist the .rbm first (spec §7 step 1).
+    std::string err;
+    const std::string rbm_path = rbm::rbm_path_for(st.rmb_mesh_stem, scene_dir);
+    if (!rbm::rbm_save(st.rmb_rubymesh, rbm_path, err)) {
+        fail("RubyMesh: apply aborted — " + err);
+        return false;
+    }
+
+    // 2. Ensure the invisible PVR asset exists in the scene dir.
+    col_mesh::ensure_transparent_pvr(scene_dir);
+
+    snapshot_scene(st);   // one undo step for the whole Apply
+
+    auto name_is_free = [&](const std::string& n) {
+        for (const auto& o : st.scene.objects)
+            if (o.name == n) return false;
+        return true;
+    };
+
+    int added = 0;
+    for (const auto& zone : st.rmb_rubymesh.zones) {
+        if (!zone.enabled || zone.vertices.size() < 3) continue;
+
+        boulder::GroundMesh gm;
+        gm.z             = zone.world_z;
+        gm.min_depth     = zone.depth_min;
+        gm.max_depth     = zone.depth_max;
+        gm.top_angle     = 20.0;
+        gm.generate_top  = true;
+        gm.surface_width = 80.0;
+        gm.texture_scale = 64.0;
+        gm.top_texture    = "ruby_transparent";
+        gm.bottom_texture = "ruby_transparent";
+        if (!zone.invisible) {
+            if (!zone.top_texture.empty())    gm.top_texture    = zone.top_texture;
+            if (!zone.front_texture.empty())  gm.bottom_texture = zone.front_texture;
+            else if (!zone.top_texture.empty()) gm.bottom_texture = zone.top_texture;
+        }
+        std::vector<std::pair<float, float>> poly = zone.vertices;
+        rbm::ensure_ccw(poly);   // GroundPolygon wants CCW; keep the .rbm untouched
+        for (const auto& p : poly)
+            gm.polygon.push_back({static_cast<double>(p.first),
+                                  static_cast<double>(p.second)});
+
+        // Object name: _col_<stem>_<zone> (≤32 chars), unique in the scene.
+        const std::string zone_part = zone.name.empty() ? "zone" : zone.name;
+        std::string obj_name = rmb_object_identifier(st.rmb_mesh_stem, zone_part);
+        if (!name_is_free(obj_name)) {
+            const std::string base = obj_name.substr(0, std::min<size_t>(obj_name.size(), 28));
+            for (int n = 2; n < 1000; ++n) {
+                obj_name = base + "_" + std::to_string(n);
+                if (name_is_free(obj_name)) break;
+            }
+        }
+
+        const std::string swdm = boulder::serialize_swdm(gm);
+        const std::string blob = boulder::generate_ground_mesh_object(
+            swdm, obj_name, static_cast<double>(zone.world_z));
+        if (blob.empty()) continue;
+
+        const std::string tmp = st.scene.filepath + ".ruby-rbm.tmp";
+        {
+            std::ofstream of(tmp, std::ios::binary | std::ios::trunc);
+            if (!of) continue;
+            of.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+        }
+        av::SceneData parsed;
+        try { parsed = av::scene_load(tmp); } catch (...) {}
+        fs::remove(tmp);
+        if (parsed.objects.empty()) continue;
+
+        av::SceneObject obj = std::move(parsed.objects[0]);
+        obj.name = obj_name;
+        // Anchor the collision at the source object's scene placement. The
+        // polygon stays in authored model space (D1/D2 in implementation_plan).
+        obj.pos_x = sobj.pos_x;
+        obj.pos_y = sobj.pos_y;
+        obj.rot_y = sobj.rot_y;
+        obj.scale_x = obj.scale_y = obj.scale_z = sobj.scale_x;
+        // scene_paste_object() renames to a fresh "objN" identifier, which
+        // would break the _col_ prefix the [K] collision overlay keys on —
+        // restore the authored identifier right after the paste.
+        const size_t pasted = av::scene_paste_object(st.scene, std::move(obj));
+        st.scene.objects[pasted].name = obj_name;
+        ++added;
+    }
+
+    if (added == 0) {
+        st.status_msg = "RubyMesh: zone generation failed — nothing was added.";
+        return true;   // close the workspace; the failure message says it all
+    }
+
+    // 3-6. Refresh + upload GPU buffers + mark dirty + auto-enable the emerald
+    // collision overlay so the result is immediately visible ([K] key).
+    av::scene_refresh(st.scene);
+    upload_scene_ground_meshes(st, scene_dir);
+    st.scene_dirty = true;
+    st.scene_col_xray = true;
+    st.status_msg = std::string(ICON_FA_CHECK) + " Applied " + std::to_string(added)
+                  + " collision zone(s) — see the _col_" + st.rmb_mesh_stem + "_* objects.";
+    return true;
+}
 
 static void draw_template_mesh_edit_modal(ViewerState& st) {
+
     if (st.template_mesh_modal_open) {
         ImGui::OpenPopup("Templated Ground Mesh Edit##modal");
         st.template_mesh_modal_open = false;
@@ -9875,7 +10190,27 @@ static void draw_scene_visualizer(ViewerState& st) {
         ImGui::BeginDisabled(!st.scene_has_object_clipboard);
         if (ImGui::MenuItem("Paste", "Ctrl+V")) paste_scene_selection(st);
         ImGui::EndDisabled();
+        // ── Collision Mesh Populator ──────────────────────────────────────────
+        ImGui::Separator();
+        {
+            // RubyMesh Workspace: manual collision-zone authoring on the
+            // selected POD model (replaces the old auto-slicer).
+            const bool can_populate =
+                st.selected_object >= 0 &&
+                st.selected_object < (int)st.scene.objects.size() &&
+                !st.scene.objects[st.selected_object].mesh_name.empty() &&
+                !st.scene.filepath.empty();
+            ImGui::BeginDisabled(!can_populate);
+            if (ImGui::MenuItem(ICON_FA_LAYER_GROUP " Open RubyMesh Workspace... [EXPT]")) {
+                open_rubymesh_workspace(st);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Full-screen editor: click-place collision zone vertices on the\n"
+                                  "3D model, then Apply to generate Swordigo GroundMesh objects.");
+            ImGui::EndDisabled();
+        }
         ImGui::EndPopup();
+
     }
     // NOTE: the old "Anim" / "Anim ▾" toolbar buttons were removed — scene
     // animation playback is driven from the "Mode → Scene Player" menu and the
@@ -10068,6 +10403,19 @@ static void draw_scene_visualizer(ViewerState& st) {
         st.scene_xray = !st.scene_xray;
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Toggle X-Ray / ghost see-through view");
+
+    ImGui::SameLine();
+    // Collision Mesh Visualizer: renders _col_* invisible ground meshes as
+    // semi-transparent emerald so you can see where collision geometry landed.
+    // Toggle with [K] key while the viewport is focused.
+    if (st.scene_col_xray)
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.60f, 0.28f, 0.85f));
+    if (ImGui::Button(st.scene_col_xray ? ICON_FA_SHIELD " Col Mesh: On"
+                                        : ICON_FA_SHIELD " Col Mesh: Off"))
+        st.scene_col_xray = !st.scene_col_xray;
+    if (st.scene_col_xray) ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Show invisible collision meshes (_col_*) as neon-green overlay [K]");
 
     ImGui::SameLine();
     if (ImGui::Button(st.postfx_enabled ? ICON_FA_WAND_MAGIC_SPARKLES " PostFX: On" : ICON_FA_WAND_MAGIC_SPARKLES " PostFX: Off"))
@@ -10551,6 +10899,41 @@ static void draw_scene_visualizer(ViewerState& st) {
 
     // ── X-Ray ghost pass (translucent fill + wireframe outlines) ──
     draw_scene_xray_pass(st);
+
+    // ── Collision Mesh X-Ray pass ──────────────────────────────────────────
+    // When scene_col_xray is ON (button or [K] key), all ground mesh objects
+    // whose identifier starts with "_col_" are rendered as a neon-green
+    // semi-transparent fill + bright wireframe, regardless of their texture
+    // (ruby_transparent.pvr = invisible normally). This lets you audit where
+    // the generated collision hull actually landed in the scene.
+    if (st.scene_col_xray) {
+        float col_fill[4] = {0.08f, 0.90f, 0.35f, 0.28f}; // emerald fill
+        float col_wire[4] = {0.20f, 1.00f, 0.55f, 0.85f}; // bright green wire
+        glDepthMask(GL_FALSE);
+        for (int idx = 0; idx < (int)st.scene.objects.size(); ++idx) {
+            const auto& obj = st.scene.objects[idx];
+            if (obj.hidden && !st.scene_show_hidden) continue;
+            // Match _col_* objects (generated by the RubyMesh Apply) OR any
+            // pure ground-mesh object so the user can still see them if they
+            // manually toggled the col-xray button.
+            const bool is_col = obj.name.rfind("_col_", 0) == 0;
+            if (!is_col) continue;
+            if (idx >= (int)st.scene_ground_gpu_meshes.size()) continue;
+            const auto& gm_vec = st.scene_ground_gpu_meshes[idx];
+            if (gm_vec.empty()) continue;
+
+            float wmat[16];
+            swk::object_world_matrix(obj, wmat);
+
+            for (const auto& gm_raw : gm_vec) {
+                auto& gm = const_cast<av::GPUMesh&>(gm_raw);
+                gm.texture_id = 0; // ignore ruby_transparent — show geometry
+                av::render_mesh(gm, wmat, col_fill, false);
+                av::render_mesh(gm, wmat, col_wire, true);
+            }
+        }
+        glDepthMask(GL_TRUE);
+    }
 
     // Render diagnostics (RUBY_DEBUG_VIS=1): verify model objects draw, not just proxies.
     static int s_vis_diag_frames = 0;
@@ -11191,18 +11574,26 @@ static void draw_scene_visualizer(ViewerState& st) {
             gobj.pos_z = m_trans[2];
 
             if (st.scene_transform_mode == 2 || st.gizmo_universal || (op & (ImGuizmo::ROTATE_Z | ImGuizmo::ROTATE_SCREEN | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y))) {
-                // Decomposed Z-rotation in degrees -> radians (Tag 6 in-plane rotation)
-                float z_rad = m_rot[2] * (3.14159265f / 180.0f);
-                while (z_rad > 3.14159265f)  z_rad -= 2.0f * 3.14159265f;
-                while (z_rad < -3.14159265f) z_rad += 2.0f * 3.14159265f;
-                gobj.rot_y = z_rad;
+                // Store ALL THREE decomposed Euler angles, not just Z. Previously
+                // only m_rot[2] was kept (into rot_y), so dragging the red (X) or
+                // green (Y) ring did nothing — the object could only spin about
+                // the blue axis. object_world_matrix now composes Rx*Ry*Rz in the
+                // exact order ImGuizmo's Recompose uses, with this axis mapping:
+                //   m_rot[0] (X, red)   -> rot_x   (editor-only)
+                //   m_rot[1] (Y, green) -> rot_z   (editor-only)
+                //   m_rot[2] (Z, blue)  -> rot_y   (persisted Tag 6 in-plane spin)
+                auto wrap_pi = [](float r) {
+                    while (r > 3.14159265f)  r -= 2.0f * 3.14159265f;
+                    while (r < -3.14159265f) r += 2.0f * 3.14159265f;
+                    return r;
+                };
+                gobj.rot_x = wrap_pi(m_rot[0] * (3.14159265f / 180.0f));
+                gobj.rot_z = wrap_pi(m_rot[1] * (3.14159265f / 180.0f));
+                gobj.rot_y = wrap_pi(m_rot[2] * (3.14159265f / 180.0f));
 
                 // If ModelComponent is present and rotated along Y, update model_y_rotation
                 if (gobj.has_model_y_rotation && (op & ImGuizmo::ROTATE_Y)) {
-                    float y_rad = m_rot[1] * (3.14159265f / 180.0f);
-                    while (y_rad > 3.14159265f)  y_rad -= 2.0f * 3.14159265f;
-                    while (y_rad < -3.14159265f) y_rad += 2.0f * 3.14159265f;
-                    gobj.model_y_rotation = y_rad;
+                    gobj.model_y_rotation = wrap_pi(m_rot[1] * (3.14159265f / 180.0f));
                 }
             }
             if (st.scene_transform_mode == 3 || st.gizmo_universal || (op & (ImGuizmo::SCALE_X | ImGuizmo::SCALE_Y | ImGuizmo::SCALE_Z))) {
@@ -11357,7 +11748,6 @@ static void draw_scene_visualizer(ViewerState& st) {
         overlay->AddText(ImVec2(ax + 2.0f, ay - L - 13.0f), IM_COL32(90, 205, 95, 255), "Y");
         overlay->AddText(ImVec2(ax - L * 0.72f - 14.0f, ay + L * 0.72f - 3.0f), IM_COL32(85, 135, 240, 255), "Z");
     }
-
     overlay->PopClipRect();
 
     // ── Inline 2D polygon editing owns the whole input block while active ──
@@ -11390,6 +11780,7 @@ static void draw_scene_visualizer(ViewerState& st) {
         // ── Keyboard shortcuts ──
         if (ImGui::IsKeyPressed(ImGuiKey_F)) frame_scene_selection(st);
         if (ImGui::IsKeyPressed(ImGuiKey_Home)) frame_scene_camera(st);
+        if (ImGui::IsKeyPressed(ImGuiKey_K)) st.scene_col_xray = !st.scene_col_xray; // [K]ollision mesh X-ray
         if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) move_scene_object(st, -1);
         if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) move_scene_object(st, 1);
         if (st.scene_mesh_edit) {
@@ -12852,6 +13243,10 @@ static void open_scene_creator(ViewerState& st);
 static void open_procedural_generator(ViewerState& st);
 
 static void draw_center_panel(ViewerState& st) {
+    // The RubyMesh Workspace is a full-screen overlay — skip the underlying
+    // editor entirely while it is open (saves a full scene render per frame
+    // and guarantees it can never steal hover/keyboard input).
+    if (st.rmb_ws.open) return;
     if (st.preview_type == PREVIEW_SCENE) {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, g_theme.panel_alt);
         ImGui::BeginChild("##ScenePathBar", ImVec2(0, 28.0f), ImGuiChildFlags_None,
@@ -16485,6 +16880,7 @@ static bool handle_shortcuts(ViewerState& st) {
             st.camera.target[2] = st.model.center_z;
             st.camera.distance  = st.model.radius * 2.5f;
             if (st.camera.distance < 1.0f) st.camera.distance = 3.0f;
+            update_model_preview_clip(st);
         } else if (st.preview_type == PREVIEW_SCENE) {
             frame_scene_camera(st);
         }
@@ -16843,13 +17239,15 @@ int main(int argc, char* argv[]) {
     if (mcp_http) return mcp::RunHttpServer(mcp_port, mcp_root);
     if (mcp_mode) return mcp::RunStdioServer(mcp_root);
 
-    // Headless FBX / GLB → POD converter (see tools/pod_convert.cpp).
+    // Headless FBX / GLB / OBJ → POD converter (see tools/pod_convert.cpp).
     //   bin/ruby --fbx2pod <in.fbx> [out.pod] [--no-flip] [--no-textures] [--force]
     //   bin/ruby --glb2pod <in.glb> [out.pod] [--no-flip] [--no-textures] [--force]
+    //   bin/ruby --obj2pod <in.obj> [out.pod] [--no-flip] [--no-textures] [--force]
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--fbx2pod") == 0 ||
             strcmp(argv[i], "--glb2pod") == 0 ||
-            strcmp(argv[i], "--gltf2pod") == 0)
+            strcmp(argv[i], "--gltf2pod") == 0 ||
+            strcmp(argv[i], "--obj2pod") == 0)
             return av::pod_convert_cli(argc - (i + 1), argv + (i + 1));
     }
 
@@ -17666,6 +18064,61 @@ int main(int argc, char* argv[]) {
                 g_state.batch_converter.open_window = false;
             }
             batch::draw_batch_converter(g_state.batch_converter, now_sec);
+        }
+
+        // ── RubyMesh Workspace (full-screen overlay) ───────────────────────────
+        // Drawn AFTER the main window so it renders on top of everything. While
+        // open, draw_center_panel early-outs and this window owns the screen.
+        if (g_state.rmb_ws.open) {
+            const int src = g_state.rmb_source_obj;
+            if (src >= 0 && src < (int)g_state.scene.objects.size() &&
+                !g_state.scene.objects[src].mesh_name.empty()) {
+                const auto& sobj = g_state.scene.objects[src];
+                const std::string mesh = sobj.mesh_name;
+                auto mit = g_state.scene_model_cache.find(mesh);
+                auto git = g_state.scene_gpu_mesh_cache.find(mesh);
+                auto tit = g_state.scene_texture_cache.find(mesh);
+                if (mit != g_state.scene_model_cache.end() &&
+                    git != g_state.scene_gpu_mesh_cache.end() &&
+                    tit != g_state.scene_texture_cache.end()) {
+                    const std::string scene_dir =
+                        fs::path(g_state.scene.filepath).parent_path().string();
+                    rbmed::WorkspaceContext ctx{
+                        mit->second, git->second, tit->second,
+                        g_state.rmb_rubymesh,
+                        scene_dir,
+                        rbm::rbm_path_for(g_state.rmb_mesh_stem, scene_dir),
+                        g_state.camera,
+                        sobj.pos_z,      // seed_world_z  (D3)
+                        sobj.pos_z       // source_z_shift (D4)
+                    };
+                    ImGuiViewport* vp = ImGui::GetMainViewport();
+                    const int sw = vp ? (int)vp->WorkSize.x : 1280;
+                    const int sh = vp ? (int)vp->WorkSize.y : 720;
+                    if (rbmed::draw_workspace(ctx, g_state.rmb_ws, sw, sh) &&
+                        apply_rubymesh_to_scene(g_state)) {
+                        g_state.rmb_ws.open = false;
+                        g_state.rmb_ws.dirty = false;
+                    }
+                    if (!g_state.rmb_ws.open && g_state.rmb_saved_cam_valid) {
+                        g_state.camera = g_state.rmb_saved_cam;
+                        g_state.rmb_saved_cam_valid = false;
+                    }
+                } else {
+                    // Cache miss (scene reloaded under the workspace?): close.
+                    g_state.rmb_ws.open = false;
+                    if (g_state.rmb_saved_cam_valid) {
+                        g_state.camera = g_state.rmb_saved_cam;
+                        g_state.rmb_saved_cam_valid = false;
+                    }
+                }
+            } else {
+                g_state.rmb_ws.open = false;
+                if (g_state.rmb_saved_cam_valid) {
+                    g_state.camera = g_state.rmb_saved_cam;
+                    g_state.rmb_saved_cam_valid = false;
+                }
+            }
         }
 
         ImGui::Render();

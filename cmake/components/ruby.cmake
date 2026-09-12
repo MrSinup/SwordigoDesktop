@@ -14,6 +14,9 @@ if (SWORDIGO_BUILD_RUBY)
         ${SRC_DIR}/tools/scene_terrain.cpp
         ${SRC_DIR}/tools/scene_entity.cpp
         ${SRC_DIR}/tools/scene_collision.cpp
+        ${SRC_DIR}/tools/scene_collision_mesh.cpp
+        ${SRC_DIR}/tools/rubymesh.cpp
+        ${SRC_DIR}/tools/rubymesh_editor.cpp
         ${SRC_DIR}/tools/scene_physics.cpp
         ${SRC_DIR}/tools/scene_game.cpp
         ${SRC_DIR}/tools/scene_generator.cpp
@@ -25,6 +28,7 @@ if (SWORDIGO_BUILD_RUBY)
         ${SRC_DIR}/tools/batch_converter.cpp
         ${SRC_DIR}/tools/gltf_export.cpp
         ${SRC_DIR}/tools/gltf_import.cpp
+        ${SRC_DIR}/tools/gltf_bridge.cpp
         ${SRC_DIR}/tools/obj_loader.cpp
         ${SRC_DIR}/tools/ani_loader.cpp
         ${SRC_DIR}/tools/scn_loader.cpp

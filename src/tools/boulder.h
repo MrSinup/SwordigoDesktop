@@ -53,6 +53,9 @@ namespace boulder {
         int tm_surface_id = 984;
         int tm_front_id = 985;
     };
+    // 2D polygon orientation helpers (enforces counter-clockwise winding for Boulder meshing)
+    double polygon_area(const std::vector<PolygonPoint>& pts);
+    void ensure_ccw(std::vector<PolygonPoint>& pts);
 
     // Parses a .gmesh / .swdm file content and generates FileRift-compatible
     // GroundMesh markup. Returns empty string on failure.

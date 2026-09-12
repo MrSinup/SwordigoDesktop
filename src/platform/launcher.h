@@ -12,7 +12,13 @@ struct LaunchConfig {
     std::string selected_binary = "engine/v1.4.12/armeabi-v7a/libswordigo.so";
     std::string assets_dir = "assets";       // "assets" for vanilla, "rl_assets" for RLSwordigo
     std::string game_type = "Swordigo";      // "Swordigo" or "RLSwordigo"
+    std::string selected_mod;
+    std::string selected_base_version;       // "1.4.12" or "1.4.13"
+    std::string instance_name;
     bool should_launch = true;  // false if user closed the launcher
+    bool use_dynarmic = false;
+    bool use_sre = true;
+    bool advanced_redstell_opts = false;
 };
 
 // Show the unified launcher window and block until user clicks Launch or closes.

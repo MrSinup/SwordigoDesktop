@@ -18,8 +18,14 @@ bool PVRTDecodeUncompressed(const void* srcData, uint32_t width, uint32_t height
                             uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
                             uint8_t* dstData);
 
+// Decompresses ASTC formats to RGBA8888
+uint32_t PVRTDecompressASTC(const void* srcData, uint32_t width, uint32_t height, uint8_t* dstData, int block_w, int block_h);
+
+// Checks if format_type corresponds to an ASTC format (codes 20..33) and returns block dimensions
+bool is_astc_format(int format_type, int& block_w, int& block_h);
+
 // Parses PVR v3 pixel format and returns format type code:
-// 1 = ETC1, 2 = PVRTC 2bpp, 3 = PVRTC 4bpp, 4 = DXT1, 5 = DXT3, 6 = DXT5, 10 = uncompressed, -1 = unsupported
+// 1 = ETC1, 2 = PVRTC 2bpp, 3 = PVRTC 4bpp, 4 = DXT1, 5 = DXT3, 6 = DXT5, 20..33 = ASTC (4x4..12x12), 10 = uncompressed, -1 = unsupported
 int ParsePVRv3Format(uint64_t pixel_format, uint32_t& gl_format, uint32_t& gl_type, int& bpp,
                      char& c0, char& c1, char& c2, char& c3,
                      uint8_t& d0, uint8_t& d1, uint8_t& d2, uint8_t& d3);

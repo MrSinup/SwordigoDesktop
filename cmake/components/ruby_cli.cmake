@@ -10,7 +10,11 @@ if (SWORDIGO_BUILD_RUBY)
         ${SRC_DIR}/tools/ruby_mcp.cpp
         ${SRC_DIR}/tools/map_loader.cpp
         ${SRC_DIR}/tools/scene_workspace.cpp
-        ${SRC_DIR}/tools/av_renderer.cpp)
+        ${SRC_DIR}/tools/av_renderer.cpp
+        # Shared zip + APK session backend (master TODO 4.1): the CLI and the
+        # GUI link the same zip/session code so they can never drift.
+        ${SRC_DIR}/platform/zip_archive.cpp
+        ${SRC_DIR}/tools/apk_session.cpp)
     target_compile_definitions(ruby_cli PRIVATE BATCH_CONVERTER_NO_UI)
     # Output lands in bin/ per the top-level CMakeLists output dirs.
     swordigo_target(ruby_cli)

@@ -20,10 +20,11 @@ enum class BinaryArch {
     ARM64       // arm64-v8a
 };
 
-// Info about a detected game binary
+// Info about a detected game binary or instance
 struct BinaryInfo {
+    std::string id;             // instance ID / slug (e.g. "v1.4.12", "forest", "rl-v6.6")
     std::string filename;       // e.g. "libswordigo.so"
-    std::string filepath;       // Full path: "engine/v1.4.12/arm64-v8a/libswordigo.so"
+    std::string filepath;       // Full or relative path: "engine/v1.4.12/arm64-v8a/libswordigo.so"
     std::string sha256;         // SHA256 hex string
     std::string version;        // e.g. "1.4.12"
     std::string label;          // e.g. "v1.4.12 [ARM64] (Stable)"
@@ -31,9 +32,12 @@ struct BinaryInfo {
     BinaryStatus status;
     BinaryArch arch;
     size_t file_size;           // bytes
-    bool is_default;
+    bool is_default = false;
+    bool is_base = false;       // true if pure vanilla base engine (v1.4.12 or v1.4.13)
+    std::string preferred_base; // "1.4.12" or "1.4.13" for instances
+    std::string custom_binary;  // optional path if instance has true custom .so
     std::string game_type;      // "Swordigo" or "RLSwordigo"
-    std::string assets_dir;     // "assets" or "rl_assets"
+    std::string assets_dir;     // "assets" or "rl_assets" or "inst-Forest"
     std::string icon_path;      // Custom icon PNG/JPG (empty = use default for game_type)
     std::vector<std::string> dependencies;  // e.g. {"libmini.so", "libGlossHook.so"}
     std::vector<std::string> dep_paths;     // Full paths to dependency .so files
@@ -55,7 +59,7 @@ public:
     // Load user-added instances (writable, from user config dir)
     void load_user_instances(const std::string& json_path);
 
-    // Rebuild the runtime list from engine/*/*/instance.ini metadata.
+    // Rebuild the runtime list from engine/*/*/instance.ini metadata and instances/*.ini
     void reload_instances();
     
     // Save user instances (only custom ones, not system ones)
@@ -76,16 +80,39 @@ public:
     void scan_engine_directory(const std::string& engine_path);
     void scan_directory(const std::string& dir_path);
 
+    // Scan new lightweight instances/ directory
+    void scan_instances_directory(const std::string& instances_path);
+
+    // Migrate legacy duplicate engine/custom-* folders to lightweight instances/*.ini
+    void migrate_legacy_custom_instances();
+
     // Load/save the binary registry JSON (old format, kept for compat)
     void load_registry(const std::string& json_path);
     void save_registry(const std::string& json_path);
 
-    // Get detected binaries
+    // Get detected binaries / instances
     const std::vector<BinaryInfo>& get_binaries() const { return binaries; }
+
+    // Get pure base engines (v1.4.12, v1.4.13)
+    std::vector<BinaryInfo> get_base_engines() const;
+
+    // Get custom/gameplay instances (non-base)
+    std::vector<BinaryInfo> get_custom_instances() const;
+
+    // Resolve which game binary path should be launched for a given instance.
+    // If override_base is non-empty ("1.4.12" or "1.4.13"), it takes priority over b.preferred_base.
+    std::string resolve_launch_binary(const BinaryInfo& b, const std::string& override_base = "") const;
 
     // Get/set default binary
     std::string get_default() const { return default_binary; }
     void set_default(const std::string& filepath);
+
+    // Set preferred base engine for a non-base instance and persist to INI
+    void set_instance_preferred_base(size_t index, const std::string& base_ver);
+
+    // Active selection state for launcher
+    std::string active_instance_id;
+    std::string active_base_version; // "1.4.12" or "1.4.13"
 
     // Get info for the currently loaded binary
     const BinaryInfo* get_loaded_info() const;
@@ -95,21 +122,14 @@ public:
     void strip_sre_conflicts_from_last();
 
     // Add a custom binary instance from a .so file
-    // Copies the .so into engine/custom-NAME/<arch>/ and registers it
     bool add_custom_instance(const std::string& so_filepath, const std::string& name, const std::string& assets_dir);
 
-    // Import an Android APK as a complete self-contained instance. Extracts
-    // game assets and every native ABI, registers each libswordigo.so, copies
-    // companion libraries, and writes instance.ini metadata.
+    // Import an Android APK as a complete self-contained instance.
     bool import_apk_instance(const std::string& apk_path, const std::string& name,
                              std::string* error_message = nullptr);
 
     // Remove an instance by index from the in-memory list
-    void remove_instance(int index) {
-        if (index >= 0 && index < (int)binaries.size()) {
-            binaries.erase(binaries.begin() + index);
-        }
-    }
+    void remove_instance(int index);
 
     // Strip libmini.so and libGlossHook.so from an instance's dependencies
     // (SRE replaces their functionality natively)

@@ -10,7 +10,10 @@ public:
     Display();
     ~Display();
     
-    bool init(int width, int height, const std::string& title);
+    // `hidden`: create the window unmapped (SDL_WINDOW_HIDDEN). Used by the
+    // Ruby GG "engine pod" which renders into the back buffer and ships the
+    // finished frames over shared memory — no visible window is needed.
+    bool init(int width, int height, const std::string& title, bool hidden = false);
 #ifdef VULKAN_BACKEND
     bool init_vulkan(int width, int height, const std::string& title);
 #endif

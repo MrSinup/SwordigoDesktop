@@ -1,29 +1,85 @@
 # ============================================================================
-# Component: ruby_gg — Swordigo Studio frontend using Godot as native C++ lib
+# Component: ruby_gg — Swordigo Studio Qt6 Frontend
 #
 # Architecture:
-#   ruby_gg  ->  Godot C++ API (like ImGui/Qt)
-#                    |
-#               libgodot.so (link-time)
-#                    |
-#               GUI + Rendering + SceneTree
-#
-# Swordigo backends (src/tools/) are linked, not copied.
-# ImGui-dependent backends excluded (they belong to the old ruby executable).
+#   ruby_gg  ->  Qt6 (Widgets, OpenGLWidgets, Core, Gui)
+#                     |
+#   Swordigo Headless Core Backends (src/tools/):
+#     - pod_loader / pod_writer / pod_convert
+#     - scene_loader / scene_workspace
+#     - filerift (markup & protobuf)
+#     - boulder (GroundMesh)
 # ============================================================================
 
 if (SWORDIGO_BUILD_RUBY_GG)
-    # ---- Godot source tree (for headers only) ----
-    set(GODOT_SOURCE_DIR "${CMAKE_SOURCE_DIR}/deps/godot-4.7.2-stable")
-    set(GODOT_LIB_DIR "${CMAKE_SOURCE_DIR}/bin/libs")
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets Network)
 
-    add_executable(ruby_gg
-        ${SRC_DIR}/ruby/ruby_gg.cpp
-        # ---- Swordigo backends (no ImGui deps) ----
+    set(RUBY_GG_SOURCES
+        ${SRC_DIR}/ruby/main.cpp
+        ${SRC_DIR}/ruby/editor/ruby_main_window.cpp
+        ${SRC_DIR}/ruby/editor/ruby_title_bar.cpp
+        ${SRC_DIR}/ruby/editor/studio_idle_widget.cpp
+        ${SRC_DIR}/ruby/editor/script_ide_widget.cpp
+        ${SRC_DIR}/ruby/editor/virtual_text_buffer.cpp
+        ${SRC_DIR}/ruby/editor/doc_viewer_dialog.cpp
+        ${SRC_DIR}/ruby/editor/new_file_dialog.cpp
+        ${SRC_DIR}/ruby/editor/model_convert_dialog.cpp
+        ${SRC_DIR}/ruby/editor/apk_session_panel.cpp
+        ${SRC_DIR}/ruby/docs/docs.qrc
+        ${SRC_DIR}/ruby/editor/filerift_schema.cpp
+        ${SRC_DIR}/ruby/editor/filerift_analyzer.cpp
+        ${SRC_DIR}/ruby/editor/filerift_highlighter.cpp
+        # RubyGizmo & Raylib Math / Picking (Gem 0)
+        ${SRC_DIR}/ruby/viewport/ruby_gizmo.cpp
+        ${SRC_DIR}/ruby/viewport/ruby_picking.cpp
+        # RubyGit offline Git integration & FileRift diff (Gem 1 & 2)
+        ${SRC_DIR}/ruby/git/ruby_git.cpp
+        ${SRC_DIR}/ruby/git/ruby_git_diff.cpp
+        ${SRC_DIR}/ruby/database/swordigo_engine_db.cpp
+        ${SRC_DIR}/ruby/database/filerift_ls.cpp
+        ${SRC_DIR}/ruby/viewport/viewport_3d_widget.cpp
+        ${SRC_DIR}/ruby/viewport/scene_loading_overlay.cpp
+        ${SRC_DIR}/ruby/render/viewport_shader.cpp
+        ${SRC_DIR}/ruby/render/water_renderer.cpp
+        ${SRC_DIR}/ruby/render/portal_renderer.cpp
+        ${SRC_DIR}/ruby/render/particle_engine.cpp
+        ${SRC_DIR}/ruby/render/light_rig.cpp
+        ${SRC_DIR}/ruby/render/fbo_chain.cpp
+        ${SRC_DIR}/ruby/render/ssao_pass.cpp
+        ${SRC_DIR}/ruby/render/post_pass.cpp
+        ${SRC_DIR}/ruby/panels/animation_control_bar.cpp
+        ${SRC_DIR}/ruby/panels/texture_viewer_panel.cpp
+        ${SRC_DIR}/ruby/panels/audio_viewer_panel.cpp
+        ${SRC_DIR}/ruby/panels/scene_hierarchy_panel.cpp
+        ${SRC_DIR}/ruby/panels/asset_browser_panel.cpp
+        ${SRC_DIR}/ruby/panels/inspector_panel.cpp
+        ${SRC_DIR}/ruby/panels/template_palette_panel.cpp
+        ${SRC_DIR}/ruby/panels/template_inspector_panel.cpp
+        ${SRC_DIR}/ruby/panels/console_panel.cpp
+        ${SRC_DIR}/ruby/panels/local_history_panel.cpp
+        ${SRC_DIR}/ruby/panels/lighting_panel.cpp
+        ${SRC_DIR}/ruby/core/project_context.cpp
+        ${SRC_DIR}/ruby/tools/ruby_tools_workspace.cpp
+        ${SRC_DIR}/ruby/tools/ground_mesh_studio.cpp
+        ${SRC_DIR}/ruby/graph/graphy.cpp
+        ${SRC_DIR}/ruby/graph/graphy_canvas.cpp
+
+        # ---- Inline engine pod (1.4.13 mini emulator dock) ----
+        ${SRC_DIR}/platform/pod_ipc.cpp
+        ${SRC_DIR}/ruby/emulator/workspace_detect.cpp
+        ${SRC_DIR}/ruby/emulator/engine_pod.cpp
+        ${SRC_DIR}/ruby/emulator/preview_view.cpp
+        ${SRC_DIR}/ruby/emulator/engine_preview_panel.cpp
+        # caver::ILiveEngine over the pod above — one engine runner, no second.
+        ${SRC_DIR}/ruby/emulator/live_engine_pod.cpp
+
+        # ---- Headless Swordigo backends (no ImGui dependency) ----
         ${SRC_DIR}/tools/pod_loader.cpp
         ${SRC_DIR}/tools/pod_writer.cpp
         ${SRC_DIR}/tools/pod_convert.cpp
         ${SRC_DIR}/tools/scene_loader.cpp
+        ${SRC_DIR}/tools/filerift.cpp
+        ${SRC_DIR}/tools/scene_asset_resolver.cpp
         ${SRC_DIR}/tools/scene_workspace.cpp
         ${SRC_DIR}/tools/scene_entity.cpp
         ${SRC_DIR}/tools/scene_physics.cpp
@@ -32,77 +88,159 @@ if (SWORDIGO_BUILD_RUBY_GG)
         ${SRC_DIR}/tools/scene_lua.cpp
         ${SRC_DIR}/tools/scene_game.cpp
         ${SRC_DIR}/tools/scene_creator.cpp
+        ${SRC_DIR}/tools/scene_generator.cpp
+        ${SRC_DIR}/tools/scene_generator_v2.cpp
+        ${SRC_DIR}/tools/scene_generator_v2_3d.cpp
+        ${SRC_DIR}/tools/scene_generator_v3.cpp
+        ${SRC_DIR}/tools/scene_v3_db.cpp
+        ${SRC_DIR}/tools/boulder.cpp
+        ${SRC_DIR}/tools/rubymesh.cpp
         ${SRC_DIR}/tools/obj_loader.cpp
         ${SRC_DIR}/tools/ani_loader.cpp
         ${SRC_DIR}/tools/scn_loader.cpp
         ${SRC_DIR}/tools/map_loader.cpp
         ${SRC_DIR}/tools/gltf_export.cpp
         ${SRC_DIR}/tools/gltf_import.cpp
+        ${SRC_DIR}/tools/gltf_bridge.cpp
         ${SRC_DIR}/tools/fbx_import.cpp
-        ${SRC_DIR}/tools/filerift.cpp
         ${SRC_DIR}/tools/intellij.cpp
-
         ${SRC_DIR}/tools/batch_converter.cpp
-        # Scene Generators (V1 / V2 / V3 / V2-3D) — headless, no ImGui
-        ${SRC_DIR}/tools/scene_generator.cpp
-        ${SRC_DIR}/tools/scene_generator_v2.cpp
-        ${SRC_DIR}/tools/scene_generator_v3.cpp
-        ${SRC_DIR}/tools/scene_generator_v2_3d.cpp
-        ${SRC_DIR}/tools/scene_v3_db.cpp
-        ${SRC_DIR}/tools/boulder.cpp
+        ${SRC_DIR}/tools/apk_session.cpp
+        ${SRC_DIR}/platform/zip_archive.cpp
         ${SRC_DIR}/tools/ufbx/ufbx.c
         ${SRC_DIR}/tools/tiny_gltf_v3.c
         ${SRC_DIR}/platform/win_dll_dir.cpp
         ${SRC_DIR}/platform/pvr_loader.cpp
         ${SRC_DIR}/platform/pvrtc_decoder.cpp
+        ${SRC_DIR}/platform/astc_decoder.cpp
     )
 
-    # Keep the Godot frontend's headless/editor helpers explicit. Some CMake
-    # generators drop sources after a duplicate backend filename while
-    # reconfiguring an existing build tree.
-    target_sources(ruby_gg PRIVATE
-        ${SRC_DIR}/tools/intellij.cpp
-        ${SRC_DIR}/tools/scene_generator.cpp
-        ${SRC_DIR}/tools/scene_generator_v2.cpp
-        ${SRC_DIR}/tools/scene_generator_v3.cpp
-        ${SRC_DIR}/tools/scene_generator_v2_3d.cpp
-        ${SRC_DIR}/tools/scene_v3_db.cpp
+    add_executable(ruby_gg ${RUBY_GG_SOURCES})
+
+    # Enable Qt MOC automated processing for signals/slots
+    set_target_properties(ruby_gg PROPERTIES
+        AUTOMOC ON
+        AUTORCC ON
+        AUTOUIC ON
     )
 
-
-    swordigo_target(ruby_gg)
     target_compile_definitions(ruby_gg PRIVATE
         SWORDIGO_NO_IMGUI
         BATCH_CONVERTER_NO_UI
-        XPERA_NATIVE
     )
-    target_compile_options(ruby_gg PRIVATE -Os -ffunction-sections -fdata-sections)
 
-    # ---- Include paths ----
     target_include_directories(ruby_gg PRIVATE
-        ${SRC_DIR}/xpera/compat
-        ${SRC_DIR}/xpera/native
+        ${SRC_DIR}
         ${SRC_DIR}/ruby
+        ${SRC_DIR}/ruby/git/include
         ${SRC_DIR}/tools
         ${SRC_DIR}/tools/ufbx
         ${SRC_DIR}/stb
-        ${SRC_DIR}
+        ${SRC_DIR}/platform
+        ${SRC_DIR}/sre/base/lua/src
+        ${MPG123_INCLUDE_DIRS}
+        ${VORBISFILE_INCLUDE_DIRS}
     )
 
-    target_sources(ruby_gg PRIVATE
-        ${SRC_DIR}/xpera/compat/godot_bridge.cpp
+    # --- Offline Embedded libgit2 (static, stripped, zero .so dependency) ---
+    file(GLOB LIBGIT2_UTIL_SRCS
+        "${SRC_DIR}/ruby/git/util/*.c"
+        "${SRC_DIR}/ruby/git/util/allocators/*.c"
+        "${SRC_DIR}/ruby/git/util/hash/*.c"
+        "${SRC_DIR}/ruby/git/util/hash/sha1dc/*.c"
+        "${SRC_DIR}/ruby/git/util/hash/rfc6234/*.c"
     )
+    if (WIN32)
+        file(GLOB LIBGIT2_PLATFORM_SRCS "${SRC_DIR}/ruby/git/util/win32/*.c")
+    else()
+        file(GLOB LIBGIT2_PLATFORM_SRCS "${SRC_DIR}/ruby/git/util/unix/*.c")
+    endif()
+    file(GLOB LIBGIT2_XDIFF_SRCS "${SRC_DIR}/ruby/git/deps/xdiff/*.c")
+    file(GLOB LIBGIT2_CORE_SRCS "${SRC_DIR}/ruby/git/libgit2/*.c")
+
+    add_library(git2_static STATIC
+        ${LIBGIT2_UTIL_SRCS}
+        ${LIBGIT2_PLATFORM_SRCS}
+        ${LIBGIT2_XDIFF_SRCS}
+        ${LIBGIT2_CORE_SRCS}
+    )
+    set_target_properties(git2_static PROPERTIES
+        C_STANDARD 99
+        POSITION_INDEPENDENT_CODE ON
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    )
+    target_include_directories(git2_static
+        PUBLIC
+            "${SRC_DIR}/ruby/git/include"
+        PRIVATE
+            "${SRC_DIR}/ruby/git/include"
+            "${SRC_DIR}/ruby/git/util"
+            "${SRC_DIR}/ruby/git/libgit2"
+            "${SRC_DIR}/ruby/git/deps/xdiff"
+    )
+    target_compile_definitions(git2_static PRIVATE
+        _GNU_SOURCE
+        _FILE_OFFSET_BITS=64
+    )
+    target_link_libraries(git2_static PRIVATE
+        ZLIB::ZLIB
+        Threads::Threads
+    )
+    if (UNIX AND NOT APPLE)
+        target_link_libraries(git2_static PRIVATE rt)
+    endif()
 
     target_link_libraries(ruby_gg PRIVATE
-        xpera
-        swcore swfmt swpod filerift
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::OpenGLWidgets
+        Qt6::Network
+        OpenGL::GL
+        ZLIB::ZLIB
+        swcore
+        swfmt
+        swpod
+        filerift
+        caver
+        git2_static
         SDL3::SDL3
-        OpenGL::GL ZLIB::ZLIB
-        ${SWORDIGO_LIBM} ${SWORDIGO_SOCKLIB}
+        ${SDL3_IMAGE_LINK}
+        # Audio Viewer decoders — already REQUIRED project deps (swordfare
+        # links them too), so this adds no new runtime dependencies.
+        ${MPG123_LIBRARIES}
+        ${VORBISFILE_LIBRARIES}
+        ${SWORDIGO_LIBM}
+        ${SWORDIGO_SOCKLIB}
     )
 
     if (NOT WIN32)
-        target_link_libraries(ruby_gg PRIVATE dl util pthread atomic)
-        target_link_options(ruby_gg PRIVATE "-Wl,--gc-sections" "-Wl,--strip-all")
+        target_link_libraries(ruby_gg PRIVATE dl pthread util)
     endif()
+
+    # shm_open / mmap for the engine-pod frame ring (pod_ipc.cpp).
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(ruby_gg PRIVATE rt)
+    endif()
+
+    # Standalone SCL Visual Node Graph Interactive Viewer
+    add_executable(scl_graph_viewer
+        ${SRC_DIR}/tools/scl_graph_viewer.cpp
+        ${SRC_DIR}/ruby/graph/graphy.cpp
+        ${SRC_DIR}/ruby/graph/graphy_canvas.cpp
+    )
+    set_target_properties(scl_graph_viewer PROPERTIES
+        AUTOMOC ON
+        AUTORCC ON
+        AUTOUIC ON
+    )
+    target_include_directories(scl_graph_viewer PRIVATE
+        ${SRC_DIR}
+        ${SRC_DIR}/ruby
+    )
+    target_link_libraries(scl_graph_viewer PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+    )
 endif()

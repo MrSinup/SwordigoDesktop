@@ -153,14 +153,37 @@ void write_bone_index_block(Sink& out, const std::vector<float>& data, int compo
 
 void write_index_block(Sink& out, const std::vector<uint32_t>& indices) {
     if (indices.empty()) return;
+    // Index-width preservation (pod_master/03 §5, 09 §5): stock meshes store
+    // indices as UNSIGNED_SHORT (eType 3, 2 bytes). That is only valid when
+    // every index fits in a u16 — blindly truncating (idx & 0xFFFF) corrupts
+    // any mesh with >65535 vertices. Pick the width by the max index value:
+    //   all < 65536  -> UNSIGNED_SHORT (matches stock, 2 bytes)
+    //   otherwise    -> UNSIGNED_INT   (eType 5? no — POD uses UINT via type 5
+    //                    is ARGB; the index widener uses type 3=USHORT or the
+    //                    4-byte path with type 2 (INT)/UINT). We emit 4-byte
+    //                    UINT using data-type-size 4, component 1.
+    bool needs_u32 = false;
+    for (uint32_t idx : indices) { if (idx >= 65536u) { needs_u32 = true; break; } }
+
     out.begin(eMeshVertexIndexList);
-    out.u32(eBlockDataType);         out.u32(4);        out.u32(3);                    // type: unsigned short (3) for GLES2 / Swordigo
-    out.u32(eBlockNumComponents);    out.u32(4);        out.u32(1);
-    out.u32(eBlockStride);           out.u32(4);        out.u32(2);
-    out.u32(eBlockData);             out.u32(static_cast<uint32_t>(indices.size() * 2));
-    for (uint32_t idx : indices) {
-        uint16_t u16 = static_cast<uint16_t>(idx & 0xFFFF);
-        out.bytes(&u16, 2);
+    if (!needs_u32) {
+        out.u32(eBlockDataType);         out.u32(4);        out.u32(3);   // UNSIGNED_SHORT
+        out.u32(eBlockNumComponents);    out.u32(4);        out.u32(1);
+        out.u32(eBlockStride);           out.u32(4);        out.u32(2);
+        out.u32(eBlockData);             out.u32(static_cast<uint32_t>(indices.size() * 2));
+        for (uint32_t idx : indices) {
+            uint16_t u16 = static_cast<uint16_t>(idx & 0xFFFF);
+            out.bytes(&u16, 2);
+        }
+    } else {
+        // >65535 vertices: keep full 32-bit indices (type 2 = INT, size 4 —
+        // PVRTModelPODDataTypeSize(2)==4, matching how stock stores 32-bit
+        // integer streams; the loader reads size-4 elements).
+        out.u32(eBlockDataType);         out.u32(4);        out.u32(2);   // INT (32-bit)
+        out.u32(eBlockNumComponents);    out.u32(4);        out.u32(1);
+        out.u32(eBlockStride);           out.u32(4);        out.u32(4);
+        out.u32(eBlockData);             out.u32(static_cast<uint32_t>(indices.size() * 4));
+        out.u32s(indices);
     }
     out.finish(eMeshVertexIndexList);
 }
@@ -220,7 +243,32 @@ void write_node(Sink& out, const PODNode& n) {
 
     if (!n.anim_translation.empty())        { out.u32(eNodeAnimationPosition);      out.u32(static_cast<uint32_t>(n.anim_translation.size() * 4)); out.floats(n.anim_translation); }
     if (!n.anim_rotation.empty())           { out.u32(eNodeAnimationRotation);       out.u32(static_cast<uint32_t>(n.anim_rotation.size() * 4));    out.floats(n.anim_rotation); }
-    if (!n.anim_scale.empty())              { out.u32(eNodeAnimationScale);          out.u32(static_cast<uint32_t>(n.anim_scale.size() * 4));       out.floats(n.anim_scale); }
+    if (!n.anim_scale.empty()) {
+        // Scale channel = 7 floats/key (pod_master/05 §3): [sx,sy,sz, qx,qy,qz,qw]
+        // (scale + scale-orientation quaternion). The reference/loader auto-detect
+        // stride via (size % 7 == 0 ? 7 : 3). If we emit 3-float keys, a clip whose
+        // 3*NumFrame happens to be divisible by 7 (e.g. 7/14/21/28 frames) is
+        // MISREAD as 7-stride → skeleton explodes. So always normalise to 7/key.
+        const std::vector<float>* scale_out = &n.anim_scale;
+        std::vector<float> scale7;
+        if (n.anim_scale.size() % 7 != 0 && n.anim_scale.size() % 3 == 0) {
+            size_t keys = n.anim_scale.size() / 3;
+            scale7.reserve(keys * 7);
+            for (size_t k = 0; k < keys; ++k) {
+                scale7.push_back(n.anim_scale[k * 3 + 0]);
+                scale7.push_back(n.anim_scale[k * 3 + 1]);
+                scale7.push_back(n.anim_scale[k * 3 + 2]);
+                scale7.push_back(0.0f);   // scale-orientation quaternion = identity
+                scale7.push_back(0.0f);
+                scale7.push_back(0.0f);
+                scale7.push_back(1.0f);
+            }
+            scale_out = &scale7;
+        }
+        out.u32(eNodeAnimationScale);
+        out.u32(static_cast<uint32_t>(scale_out->size() * 4));
+        out.floats(*scale_out);
+    }
     if (!n.anim_matrix.empty())             { out.u32(eNodeAnimationMatrix);         out.u32(static_cast<uint32_t>(n.anim_matrix.size() * 4));      out.floats(n.anim_matrix); }
     if (!n.anim_translation_idx.empty())    { out.u32(eNodeAnimationPositionIndex); out.u32(static_cast<uint32_t>(n.anim_translation_idx.size() * 4)); out.u32s(n.anim_translation_idx); }
     if (!n.anim_rotation_idx.empty())       { out.u32(eNodeAnimationRotationIndex); out.u32(static_cast<uint32_t>(n.anim_rotation_idx.size() * 4));    out.u32s(n.anim_rotation_idx); }

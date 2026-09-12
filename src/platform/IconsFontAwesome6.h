@@ -14,8 +14,13 @@
 // --- Navigation ---
 #define ICON_FA_ARROW_LEFT       "\xef\x81\xa0"  // U+F060
 #define ICON_FA_ARROW_RIGHT      "\xef\x81\xa1"  // U+F061
+#define ICON_FA_ARROW_UP         "\xef\x81\xa2"  // U+F062
+#define ICON_FA_ARROW_DOWN       "\xef\x81\xa3"  // U+F063
 #define ICON_FA_CHEVRON_LEFT     "\xef\x81\x93"  // U+F053
 #define ICON_FA_CHEVRON_RIGHT    "\xef\x81\x94"  // U+F054
+#define ICON_FA_CHEVRON_UP       "\xef\x81\xb7"  // U+F077
+#define ICON_FA_CHEVRON_DOWN     "\xef\x81\xb8"  // U+F078
+#define ICON_FA_HEART            "\xef\x80\x84"  // U+F004
 
 // --- Actions ---
 #define ICON_FA_PLAY             "\xef\x81\x8b"  // U+F04B

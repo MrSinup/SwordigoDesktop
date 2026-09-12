@@ -315,6 +315,28 @@ static void parse_indices(const DataElement& de, int num_faces, int verts_per_fa
 }
 
 // Compute single mesh AABB bounding box
+static void expand_triangle_strips(const std::vector<uint32_t>& raw_indices,
+                                  const std::vector<uint32_t>& strip_lengths,
+                                  std::vector<uint32_t>& out_tris) {
+    out_tris.clear();
+    size_t cursor = 0;
+    for (uint32_t s : strip_lengths) {
+        size_t vert_count = static_cast<size_t>(s) + 2;
+        if (cursor + vert_count > raw_indices.size()) break; // truncated/malformed — stop, keep what we have
+        for (uint32_t t = 0; t < s; ++t) {
+            uint32_t i0 = raw_indices[cursor + t];
+            uint32_t i1 = raw_indices[cursor + t + 1];
+            uint32_t i2 = raw_indices[cursor + t + 2];
+            if (t & 1) {
+                out_tris.push_back(i1); out_tris.push_back(i0); out_tris.push_back(i2);
+            } else {
+                out_tris.push_back(i0); out_tris.push_back(i1); out_tris.push_back(i2);
+            }
+        }
+        cursor += vert_count;
+    }
+}
+
 static void compute_mesh_aabb(PODMesh& mesh) {
     if (mesh.positions.empty()) return;
     mesh.min_x = mesh.min_y = mesh.min_z = 1e9f;
@@ -378,13 +400,17 @@ static PODMesh readMeshBlock(const uint8_t* data, size_t size, size_t& off) {
     DataElement nrm_element;
     DataElement uv_element; // first UV channel
     DataElement bone_idx_element;
-    DataElement bone_wgt_element;
+    DataElement bone_wgt_element;        std::vector<uint32_t> bone_batch_indices;
+        std::vector<uint32_t> bone_batch_counts;
+        std::vector<uint32_t> bone_batch_offsets;
+        uint32_t max_bones_per_batch = 0;
+        uint32_t num_bone_batches = 0;
 
-    std::vector<uint32_t> bone_batch_indices;
-    std::vector<uint32_t> bone_batch_counts;
-    std::vector<uint32_t> bone_batch_offsets;
-    uint32_t max_bones_per_batch = 0;
-    uint32_t num_bone_batches = 0;
+        // Triangle-strip encoded faces (eMeshNumStrips > 0): the index list is
+        // one concatenated run of strip vertices, not independent per-face
+        // triples — see expand_triangle_strips().
+        uint32_t num_strips = 0;
+        std::vector<uint32_t> strip_lengths;
 
     while (off < size) {
         uint32_t tag = read_u32(data, size, off);
@@ -443,6 +469,13 @@ static PODMesh readMeshBlock(const uint8_t* data, size_t size, size_t& off) {
             case eMeshNumBoneBatches:
                 num_bone_batches = read_u32(data, size, off);
                 break;
+            case eMeshNumStrips:
+                if (len >= 4) num_strips = read_u32(data, size, off);
+                else off += len;
+                break;
+            case eMeshStripLengthList:
+                strip_lengths = read_u32_array(data, len, off);
+                break;
             case eMeshUnpackMatrix:
                 if (len >= 16 * 4) {
                     std::memcpy(mesh.unpack_matrix, data + off, 16 * 4);
@@ -465,7 +498,33 @@ static PODMesh readMeshBlock(const uint8_t* data, size_t size, size_t& off) {
     }
 
     // Now convert and unpack elements. Quads (mesh_type 1) expand to tris.
-    parse_indices(idx_element, mesh.num_faces, mesh.mesh_type == 1 ? 4 : 3, mesh);
+    if (num_strips > 0 && !strip_lengths.empty()) {
+        // Strip-encoded faces: the raw index buffer is a concatenated run
+        // of (stripLen+2) vertices per strip, NOT numFaces*3 flat triples.
+        // Read the raw index buffer directly from the already-parsed
+        // idx_element payload, then expand.
+        size_t needed = 0;
+        for (uint32_t s : strip_lengths) needed += static_cast<size_t>(s) + 2;
+        if (idx_element.payload && idx_element.payload_size >= needed) {
+            std::vector<uint32_t> raw(needed);
+            size_t comp_size = 4;
+            if (idx_element.type == 3 || idx_element.type == 11 || idx_element.type == 12 || idx_element.type == 16) comp_size = 2; // short
+            else if (idx_element.type == 7 || idx_element.type == 10 || idx_element.type == 13 || idx_element.type == 14 || idx_element.type == 15) comp_size = 1; // byte
+            for (size_t i = 0; i < needed; ++i) {
+                uint32_t val = 0;
+                if (comp_size == 4) std::memcpy(&val, idx_element.payload + i * 4, 4);
+                else if (comp_size == 2) { uint16_t v; std::memcpy(&v, idx_element.payload + i * 2, 2); val = v; }
+                else val = idx_element.payload[i];
+                raw[i] = val;
+            }
+            expand_triangle_strips(raw, strip_lengths, mesh.indices);
+        } else {
+            // index payload too small for the stated strips -> malformed; fall back to empty mesh
+            mesh.indices.clear();
+        }
+    } else {
+        parse_indices(idx_element, mesh.num_faces, mesh.mesh_type == 1 ? 4 : 3, mesh);
+    }
 
     mesh.positions = unpack_vertex_data(interleaved_payload, interleaved_size, pos_element, mesh.num_vertices, 3);
     mesh.normals   = unpack_vertex_data(interleaved_payload, interleaved_size, nrm_element, mesh.num_vertices, 3);
@@ -701,23 +760,43 @@ static PODMaterial readMaterialBlock(const uint8_t* data, size_t size, size_t& o
 // readSceneBlock Implementation
 static void readSceneBlock(const uint8_t* data, size_t size, size_t& off, PODModel& model) {
     uint32_t end_tag = eScene | kEndTagMask;
+    // Declared counts (pod_master/02 §1, 09): the scene header declares how many
+    // of each block should follow. After the scene closes we compare against
+    // what we actually parsed and WARN (non-fatal) on mismatch — this catches
+    // truncated / misaligned reads without rejecting legitimately-sparse clips.
+    long decl_meshes = -1, decl_nodes = -1, decl_textures = -1, decl_materials = -1;
     while (off < size) {
         uint32_t tag = read_u32(data, size, off);
         uint32_t len = read_u32(data, size, off);
         if (off + len > size) len = size - off;
 
-        if (tag == end_tag) break;
+        if (tag == end_tag) {
+            // Scene-close validation (pod_master/02 §1): declared Num* vs parsed.
+            // Non-fatal — warn only, so sparse/clip PODs still load.
+            auto warn_if = [](const char* what, long decl, size_t got) {
+                if (decl >= 0 && static_cast<size_t>(decl) != got)
+                    fprintf(stderr, "pod_parse: scene declared %ld %s but parsed %zu\n",
+                            decl, what, got);
+            };
+            warn_if("meshes",    decl_meshes,    model.meshes.size());
+            warn_if("nodes",     decl_nodes,     model.nodes.size());
+            warn_if("textures",  decl_textures,  model.texture_filenames.size());
+            warn_if("materials", decl_materials, model.materials.size());
+            break;
+        }
 
         switch (tag) {
             case eSceneNumMeshes:
                 if (len >= 4) {
                     uint32_t count = read_u32(data, size, off);
+                    decl_meshes = static_cast<long>(count);
                     model.meshes.reserve(count);
                 } else off += len;
                 break;
             case eSceneNumNodes:
                 if (len >= 4) {
                     uint32_t count = read_u32(data, size, off);
+                    decl_nodes = static_cast<long>(count);
                     model.nodes.reserve(count);
                 } else off += len;
                 break;
@@ -728,12 +807,16 @@ static void readSceneBlock(const uint8_t* data, size_t size, size_t& off, PODMod
                 break;
             case eSceneNumTextures:
                 if (len >= 4) {
-                    model.texture_filenames.reserve(read_u32(data, size, off));
+                    uint32_t count = read_u32(data, size, off);
+                    decl_textures = static_cast<long>(count);
+                    model.texture_filenames.reserve(count);
                 } else off += len;
                 break;
             case eSceneNumMaterials:
                 if (len >= 4) {
-                    model.materials.reserve(read_u32(data, size, off));
+                    uint32_t count = read_u32(data, size, off);
+                    decl_materials = static_cast<long>(count);
+                    model.materials.reserve(count);
                 } else off += len;
                 break;
             case eSceneNumFrames:
@@ -770,6 +853,26 @@ static void readSceneBlock(const uint8_t* data, size_t size, size_t& off, PODMod
 PODModel pod_parse(const uint8_t* data, size_t size) {
     PODModel model;
     size_t off = 0;
+
+    // Endianness guard (pod_master/00, 09): the format is little-endian and the
+    // reference engine explicitly rejects byte-flipped files. If the first
+    // marker isn't the little-endian FormatVersion (1000/0x3E8) but its
+    // byte-swap is, the file is big-endian — bail cleanly instead of reading
+    // garbage.
+    if (size >= 4) {
+        uint32_t first = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+                         (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+        if (first != eFormatVersion) {
+            uint32_t swapped = ((first & 0x000000FFu) << 24) | ((first & 0x0000FF00u) << 8) |
+                               ((first & 0x00FF0000u) >> 8) | ((first & 0xFF000000u) >> 24);
+            if (swapped == eFormatVersion) {
+                fprintf(stderr, "pod_parse: POD appears big-endian / not little-endian "
+                                "(first tag 0x%08X). Refusing to parse.\n", first);
+                return model; // empty
+            }
+            // else: unknown leading tag — let the loop skip it (may be a wrapper).
+        }
+    }
 
     while (off < size) {
         uint32_t tag = read_u32(data, size, off);
@@ -898,7 +1001,12 @@ PODModel pod_load(const std::string& path, const std::string& merge_hint) {
                     // relative to it even after the anim streams are replaced.
                     // (The base model stores its rest pose as 1-frame anim
                     // streams — frame 0 of THAT model is the bind pose.)
+                    // Nodes that already carry an authored bind matrix
+                    // (glTF inverseBindMatrices import) keep it — frame-0
+                    // evaluation is only the fallback when the DCC bind is
+                    // unavailable.
                     for (size_t bi = 0; bi < base_model.nodes.size(); ++bi) {
+                        if (base_model.nodes[bi].has_bind_matrix) continue;
                         float bind_m[16];
                         get_node_matrix(base_model, static_cast<int>(bi), 0.0f, bind_m);
                         base_model.nodes[bi].has_bind_matrix = true;
@@ -1255,6 +1363,35 @@ bool skin_mesh(const PODModel& model, int mesh_node_idx, float frame,
     for (size_t i = 0; i < model.nodes.size(); ++i) {
         float inverse_bind[16];
         if (!local_mat4_inverse(&bind_world[i * 16], inverse_bind)) local_mat4_identity(inverse_bind);
+        
+        // NOTE FOR FUTURE DEVELOPERS (PowerVR POD vs glTF Skinning Architecture):
+        //
+        // In native PowerVR POD models (e.g. Swordigo's hiro.POD, bat.POD, grasswalker.POD),
+        // there are NO authored inverseBindMatrices (IBM) stored in the file.
+        // Instead, inverse_bind is computed above purely as inverse(bind_world[joint]),
+        // which transforms from WORLD coordinates into JOINT-LOCAL bind coordinates.
+        //
+        // Crucially, in PowerVR POD, multi-part models (like hiro.POD, which has 5 meshes:
+        // Head, Body, L_Hand, R_Hand, Hair) store vertices in each MESH NODE'S local space.
+        // The mesh node itself carries a non-identity node transform (e.g. head pivot offset).
+        // To transform mesh-local vertices into joint space, they MUST first be converted
+        // to world space by multiplying by bind_world[mesh_node_idx]:
+        //
+        //   v_joint = inverse_bind[j] * (bind_world[mesh_node] * v_local)
+        //   v_animated_world = current_world[j] * v_joint
+        //   v_skinned_local = mesh_inverse * v_animated_world
+        //
+        // Therefore:
+        //   skin_matrix = mesh_inverse * current_world[j] * inverse_bind[j] * bind_world[mesh_node]
+        //
+        // When bind_world[mesh_node_idx] was previously removed in an attempt to fix
+        // imported glTF models (minecraft_bee.glb), it broke all native POD models whose
+        // mesh nodes have non-identity pivots. On hiro.POD, removing it caused the head and
+        // hands to be evaluated as if their pivot was at (0,0,0), detaching and floating
+        // them away from the body in the viewport!
+        //
+        // If glTF models need different handling, glTF import must normalize its IBM
+        // to true joint-world inverses, rather than breaking the native POD engine math.
         float animated_from_bind[16], animated_model[16];
         local_mat4_mul(&current_world[i * 16], inverse_bind, animated_from_bind);
         local_mat4_mul(animated_from_bind, &bind_world[static_cast<size_t>(mesh_node_idx) * 16], animated_model);

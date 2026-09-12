@@ -70,6 +70,13 @@ extern bool      g_cam_smooth;      // Smooth interpolation mode
 extern float     g_cam_speed_base;  // Base movement speed (units/sec)
 extern bool      g_cam_pov_mode;    // Hero POV camera mode enabled
 extern float     g_cam_pov_facing;  // Facing direction multiplier (+1.0f or -1.0f)
+extern float     g_cam_zoom;        // Direct zoom multiplier (1.0 default)
+
+// ── Beyond sre12: host-controllable projection & free-look ───────────────
+extern float     g_cam_fov;         // Vertical FOV override (radians, 0 = preset)
+extern float     g_cam_yaw;         // Free-look yaw (radians, 0 = legacy facing)
+extern float     g_cam_pitch;       // Free-look pitch (radians)
+extern float     g_cam_roll;        // Free-look roll (radians)
 
 // ---------------------------------------------------------------
 // Camera preset slot
@@ -99,6 +106,12 @@ void cam_scroll_zoom(float delta);
 
 // Toggle smooth mode
 void cam_toggle_smooth();
+
+// Free-look: adjust yaw/pitch by mouse deltas (radians), clamps pitch
+void cam_look(float dyaw, float dpitch);
+
+// Set FOV override (radians, 0 = revert to engine preset)
+void cam_set_fov(float fov_rad);
 
 // Reset camera to origin
 void cam_reset();

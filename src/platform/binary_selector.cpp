@@ -300,22 +300,30 @@ void BinarySelector::scan_engine_directory(const std::string& engine_path) {
     for (const auto& ver_entry : fs::directory_iterator(engine_path)) {
         if (!ver_entry.is_directory()) continue;
         std::string ver_dir = ver_entry.path().filename().string();
+        if (ver_dir == "instances") continue; // Handled separately below
         scan_version_dir(engine_path, ver_dir);
     }
 
-    // Sort: default first, then by status (TESTED > TESTING > UNKNOWN), then by version
+    // Migrate any legacy custom-* folders to instances/
+    migrate_legacy_custom_instances();
+
+    // Scan engine/instances/ and data_dir/instances/
+    scan_instances_directory(engine_path + "/instances");
+    if (!data_dir.empty()) {
+        scan_instances_directory(data_dir + "/instances");
+    }
+
+    // Sort: base engines first, then default, then by status
     std::sort(binaries.begin(), binaries.end(), [](const BinaryInfo& a, const BinaryInfo& b) {
+        if (a.is_base != b.is_base) return a.is_base;
         if (a.is_default != b.is_default) return a.is_default;
         if (a.status != b.status) return (int)a.status < (int)b.status;
-        // ARM32 before ARM64 within same version
-        if (a.version_dir == b.version_dir && a.arch != b.arch)
-            return a.arch == BinaryArch::ARM32;
-        return a.version_dir > b.version_dir; // Newer versions first
+        return a.version > b.version;
     });
 
-    std::cout << "[BinSel] Found " << binaries.size() << " game binaries in engine/" << std::endl;
+    std::cout << "[BinSel] Found " << binaries.size() << " game binaries and instances" << std::endl;
     for (const auto& b : binaries) {
-        std::cout << "  " << b.label << " → " << b.filepath << std::endl;
+        std::cout << "  " << (b.is_base ? "[BASE] " : "[INST] ") << b.label << " → " << b.filepath << std::endl;
     }
 }
 
@@ -381,9 +389,10 @@ void BinarySelector::scan_arch_dir(const std::string& arch_path, const std::stri
         }
     }
 
-    // If libsre.so is present in this directory, auto-strip libmini.so and libGlossHook.so
-    // from dependencies (SRE replaces their functionality)
-    if (fs::exists(arch_path + "/libsre.so")) {
+    // If the SRE guest library (libsre.so legacy / libsre12.so) is present in
+    // this directory, auto-strip libmini.so and libGlossHook.so from
+    // dependencies (SRE replaces their functionality)
+    if (fs::exists(arch_path + "/libsre12.so") || fs::exists(arch_path + "/libsre.so")) {
         info.dependencies.erase(
             std::remove_if(info.dependencies.begin(), info.dependencies.end(),
                 [](const std::string& d) {
@@ -437,10 +446,14 @@ void BinarySelector::scan_arch_dir(const std::string& arch_path, const std::stri
     } else {
         info.label = "v" + info.version + " " + arch_badge + " (" + status_str + ")";
     }
-    
-    // Mark latest tested vanilla version
-    if (!is_rl && info.status == BinaryStatus::TESTED && info.version == "1.4.12") {
-        info.label += " [Latest]";
+
+    // Check if this is a vanilla base engine
+    if (is_vanilla && (info.version == "1.4.12" || info.version == "1.4.13" || info.version == "1.4.6" || info.version == "1.1")) {
+        info.is_base = true;
+        info.id = version_dir + (arch == BinaryArch::ARM32 ? "-arm32" : "");
+    } else {
+        info.is_base = false;
+        info.id = version_dir + (arch == BinaryArch::ARM32 ? "-arm32" : "");
     }
 
     binaries.push_back(info);
@@ -599,6 +612,14 @@ void BinarySelector::set_default(const std::string& filepath) {
             df << rel_filepath << std::endl;
         }
     } catch (...) {}
+}
+
+void BinarySelector::set_instance_preferred_base(size_t index, const std::string& base_ver) {
+    if (index >= binaries.size()) return;
+    if (binaries[index].is_base) return;
+    binaries[index].preferred_base = base_ver;
+    binaries[index].filepath = resolve_launch_binary(binaries[index], base_ver);
+    save_instance_ini(binaries[index]);
 }
 
 const BinaryInfo* BinarySelector::get_loaded_info() const {
@@ -1206,17 +1227,19 @@ void BinarySelector::load_manifest(const std::string& manifest_path) {
                 }
             }
 
-            // Safety check 1: ARM32 instances cannot carry libsre.so
+            // Safety check 1: ARM32 instances cannot carry the SRE guest lib
+            // (libsre.so legacy name / libsre12.so)
             if (b.arch == BinaryArch::ARM32) {
                 b.dependencies.erase(
                     std::remove_if(b.dependencies.begin(), b.dependencies.end(),
                         [](const std::string& d) {
-                            return d == "libsre.so";
+                            return d == "libsre.so" || d == "libsre12.so";
                         }), b.dependencies.end());
                 b.dep_paths.erase(
                     std::remove_if(b.dep_paths.begin(), b.dep_paths.end(),
                         [](const std::string& p) {
-                            return p.find("libsre.so") != std::string::npos;
+                            return p.find("libsre.so") != std::string::npos ||
+                                   p.find("libsre12.so") != std::string::npos;
                         }), b.dep_paths.end());
             }
 
@@ -1273,19 +1296,31 @@ void BinarySelector::load_manifest(const std::string& manifest_path) {
                 b.file_size = fs::file_size(b.filepath);
             }
 
-            // Check for duplicates
-            bool dup = false;
-            for (const auto& existing : binaries) {
-                if (existing.filepath == b.filepath) { dup = true; break; }
+            bool is_vanilla_dir = (b.version_dir.rfind("v", 0) == 0 && b.version_dir.find("rl") == std::string::npos && b.version_dir.find("sw") == std::string::npos);
+            if (b.version == "1.4.12" || b.version == "1.4.13" || b.version == "1.4.6" || b.version == "1.1" ||
+                b.version_dir == "v1.4.12" || b.version_dir == "v1.4.13" || b.version_dir == "v1.4.6" || b.version_dir == "v1.1" ||
+                is_vanilla_dir) {
+                b.is_base = true;
             }
-            if (dup) continue;
+            if (b.id.empty() || b.id == b.version_dir) {
+                b.id = b.version_dir + (b.arch == BinaryArch::ARM32 ? "-arm32" : "");
+            }
 
             binaries.push_back(b);
             loaded++;
         }
     }
+
+    // Migrate any legacy custom-* folders to lightweight instances/*.ini
+    migrate_legacy_custom_instances();
+
+    // Also scan instances/ directory (in engine_dir/instances and ~/.local/share/swordigo-desktop/instances)
+    scan_instances_directory((engine_dir / "instances").string());
+    if (!data_dir.empty()) {
+        scan_instances_directory((fs::path(data_dir) / "instances").string());
+    }
     
-    std::cout << "[BinSel] Loaded " << loaded << " instances from local instance.ini files" << std::endl;
+    std::cout << "[BinSel] Loaded " << binaries.size() << " total instances (engines + custom)" << std::endl;
 }
 
 void BinarySelector::load_user_instances(const std::string& json_path) {
@@ -1305,6 +1340,34 @@ void BinarySelector::save_user_instances(const std::string& json_path) const {
 }
 
 void BinarySelector::save_instance_ini(const BinaryInfo& b) const {
+    // Safety check: Base engines are NEVER saved to instances/!
+    if (b.is_base) return;
+    if (b.id == "v1.4.12" || b.id == "v1.4.13" || b.id == "v1.4.6" || b.id == "v1.1" ||
+        b.id == "1.4.12" || b.id == "1.4.13" || b.id.rfind("v1.", 0) == 0) {
+        return;
+    }
+
+    if (!data_dir.empty() && !b.id.empty()) {
+        fs::path inst_dir = fs::path(data_dir) / "instances";
+        std::error_code ec;
+        fs::create_directories(inst_dir, ec);
+        fs::path ini_path = inst_dir / (b.id + ".ini");
+        std::ofstream f(ini_path);
+        if (f) {
+            f << "[instance]\n";
+            f << "schema_version = 1\n";
+            f << "id = " << b.id << "\n";
+            f << "name = " << b.label << "\n";
+            f << "version = " << b.version << "\n";
+            f << "preferred_base = " << (b.preferred_base.empty() ? "1.4.12" : b.preferred_base) << "\n";
+            f << "game_type = " << b.game_type << "\n";
+            f << "assets_dir = " << b.assets_dir << "\n";
+            if (!b.custom_binary.empty()) f << "custom_binary = " << b.custom_binary << "\n";
+            if (!b.icon_path.empty()) f << "icon_path = " << b.icon_path << "\n";
+            return;
+        }
+    }
+
     if (b.filepath.empty()) return;
     
     // Build absolute path: data_dir + filepath
@@ -1375,6 +1438,287 @@ void BinarySelector::save_instance_ini(const BinaryInfo& b) const {
         if (i + 1 < b.dep_paths.size()) f << ", ";
     }
     f << "\n";
+}
+
+std::vector<BinaryInfo> BinarySelector::get_base_engines() const {
+    std::vector<BinaryInfo> bases;
+    for (const auto& b : binaries) {
+        if (b.is_base && b.arch == BinaryArch::ARM64) {
+            bool exists = false;
+            for (const auto& existing : bases) {
+                if (existing.version == b.version) { exists = true; break; }
+            }
+            if (!exists) bases.push_back(b);
+        }
+    }
+    // If none explicitly flagged as is_base yet, check version/labels
+    if (bases.empty()) {
+        for (const auto& b : binaries) {
+            if (b.version == "1.4.12" || b.version == "1.4.13" ||
+                b.version_dir == "v1.4.12" || b.version_dir == "v1.4.13") {
+                if (b.arch == BinaryArch::ARM64) {
+                    bool exists = false;
+                    for (const auto& existing : bases) {
+                        if (existing.version == b.version) { exists = true; break; }
+                    }
+                    if (!exists) bases.push_back(b);
+                }
+            }
+        }
+    }
+    // Guarantee both 1.4.12 and 1.4.13 exist
+    bool has_12 = false, has_13 = false;
+    for (const auto& b : bases) {
+        if (b.version == "1.4.12") has_12 = true;
+        if (b.version == "1.4.13") has_13 = true;
+    }
+    if (!has_12) {
+        BinaryInfo b12;
+        b12.id = "v1.4.12";
+        b12.version = "1.4.12";
+        b12.version_dir = "v1.4.12";
+        b12.label = "v1.4.12 [ARM64] (Stable)";
+        b12.filename = "libswordigo.so";
+        b12.filepath = (data_dir.empty() ? "" : data_dir + "/") + "engine/v1.4.12/arm64-v8a/libswordigo.so";
+        b12.arch = BinaryArch::ARM64;
+        b12.is_base = true;
+        b12.status = BinaryStatus::TESTED;
+        b12.game_type = "Swordigo";
+        b12.assets_dir = "assets";
+        bases.push_back(b12);
+    }
+    if (!has_13) {
+        BinaryInfo b13;
+        b13.id = "v1.4.13";
+        b13.version = "1.4.13";
+        b13.version_dir = "v1.4.13";
+        b13.label = "v1.4.13 [ARM64] (Tested)";
+        b13.filename = "libswordigo.so";
+        b13.filepath = (data_dir.empty() ? "" : data_dir + "/") + "engine/v1.4.13/arm64-v8a/libswordigo.so";
+        b13.arch = BinaryArch::ARM64;
+        b13.is_base = true;
+        b13.status = BinaryStatus::TESTED;
+        b13.game_type = "Swordigo";
+        b13.assets_dir = "assets13";
+        bases.push_back(b13);
+    }
+    // Sort so 1.4.12 comes first or 1.4.13 as desired
+    std::sort(bases.begin(), bases.end(), [](const BinaryInfo& a, const BinaryInfo& b) {
+        return a.version < b.version;
+    });
+    return bases;
+}
+
+std::vector<BinaryInfo> BinarySelector::get_custom_instances() const {
+    std::vector<BinaryInfo> insts;
+    for (const auto& b : binaries) {
+        if (!b.is_base) {
+            insts.push_back(b);
+        }
+    }
+    return insts;
+}
+
+std::string BinarySelector::resolve_launch_binary(const BinaryInfo& b, const std::string& override_base) const {
+    // 1. If instance is already a base engine (ARM64 or ARM32), launch its own binary directly!
+    if (b.is_base && !b.filepath.empty()) {
+        return b.filepath;
+    }
+
+    // 2. If instance has an explicit custom binary that is unique (e.g. true modded ELF)
+    if (!b.custom_binary.empty() && fs::exists(b.custom_binary)) {
+        return b.custom_binary;
+    }
+
+    // 3. If ARM32 non-base instance with its own binary
+    if (b.arch == BinaryArch::ARM32 && !b.filepath.empty() && fs::exists(b.filepath)) {
+        return b.filepath;
+    }
+
+    // 4. Lightweight custom instance: determine target base version
+    std::string base_ver = override_base;
+    if (base_ver.empty()) {
+        base_ver = b.preferred_base;
+    }
+    if (base_ver.empty()) {
+        base_ver = b.version;
+    }
+    if (base_ver != "1.4.12" && base_ver != "1.4.13") {
+        base_ver = "1.4.12"; // default fallback
+    }
+
+    // Look for matching base engine in registered binaries
+    for (const auto& cand : binaries) {
+        if (cand.is_base && cand.version == base_ver && cand.arch == BinaryArch::ARM64) {
+            return cand.filepath;
+        }
+    }
+
+    // Direct filesystem check
+    std::string candidate_path = (data_dir.empty() ? "" : data_dir + "/") + "engine/v" + base_ver + "/arm64-v8a/libswordigo.so";
+    if (fs::exists(candidate_path)) {
+        return candidate_path;
+    }
+
+    // Fallback to b.filepath if valid
+    if (!b.filepath.empty()) {
+        return b.filepath;
+    }
+
+    // Ultimate fallback
+    return "engine/v1.4.12/arm64-v8a/libswordigo.so";
+}
+
+void BinarySelector::scan_instances_directory(const std::string& instances_path) {
+    if (!fs::exists(instances_path) || !fs::is_directory(instances_path)) return;
+
+    for (const auto& entry : fs::directory_iterator(instances_path)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".ini") continue;
+
+        std::string stem = entry.path().stem().string();
+        // NEVER allow an instances/*.ini to hijack a base engine (v1.4.12, v1.4.13, etc.)
+        if (stem == "v1.4.12" || stem == "v1.4.13" || stem == "1.4.12" || stem == "1.4.13" ||
+            stem == "v1.4.6" || stem == "v1.1" || stem.rfind("v1.", 0) == 0) {
+            std::error_code ec;
+            fs::remove(entry.path(), ec);
+            continue;
+        }
+
+        auto kv = parse_ini(entry.path().string());
+        if (kv.empty()) continue;
+
+        BinaryInfo b;
+        b.id = stem;
+        b.label = kv["name"].empty() ? b.id : kv["name"];
+        b.version = kv["version"].empty() ? "1.0" : kv["version"];
+        b.version_dir = b.id;
+        b.is_base = false;
+        b.preferred_base = kv["preferred_base"].empty() ? "1.4.12" : kv["preferred_base"];
+        b.custom_binary = kv["custom_binary"];
+        b.game_type = kv["game_type"].empty() ? "Swordigo" : kv["game_type"];
+        b.assets_dir = kv["assets_dir"].empty() ? ("inst-" + b.id) : kv["assets_dir"];
+        b.icon_path = kv["icon_path"];
+        b.arch = BinaryArch::ARM64;
+        b.status = BinaryStatus::TESTED;
+        b.filename = "libswordigo.so";
+
+        // Resolve filepath using preferred_base
+        b.filepath = resolve_launch_binary(b, b.preferred_base);
+
+        // Deduplicate: NEVER overwrite a base engine!
+        bool found = false;
+        for (auto& existing : binaries) {
+            if (existing.is_base) continue;
+            if (existing.id == b.id || (!b.assets_dir.empty() && existing.assets_dir == b.assets_dir)) {
+                existing = b;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            binaries.push_back(b);
+        }
+    }
+}
+
+void BinarySelector::migrate_legacy_custom_instances() {
+    if (data_dir.empty()) return;
+
+    fs::path engine_p = fs::path(data_dir) / "engine";
+    fs::path inst_p = fs::path(data_dir) / "instances";
+    if (!fs::exists(engine_p) || !fs::is_directory(engine_p)) return;
+
+    std::error_code ec;
+    fs::create_directories(inst_p, ec);
+
+    const std::string base12_hash = "f847814d1b6f81268567ed5ec2473fea4d4ee3b75d2c6fec7057227225e989f8";
+    const std::string base13_hash = "c2f567a34ec7bed9cf6b0af0ce88e9c925c11e5c2a2f2fbd8604461cf93aae7d";
+
+    for (const auto& entry : fs::directory_iterator(engine_p)) {
+        if (!entry.is_directory()) continue;
+        std::string dir_name = entry.path().filename().string();
+
+        // Skip pure base engines
+        if (dir_name == "v1.4.12" || dir_name == "v1.4.13" || dir_name == "v1.4.6" || dir_name == "v1.1" || dir_name == "instances") {
+            continue;
+        }
+
+        // Check if there is an instance.ini or .so
+        fs::path ini_file = entry.path() / "arm64-v8a" / "instance.ini";
+        fs::path so_file = entry.path() / "arm64-v8a" / "libswordigo.so";
+
+        std::map<std::string, std::string> kv;
+        if (fs::exists(ini_file)) {
+            kv = parse_ini(ini_file.string());
+        }
+
+        std::string inst_id = dir_name;
+        if (inst_id.rfind("custom-", 0) == 0) {
+            inst_id = inst_id.substr(7);
+        } else if (inst_id.rfind("v", 0) == 0) {
+            inst_id = inst_id.substr(1);
+        }
+
+        std::string name = kv.count("name") ? kv["name"] : inst_id;
+        std::string assets_dir = kv.count("assets_dir") ? kv["assets_dir"] : ("inst-" + inst_id);
+        std::string game_type = kv.count("game_type") ? kv["game_type"] : "Swordigo";
+        std::string icon_path = kv.count("icon_path") ? kv["icon_path"] : "";
+
+        // Check hash of .so if present
+        std::string so_hash;
+        if (fs::exists(so_file)) {
+            so_hash = compute_sha256(so_file.string());
+        }
+
+        std::string pref_base = "1.4.12";
+        if (so_hash == base13_hash) {
+            pref_base = "1.4.13";
+        }
+
+        // Write lightweight INI to instances/<id>.ini
+        fs::path out_ini = inst_p / (inst_id + ".ini");
+        if (!fs::exists(out_ini)) {
+            std::ofstream f(out_ini);
+            if (f) {
+                f << "[instance]\n";
+                f << "id = " << inst_id << "\n";
+                f << "name = " << name << "\n";
+                f << "version = 1.0\n";
+                f << "preferred_base = " << pref_base << "\n";
+                f << "game_type = " << game_type << "\n";
+                f << "assets_dir = " << assets_dir << "\n";
+                if (!icon_path.empty()) f << "icon_path = " << icon_path << "\n";
+                std::cout << "[BinSel] Migrated legacy instance " << dir_name << " -> " << out_ini << std::endl;
+            }
+        }
+
+        // If the .so matches base 1.4.12 or 1.4.13, remove redundant copy to save space!
+        if (fs::exists(so_file) && (so_hash == base12_hash || so_hash == base13_hash)) {
+            std::cout << "[BinSel] Removing duplicate base .so from " << so_file << std::endl;
+            fs::remove(so_file, ec);
+            fs::remove(entry.path() / "arm64-v8a" / "libsre.so", ec);
+            fs::remove(entry.path() / "arm64-v8a" / "libsre12.so", ec);
+            fs::remove(entry.path() / "arm64-v8a" / "libsre13.so", ec);
+            fs::remove(ini_file, ec);
+            // If directory is now empty, remove it
+            fs::remove(entry.path() / "arm64-v8a", ec);
+            fs::remove(entry.path(), ec);
+        }
+    }
+}
+
+void BinarySelector::remove_instance(int index) {
+    if (index < 0 || index >= (int)binaries.size()) return;
+    const auto& b = binaries[index];
+
+    // Remove INI from instances/ if exists
+    if (!data_dir.empty() && !b.id.empty()) {
+        fs::path ini_path = fs::path(data_dir) / "instances" / (b.id + ".ini");
+        std::error_code ec;
+        fs::remove(ini_path, ec);
+    }
+
+    binaries.erase(binaries.begin() + index);
 }
 
 // ── generate_manifest: Scan engine/ dir and write manifest.json ──

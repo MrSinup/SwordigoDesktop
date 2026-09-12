@@ -305,7 +305,13 @@ struct SceneGroup {
 };
 
 // Load and parse a .scene file.  Returns an empty SceneData on failure.
-SceneData scene_load(const std::string& path);
+SceneData scene_load(const std::string& path, const std::vector<std::string>& extra_roots = {});
+// Parse a scene from an in-memory buffer. `path` is used for identity only
+// (filename/filepath/asset resolution). Lets callers re-encode FileRift text
+// scenes to binary before parsing without writing temp files.
+SceneData scene_load_bytes(const std::vector<uint8_t>& bytes,
+                           const std::string& path,
+                           const std::vector<std::string>& extra_roots = {});
 
 // Serialize a scene without touching the filesystem (used to synchronize the
 // structured and markup editor views).
@@ -362,8 +368,76 @@ bool scene_paste_component(SceneData& scene, size_t object_index,
 std::vector<SceneComponentField> scene_component_fields(const SceneComponent& component);
 bool scene_set_component_field(SceneComponent& component, const SceneComponentField& value);
 
+// Scale the object's authored geometry data after a scale-gizmo drag (web
+// editor `scaleObjectData` parity): LocalAABB and the ShapeComponent payload
+// (Rectangle X/Y/W/H, Circle center + radius, Polygon vertices) grow by the
+// per-axis ratios, CollisionShapeComponent extents by the depth ratio.
+// For model objects (mesh_name or a Model component) the dominant-axis ratio
+// is applied uniformly to the transform AND the payload so the mesh never
+// distorts (web rule; per-axis ratios are kept for non-model objects).
+// Returns false when the object index is out of range.
+bool scene_scale_object_payload(SceneData& scene, size_t object_index,
+                                float sx, float sy, float sz_ratio);
+
+// Program messages (Caver::Program) carry both the plaintext source (field 1)
+// and compiled Lua bytecode (field 2). scene_program_source() reads field 1;
+// scene_program_bytes() reads field 2.
 std::string scene_program_source(const std::string& program_data);
-bool scene_set_program_source(std::string& program_data, const std::string& source);
+std::string scene_program_bytes(const std::string& program_data);
+
+// Replace the embedded Lua source (field 1) AND regenerate the compiled
+// bytecode (field 2). This matters: the shipped engine's
+// Program::LoadIntoState() ignores field 1 and feeds field 2 straight to
+// luaL_loadbuffer(), so a source-only edit is dead at runtime. On a Lua
+// compile error the source is still stored, the stale bytecode is dropped (the
+// game then loads nothing rather than an old chunk), `error` (when non-null)
+// receives the compiler message and false is returned. Defined in the filerift
+// component, which owns the host Lua 5.1 runtime; `program_data` is untouched
+// only when it is not a valid Program message.
+bool scene_set_program_source(std::string& program_data, const std::string& source,
+                              std::string* error = nullptr);
+
+// ─── Template link & materialization helpers (master TODO 2.3 / 2.4) ───────
+// The schema class name of a component (e.g. "ModelComponent"), derived from
+// the generated Component schema. Public wrapper over the internal matcher so
+// editor panels and tests can compare inherited vs local components.
+std::string scene_component_class_name(const SceneComponent& component);
+
+// Re-point an object at another template ("" = pure unlink: the object keeps
+// its own components and stops resolving template ones). Calls scene_refresh.
+bool scene_set_object_template(SceneData& scene, size_t object_index,
+                               const std::string& template_name);
+
+// Materialize (unlink): copy the object's RESOLVED components (template +
+// local overrides, schema-merged) into the object's own list and clear the
+// template reference so the object is fully self-contained. Returns false if
+// the object has no template link.
+bool scene_materialize_object_template(SceneData& scene, size_t object_index);
+
+// Copy a single inherited component (present in the resolved set but not yet
+// overridden locally) into the object's own list so it can be edited without
+// unlinking the whole template. The component keeps its type id so cross-
+// component references (ModelId / AnimationControllerId, ...) keep working.
+bool scene_override_inherited_component(SceneData& scene, size_t object_index,
+                                        const std::string& class_name);
+
+// Reset to the clean template: drop every local component override but keep
+// the template reference (pure link again). Returns false for unlinked objects.
+bool scene_apply_clean_template(SceneData& scene, size_t object_index);
+
+// Locate a template by name across the scene's embedded + external libraries.
+bool scene_find_template(const SceneData& scene, const std::string& name,
+                         SceneObject* out_object = nullptr,
+                         float* out_scaling = nullptr);
+
+// A Model component message carrying the given model name (ModelComponent
+// Name field 1), ready to push onto SceneObject::components. Wire layout
+// mirrors scene_add_component: ClassName (1) + Identifier (2) + payload (101).
+SceneComponent scene_make_model_component(const std::string& model_name);
+
+// LocalAABB (SceneObject field 8) = Rectangle { X, Y, W, H } fixed32 floats.
+std::string scene_build_local_aabb(float min_x, float min_y,
+                                   float max_x, float max_y);
 
 // Serialize and atomically write a SceneData back to disk.
 // All objects are re-serialised via proto::Writer; all preserved raw-byte
@@ -385,5 +459,28 @@ struct SclTemplateEntry {
 std::vector<SclTemplateEntry> scl_load_templates(const std::string& scl_bytes);
 bool scl_update_template(std::string& scl_bytes, const std::string& template_name, const SceneObject& obj);
 bool scl_save_to_file(const std::string& filepath, const std::string& scl_bytes, std::string* error_message = nullptr);
+
+// --- SCL studio mutations (master TODO 2.4a) ---
+// The .scl studio opens an ObjectLibrary as structured template rows and saves
+// it back. Each mutation below rewrites only the affected entry and re-emits
+// every other field of the library verbatim, so an untouched .scl round-trips
+// byte-exact and an edited one loses nothing outside the edit.
+//
+//   scl_add_template    appends a new template (the name must be free).
+//                       Appending to empty/malformed bytes is allowed and
+//                       yields a fresh, valid one-template ObjectLibrary.
+//   scl_rename_template patches only the template object's Name field (2),
+//                       keeping the rest of the object payload — unknown
+//                       fields included — and the template's scaling intact.
+//   scl_remove_template drops the named template; other entries keep their
+//                       original byte layout.
+//
+// All three return false when the name is missing, collides, or the bytes
+// cannot be walked; on failure `scl_bytes` is left completely untouched.
+bool scl_add_template(std::string& scl_bytes, const std::string& template_name,
+                      const SceneObject& obj, float scaling = 1.0f);
+bool scl_rename_template(std::string& scl_bytes, const std::string& old_name,
+                         const std::string& new_name);
+bool scl_remove_template(std::string& scl_bytes, const std::string& template_name);
 
 } // namespace av

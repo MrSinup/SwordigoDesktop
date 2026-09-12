@@ -49,9 +49,12 @@ static int lua_writer_cb(lua_State* L, const void* p, size_t sz, void* ud) {
     return 0;
 }
 
-std::string compile_lua_to_bytecode(const std::string& source, const std::string& name = "script") {
+std::string compile_lua_to_bytecode(const std::string& source, const std::string& name,
+                                    std::string* error) {
+    if (error) error->clear();
     lua_State* L = luaL_newstate();
     if (!L) {
+        if (error) *error = "failed to create Lua state";
         std::cerr << "Failed to create Lua state for compilation" << std::endl;
         return "";
     }
@@ -60,7 +63,9 @@ std::string compile_lua_to_bytecode(const std::string& source, const std::string
     
     int status = luaL_loadbuffer(L, source.c_str(), source.size(), name.c_str());
     if (status != 0) {
-        std::string err = lua_tostring(L, -1);
+        const char* msg = lua_tostring(L, -1);
+        std::string err = msg ? msg : "unknown Lua compile error";
+        if (error) *error = err;
         std::cerr << "Lua compile error: " << err << std::endl;
         lua_close(L);
         return "";
@@ -71,6 +76,7 @@ std::string compile_lua_to_bytecode(const std::string& source, const std::string
     lua_close(L);
     
     if (status != 0) {
+        if (error) *error = "Lua dump failed";
         std::cerr << "Lua dump failed" << std::endl;
         return "";
     }

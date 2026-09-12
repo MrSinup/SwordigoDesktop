@@ -120,6 +120,22 @@ static void append_float(std::vector<uint8_t>& bytes, double val) {
     bytes.insert(bytes.end(), fbytes, fbytes + 4);
 }
 
+double polygon_area(const std::vector<PolygonPoint>& pts) {
+    double a = 0.0;
+    const size_t n = pts.size();
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = (i + 1) % n;
+        a += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    return a * 0.5;
+}
+
+void ensure_ccw(std::vector<PolygonPoint>& pts) {
+    if (polygon_area(pts) < 0.0) {
+        std::reverse(pts.begin(), pts.end());
+    }
+}
+
 static double edge_angle(PolygonPoint a, PolygonPoint b) {
     double radians = std::atan2(b.y - a.y, b.x - a.x);
     double degrees = radians * (180.0 / M_PI);
@@ -128,12 +144,13 @@ static double edge_angle(PolygonPoint a, PolygonPoint b) {
 }
 
 static bool is_top_segment(const GroundMesh& gm, int i) {
-    int l = gm.polygon.size();
+    int l = static_cast<int>(gm.polygon.size());
     if (l == 0) return false;
-    int idx1 = (i + l) % l;
-    int idx2 = (i + 1 + l) % l;
+    int idx1 = ((i % l) + l) % l;
+    int idx2 = ((i + 1) % l + l) % l;
     double angle = edge_angle(gm.polygon[idx1], gm.polygon[idx2]);
-    return std::abs(angle - 180.0) < gm.top_angle;
+    double d = std::abs(angle - 180.0);
+    return std::min(d, 360.0 - d) < gm.top_angle;
 }
 
 static Vector2 edge_normal(PolygonPoint a, PolygonPoint b) {
@@ -364,22 +381,18 @@ static void generate_side_mesh(const GroundMesh& gm, std::vector<uint8_t>& verte
     }
     
     for (size_t v = 0; v < gm.polygon.size(); ++v) {
-        auto curr = gm.polygon[v];
-        auto next = gm.polygon[(v + 1) % gm.polygon.size()];
-        double angle = edge_angle(curr, next);
-        
-        if (gm.generate_top && std::abs(angle - 180.0) < gm.top_angle) {
+        if (gm.generate_top && is_top_segment(gm, static_cast<int>(v))) {
             continue;
         }
         
-        int i = v * 2;
+        int i = static_cast<int>(v) * 2;
         append_ushort(indexBits, i);
         append_ushort(indexBits, i + 2);
         append_ushort(indexBits, i + 3);
         
         append_ushort(indexBits, i);
-        append_ushort(indexBits, i + 3); // Fix index mapping order from sidemesh.go
-        append_ushort(indexBits, i - 1 + 2); // Matches `i-1` and `i+2` lower logic
+        append_ushort(indexBits, i + 3);
+        append_ushort(indexBits, i + 1);
     }
 }
 
@@ -395,7 +408,7 @@ static bool is_point_within(PolygonPoint a, PolygonPoint b, PolygonPoint c, Poly
 }
 
 static bool is_an_ear(int a, int b, int c, const std::vector<PolygonPoint>& v) {
-    if (get_cross(v[a], v[b], v[c]) < 0.0) return false;
+    if (get_cross(v[a], v[b], v[c]) <= 1e-9) return false;
     for (size_t i = 0; i < v.size(); ++i) {
         if (i != static_cast<size_t>(a) && i != static_cast<size_t>(b) && i != static_cast<size_t>(c)) {
             if (is_point_within(v[a], v[b], v[c], v[i])) return false;
@@ -426,23 +439,31 @@ static std::vector<uint8_t> make_tri(PolygonPoint a, PolygonPoint b, PolygonPoin
 static std::vector<uint8_t> generate_face_mesh(GroundMesh face) {
     std::vector<uint8_t> bits;
     if (face.polygon.size() < 3) return {};
+    ensure_ccw(face.polygon);
     
-    while (face.polygon.size() > 3) {
+    int guard = static_cast<int>(face.polygon.size()) * static_cast<int>(face.polygon.size()) * 2;
+    while (face.polygon.size() > 3 && guard-- > 0) {
         bool found_ear = false;
-        for (size_t i = 0; i < face.polygon.size() - 2; ++i) {
-            if (is_an_ear(i, i + 1, i + 2, face.polygon)) {
-                auto tri_bits = make_tri(face.polygon[i], face.polygon[i+1], face.polygon[i+2], face);
+        const size_t m = face.polygon.size();
+        for (size_t i = 0; i < m; ++i) {
+            size_t prev = (i + m - 1) % m;
+            size_t curr = i;
+            size_t next = (i + 1) % m;
+            if (is_an_ear(static_cast<int>(prev), static_cast<int>(curr), static_cast<int>(next), face.polygon)) {
+                auto tri_bits = make_tri(face.polygon[prev], face.polygon[curr], face.polygon[next], face);
                 bits.insert(bits.end(), tri_bits.begin(), tri_bits.end());
-                face.polygon.erase(face.polygon.begin() + i + 1);
+                face.polygon.erase(face.polygon.begin() + curr);
                 found_ear = true;
                 break;
             }
         }
-        if (!found_ear) return bits;
+        if (!found_ear) break;
     }
     
-    auto tri_bits = make_tri(face.polygon[0], face.polygon[1], face.polygon[2], face);
-    bits.insert(bits.end(), tri_bits.begin(), tri_bits.end());
+    if (face.polygon.size() == 3) {
+        auto tri_bits = make_tri(face.polygon[0], face.polygon[1], face.polygon[2], face);
+        bits.insert(bits.end(), tri_bits.begin(), tri_bits.end());
+    }
     return bits;
 }
 
@@ -549,27 +570,30 @@ GroundMesh parse_ground_mesh(const std::string& content) {
 }
 
 std::string serialize_swdm(const GroundMesh& gm) {
+    GroundMesh norm = gm;
+    ensure_ccw(norm.polygon);
+    if (norm.min_depth > norm.max_depth) std::swap(norm.min_depth, norm.max_depth);
     std::stringstream ss;
     ss << "// Swordigo Desktop Mesh (.swdm)\n";
-    ss << "Z " << gm.z << "\n";
-    ss << "MinDepth " << gm.min_depth << "\n";
-    ss << "MaxDepth " << gm.max_depth << "\n";
-    ss << "TopAngle " << gm.top_angle << "\n";
-    ss << "GenerateTop " << (gm.generate_top ? "true" : "false") << "\n";
-    ss << "TopTexture \"" << gm.top_texture << "\"\n";
-    ss << "BottomTexture \"" << gm.bottom_texture << "\"\n";
-    ss << "SurfaceWidth " << gm.surface_width << "\n";
-    ss << "HatHeight " << gm.hat_height << "\n";
-    ss << "HatWidthOffset1 " << gm.hat_width_offset_1 << "\n";
-    ss << "HatWidthOffset2 " << gm.hat_width_offset_2 << "\n";
-    ss << "TextureScale " << gm.texture_scale << "\n";
-    ss << "RandomSeed " << gm.random_seed << "\n";
+    ss << "Z " << norm.z << "\n";
+    ss << "MinDepth " << norm.min_depth << "\n";
+    ss << "MaxDepth " << norm.max_depth << "\n";
+    ss << "TopAngle " << norm.top_angle << "\n";
+    ss << "GenerateTop " << (norm.generate_top ? "true" : "false") << "\n";
+    ss << "TopTexture \"" << norm.top_texture << "\"\n";
+    ss << "BottomTexture \"" << norm.bottom_texture << "\"\n";
+    ss << "SurfaceWidth " << norm.surface_width << "\n";
+    ss << "HatHeight " << norm.hat_height << "\n";
+    ss << "HatWidthOffset1 " << norm.hat_width_offset_1 << "\n";
+    ss << "HatWidthOffset2 " << norm.hat_width_offset_2 << "\n";
+    ss << "TextureScale " << norm.texture_scale << "\n";
+    ss << "RandomSeed " << norm.random_seed << "\n";
     ss << "Hat[\n";
-    for (const auto& h : gm.hats)
+    for (const auto& h : norm.hats)
         ss << h.x << " " << h.y << " " << h.radius << " " << h.height << "\n";
     ss << "]\n";
     ss << "Vertex[\n";
-    for (const auto& v : gm.polygon)
+    for (const auto& v : norm.polygon)
         ss << v.x << " " << v.y << "\n";
     ss << "]\n";
     return ss.str();
@@ -578,6 +602,8 @@ std::string serialize_swdm(const GroundMesh& gm) {
 std::string generate_ground_mesh(const std::string& gmesh_content) {
     GroundMesh gm = parse_gmesh(gmesh_content);
     if (gm.polygon.size() < 3) return "";
+    ensure_ccw(gm.polygon);
+    if (gm.min_depth > gm.max_depth) std::swap(gm.min_depth, gm.max_depth);
     
     double left = gm.polygon[0].x;
     double right = gm.polygon[0].x;
@@ -910,6 +936,8 @@ std::string generate_ground_mesh_object(const std::string& gmesh_content,
                                         const GroundComponentIds* ids) {
     GroundMesh gm = parse_gmesh(gmesh_content);
     if (gm.polygon.size() < 3) return "";
+    ensure_ccw(gm.polygon);
+    if (gm.min_depth > gm.max_depth) std::swap(gm.min_depth, gm.max_depth);
 
     GroundComponentIds default_ids;
     const GroundComponentIds& cid = ids ? *ids : default_ids;

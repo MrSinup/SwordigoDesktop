@@ -4,7 +4,7 @@
  * ProHook Phase 1: Stable C host ABI for guest-to-host communication.
  *
  * Architecture:
- *   Guest ARM64 (libsre.so) calls SREHost_* functions using SVC #0x5352
+ *   Guest ARM64 (libsre12.so / libsre13.so) calls SREHost_* functions using SVC #0x5352
  *   ("SR" = SRE marker). Dynarmic's CallSVC handler dispatches to
  *   SREHost_Dispatch() in srehost_impl.cpp on the x86_64 host side.
  *

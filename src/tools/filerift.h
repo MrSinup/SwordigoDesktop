@@ -16,4 +16,12 @@ namespace filerift {
     // Our generic lua extractor
     std::string extract_lua_generic(const std::string& bytes);
 
+    // Compiles a plaintext Lua source chunk to Lua 5.1 bytecode with the host
+    // runtime embedded in this component (luaL_loadbuffer -> lua_dump). The
+    // chunk is compiled, never executed. Returns an empty string on failure and,
+    // when `error` is non-null, fills it with the compiler/dump message.
+    std::string compile_lua_to_bytecode(const std::string& source,
+                                        const std::string& name = "script",
+                                        std::string* error = nullptr);
+
 } // namespace IS filerift

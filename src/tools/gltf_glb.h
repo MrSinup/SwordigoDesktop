@@ -70,6 +70,10 @@ struct GLTFPBRInfo {
     struct Image {
         std::string mime;               // "image/png" | "image/jpeg"
         std::vector<uint8_t> data;
+        // True when the glTF sampler referencing this image requests
+        // GL_NEAREST (pixel-art assets). The viewer honours it instead of
+        // forcing trilinear + anisotropic filtering (A3).
+        bool nearest = false;
     };
     std::vector<GLTFPBRMaterial> materials;   // parallel to PODModel::materials
     std::vector<int> image_gltf_index;        // glTF image index of each payload
@@ -81,11 +85,17 @@ struct GLTFPBRInfo {
 // PBR material data (factors, map image indices, and the referenced payloads).
 // Returns true on success.
 bool gltf_import_glb(const std::string& path,
-                     PODModel& out,
-                     std::vector<GLTFImageBuffer>& images,
-                     std::string* err = nullptr,
-                     GLTFPBRInfo* pbr = nullptr,
-                     float scale = 1.0f);
+                      PODModel& out,
+                      std::vector<GLTFImageBuffer>& images,
+                      std::string* err = nullptr,
+                      GLTFPBRInfo* pbr = nullptr,
+                      float scale = 1.0f,
+                      bool rigid_skin = false);
+
+// S1: when rigid_skin is true, each vertex is pre-baked to its dominant
+// (max-weight) joint at weight 1.0 — matching the game's C_Matrix4Vector3ArraySkin,
+// which reads ONE bone index per vertex and ignores weights. Leave false for the
+// viewer (full weights preview accurately there).
 
 // Parse a bare .gltf JSON file into a PODModel (same outputs as the GLB
 // importer). External resources are resolved relative to the .gltf file:
@@ -96,7 +106,8 @@ bool gltf_import_gltf(const std::string& path,
                       std::vector<GLTFImageBuffer>& images,
                       std::string* err = nullptr,
                       GLTFPBRInfo* pbr = nullptr,
-                      float scale = 1.0f);
+                      float scale = 1.0f,
+                      bool rigid_skin = false);
 
 // Extract all animation clips inside a .glb / .gltf as individual PODModel
 // objects (each containing the skeleton nodes + keyframed animation streams
@@ -104,6 +115,12 @@ bool gltf_import_gltf(const std::string& path,
 bool gltf_import_all_clips(const std::string& path,
                            std::vector<std::pair<std::string, PODModel>>& out_clips,
                            std::string* err = nullptr,
-                           float scale = 1.0f);
+                           float scale = 1.0f,
+                           float target_fps = 0.0f,
+                           bool rigid_skin = false);
+// target_fps: when > 0, clips are resampled at exactly this rate regardless of
+// the source key density (engine parity — Swordigo hardcodes 24.0 FPS in
+// Caver::PODLoader::CreateAnimationFromFile). 0 keeps the legacy behaviour of
+// deriving the rate from the source key density.
 
 } // namespace av

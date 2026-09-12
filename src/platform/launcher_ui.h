@@ -14,6 +14,8 @@ struct LaunchConfig {
     std::string assets_dir;                  // filled from the selected BinaryInfo
     std::string game_type;                   // filled from the selected BinaryInfo
     std::string selected_mod;                // filled from mod list — mod id to activate (Raijin VFS)
+    std::string selected_base_version;       // "1.4.12" or "1.4.13"
+    std::string instance_name;               // display name of launched instance
     bool should_launch = true;  // false if user closed the launcher
     bool use_dynarmic = false;  // false = Unicorn (default), true = Dynarmic JIT
     bool use_sre = true;        // whether to load libsre.so (user choice)
