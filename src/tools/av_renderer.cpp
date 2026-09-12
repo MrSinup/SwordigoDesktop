@@ -271,7 +271,7 @@ void main() {
 //   · image-based lighting: split-sum (prefiltered cubemap + BRDF LUT)
 //   · directional shadow mapping (light-VP compare with N·L-scaled bias)
 //   · ACES tone mapping
-// See src/render/zauonlok/ for the authoritative C reference sources.
+// See src/ruby/zauonlok/ for the authoritative C reference sources.
 // ============================================================================
 
 static const char* PBR_VS = R"GLSL(
@@ -968,7 +968,7 @@ static GLint s_loc_inline_tm = -1;
 // linear-space boosted lights and the mesh shader outputs linear light.
 static bool s_inline_tonemap = true;
 
-// ── PBR program state (vendored algorithms, see src/render/zauonlok) ──
+// ── PBR program state (vendored algorithms, see src/ruby/zauonlok) ──
 struct PBRProg {
     GLuint prog = 0;
     GLint mvp = -1, model = -1, nmat = -1, light_vp = -1, flip_v = -1, has_tan = -1,
@@ -2461,7 +2461,7 @@ void render_mesh(const GPUMesh& mesh, const float* model_matrix,
 
 // ============================================================================
 // PBR renderer — vendored algorithms from zauonlok/renderer (MIT, Zhou Le)
-// Reference sources: src/render/zauonlok/ (pbr_shader.c, maths.c)
+// Reference sources: src/ruby/zauonlok/ (pbr_shader.c, maths.c)
 // ============================================================================
 
 void pbr_set_joint_matrices(const float* matrices, int count) {

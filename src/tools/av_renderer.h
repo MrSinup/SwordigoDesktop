@@ -306,7 +306,7 @@ void end_3d();
 //   · image-based lighting: split-sum (prefiltered env cubemap + BRDF LUT)
 //   · directional shadow mapping (light-VP depth pass + N·L-biased compare)
 //   · ACES tone mapping
-// Reference sources live in src/render/zauonlok/ (see its README).
+// Reference sources live in src/ruby/zauonlok/ (see its README).
 // ============================================================================
 
 struct PBRMaterial {

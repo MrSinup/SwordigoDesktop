@@ -28,5 +28,6 @@ This license applies to the entire **Ruby** and **Ruby GG** studio editor, inclu
 - `src/ruby/emulator/`: Embedded engine preview pod and shared memory frame receiver.
 - `src/ruby/tools/`: Ground mesh studio and scene asset authoring tools.
 - `src/ruby/database/`: Engine symbol databases and FileRift language services.
+- `src/ruby/zauonlok/`: Vendored software renderer reference algorithms (MIT License — see `LICENSE.zauonlok-renderer`).
 
-All rights, titles, and interests in this software are exclusively held by **OpenSwordigo Org**.
+All rights, titles, and interests in this software are exclusively held by **OpenSwordigo Org** (except the MIT reference algorithms in `src/ruby/zauonlok/`).

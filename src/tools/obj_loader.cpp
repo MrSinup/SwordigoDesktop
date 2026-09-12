@@ -1,7 +1,7 @@
 // obj_loader.cpp — Wavefront .obj → PODModel.
 //
 // The parser is modeled on zauonlok/renderer's core/mesh.c (MIT, Zhou Le —
-// vendored reference in src/render/zauonlok/) but generalized: it accepts
+// vendored reference in src/ruby/zauonlok/) but generalized: it accepts
 // the four standard corner forms, triangulates quads/ngons, and skips
 // malformed lines instead of asserting. The `# ext.*` comments are kept
 // byte-compatible with the reference exporter.

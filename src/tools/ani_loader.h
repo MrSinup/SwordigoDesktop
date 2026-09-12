@@ -1,7 +1,7 @@
 #pragma once
 // ani_loader.h — zauonlok/renderer .ani skeletal animation clips.
 //
-// Format (text, one joint block per bone — see src/render/zauonlok/skeleton.c):
+// Format (text, one joint block per bone — see src/ruby/zauonlok/skeleton.c):
 //   joint-size: N
 //   time-range: [min, max]
 //   joint i:
