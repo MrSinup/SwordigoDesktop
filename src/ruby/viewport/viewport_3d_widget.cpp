@@ -48,6 +48,15 @@
 #include <QOpenGLShaderProgram>
 #include <QSaveFile>
 #include <QUndoCommand>
+#include <QMenu>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
+#include <QFileDialog>
+#include <QFileInfo>
 #include "ruby_picking.h"
 #include "ruby/math/ruby_math.h"
 // RubyGizmo — our bespoke HiDPI-correct gizmo (no im3d dependency).
@@ -375,6 +384,7 @@ namespace ruby::viewport {
 Viewport3DWidget::Viewport3DWidget(QWidget* parent) : QOpenGLWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    setAcceptDrops(true);
     m_loading_overlay = new SceneLoadingOverlay(this);
 
     // ── Scene transform toolbar (top-left overlay) ──
@@ -434,6 +444,17 @@ Viewport3DWidget::Viewport3DWidget(QWidget* parent) : QOpenGLWidget(parent) {
     connect(fx_btn, &QToolButton::clicked, this, [this](bool on) { set_render_effects(on); });
     gizmo_layout->addWidget(fx_btn);
     m_fx_btn = fx_btn;
+
+    auto* bounds_btn = new QToolButton(m_gizmo_bar);
+    bounds_btn->setText(QStringLiteral("Bounds"));
+    bounds_btn->setCheckable(true);
+    bounds_btn->setChecked(m_show_camera_bounds);
+    bounds_btn->setProperty("mode", -1);
+    bounds_btn->setToolTip(QStringLiteral(
+        "Toggle Camera Bounds (Scene level boundaries) display, shroud, and interactive handles."));
+    connect(bounds_btn, &QToolButton::clicked, this, [this](bool on) { toggle_show_camera_bounds(on); });
+    gizmo_layout->addWidget(bounds_btn);
+    m_bounds_btn = bounds_btn;
 
     m_gizmo_bar->adjustSize();
     m_gizmo_bar->move(174, 12);
@@ -1221,6 +1242,50 @@ void Viewport3DWidget::paintGL() {
     // (2D grid on the object plane, polygon outline, vertex handles, hints).
     if (m_mesh_edit) draw_mesh_edit_overlay();
 
+    // ── Camera Bounds Overlay (Level boundaries letterbox & handles) ──
+    if (m_has_scene && m_show_camera_bounds && !m_mesh_edit) {
+        av::CameraBounds cb;
+        if (av::scene_get_camera_bounds(m_scene, cb)) {
+            QPainter p(this);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.setRenderHint(QPainter::TextAntialiasing, true);
+            m_bounds_gizmo.draw(p, cb, width(), height(), m_gizmo_view, m_gizmo_proj,
+                                m_bounds_hover_handle, m_bounds_active_handle, m_camera_bounds_selected);
+            p.end();
+        }
+    }
+
+    // ── Drag-and-drop Smart Placement Reticle Overlay ──
+    if (m_drag_hover_active) {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setRenderHint(QPainter::TextAntialiasing, true);
+
+        float sx = 0.0f, sy = 0.0f;
+        if (CameraBoundsGizmo::world_to_screen(m_drag_hover_world[0], m_drag_hover_world[1], m_drag_hover_world[2],
+                                               width(), height(), m_gizmo_view, m_gizmo_proj, sx, sy)) {
+            p.setPen(QPen(QColor(80, 210, 255, 230), 2.0));
+            p.setBrush(QColor(40, 160, 255, 60));
+            p.drawEllipse(QPointF(sx, sy), 18.0, 18.0);
+            p.drawLine(QPointF(sx - 24, sy), QPointF(sx + 24, sy));
+            p.drawLine(QPointF(sx, sy - 24), QPointF(sx, sy + 24));
+
+            QString badge = m_drag_hover_label.isEmpty() ? QStringLiteral("Drop Object") : m_drag_hover_label;
+            badge += QStringLiteral("\n(%1, %2)").arg(m_drag_hover_world[0], 0, 'f', 1).arg(m_drag_hover_world[1], 0, 'f', 1);
+            QFont f = p.font();
+            f.setPixelSize(11);
+            f.setBold(true);
+            p.setFont(f);
+            QRectF badge_rect(sx + 24, sy - 20, 140, 36);
+            p.setPen(QColor(30, 45, 65, 220));
+            p.setBrush(QColor(15, 22, 35, 220));
+            p.drawRoundedRect(badge_rect, 5.0, 5.0);
+            p.setPen(QColor(220, 240, 255, 255));
+            p.drawText(badge_rect, Qt::AlignCenter, badge);
+        }
+        p.end();
+    }
+
     if (m_gizmo_bar) m_gizmo_bar->setVisible(m_has_scene);
 
     if (m_render_effects_enabled && m_has_scene && m_scene_ready) {
@@ -1346,8 +1411,10 @@ void Viewport3DWidget::adopt_session_state(const std::string& scene_path) {
         m_gizmo_mode = GizmoOff;
         if (m_gizmo_bar) {
             const auto btns = m_gizmo_bar->findChildren<QToolButton*>();
-            for (QToolButton* b : btns)
-                b->setChecked(b->property("mode").toInt() == m_gizmo_mode);
+            for (QToolButton* b : btns) {
+                const int m = b->property("mode").toInt();
+                if (m >= 0) b->setChecked(m == m_gizmo_mode);
+            }
         }
         return;
     }
@@ -1367,8 +1434,10 @@ void Viewport3DWidget::adopt_session_state(const std::string& scene_path) {
     m_gizmo_mode = std::clamp(st.gizmo_mode, 0, 3);
     if (m_gizmo_bar) {
         const auto btns = m_gizmo_bar->findChildren<QToolButton*>();
-        for (QToolButton* b : btns)
-            b->setChecked(b->property("mode").toInt() == m_gizmo_mode);
+        for (QToolButton* b : btns) {
+            const int m = b->property("mode").toInt();
+            if (m >= 0) b->setChecked(m == m_gizmo_mode);
+        }
     }
 }
 
@@ -1858,7 +1927,8 @@ void Viewport3DWidget::draw_scene() {
                 const auto& texs = (tit != m_scene_model_textures.end()) ? tit->second : empty_tex;
                 auto lit = m_scene_model_gpu.find(obj.mesh_name);
                 const std::vector<MeshGpu>* gpu = (lit != m_scene_model_gpu.end()) ? &lit->second : nullptr;
-                draw_pod_instance(mit->second, texs, gpu, m_frame);
+                const float* tint = obj.has_diffuse_color ? obj.diffuse_color : nullptr;
+                draw_pod_instance(mit->second, texs, gpu, m_frame, tint);
                 glPopMatrix();
             }
         }
@@ -2313,7 +2383,8 @@ void Viewport3DWidget::draw_mesh_rim(const MeshGpu& g, const av::PODMesh& src, f
 }
 
 void Viewport3DWidget::draw_pod_instance(const av::PODModel& model, const std::vector<GLuint>& textures,
-                                        const std::vector<MeshGpu>* gpu_meshes, float frame) {
+                                        const std::vector<MeshGpu>* gpu_meshes, float frame,
+                                        const float* tint_color) {
     glEnable(GL_LIGHTING);
     for (int node_index = 0; node_index < static_cast<int>(model.nodes.size()); ++node_index) {
         const auto& node = model.nodes[node_index];
@@ -2354,6 +2425,12 @@ void Viewport3DWidget::draw_pod_instance(const av::PODModel& model, const std::v
         }
         if (!texture && m_show_textures && !textures.empty()) {
             texture = textures.front();
+        }
+
+        if (tint_color) {
+            color[0] *= tint_color[0];
+            color[1] *= tint_color[1];
+            color[2] *= tint_color[2];
         }
 
         glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, color);
@@ -3048,18 +3125,23 @@ bool Viewport3DWidget::load_scene(const std::string& scene_path) {
         }
     }
 
-    // 1C. Collect and pre-decode ground mesh textures and background textures in parallel
-    std::unordered_set<std::string> textures_to_decode;
+    // 1C. Collect and pre-decode unique ground mesh textures and background textures in parallel
+    std::unordered_set<std::string> unique_ground_names;
     for (const auto& obj : m_scene.objects) {
         for (const auto& name : obj.ground_mesh_textures) {
-            if (!name.empty()) {
-                for (const auto& cand : av::assets::texture_candidates(fs::path(scene_path), name, scene_roots)) {
-                    std::error_code ec;
-                    if (fs::is_regular_file(cand, ec)) {
-                        textures_to_decode.insert(cand.string());
-                        break;
-                    }
-                }
+            if (!name.empty()) unique_ground_names.insert(name);
+        }
+    }
+
+    std::unordered_map<std::string, std::string> resolved_ground_paths;
+    std::unordered_set<std::string> textures_to_decode;
+    for (const auto& name : unique_ground_names) {
+        for (const auto& cand : av::assets::texture_candidates(fs::path(scene_path), name, scene_roots)) {
+            std::error_code ec;
+            if (fs::is_regular_file(cand, ec)) {
+                resolved_ground_paths[name] = cand.string();
+                textures_to_decode.insert(cand.string());
+                break;
             }
         }
     }
@@ -3084,11 +3166,16 @@ bool Viewport3DWidget::load_scene(const std::string& scene_path) {
         "_2x.tex.png", ".tex.png", "_2x.pvr", ".pvr", "_2x.tex", ".tex", "_2x.png", ".png", ""
     };
 
+    std::unordered_set<std::string> unique_bg_names;
     for (const auto& object : m_scene.objects) {
-        if (object.background_name.empty()) continue;
-        std::vector<std::string> name_variants = {object.background_name};
-        std::string stripped = strip_image_extensions(object.background_name);
-        if (!stripped.empty() && stripped != object.background_name) {
+        if (!object.background_name.empty()) unique_bg_names.insert(object.background_name);
+    }
+
+    std::unordered_map<std::string, std::string> resolved_bg_paths;
+    for (const auto& bg_name : unique_bg_names) {
+        std::vector<std::string> name_variants = {bg_name};
+        std::string stripped = strip_image_extensions(bg_name);
+        if (!stripped.empty() && stripped != bg_name) {
             name_variants.push_back(stripped);
         }
         if (stripped.size() > 3 && stripped.rfind("_2x") == stripped.size() - 3) {
@@ -3096,21 +3183,20 @@ bool Viewport3DWidget::load_scene(const std::string& scene_path) {
         } else {
             name_variants.push_back(stripped + "_2x");
         }
-        bool found = false;
         for (const auto& root : roots) {
             for (const auto& name_var : name_variants) {
                 for (const char* suffix : suffixes) {
                     const fs::path candidate = root / (name_var + suffix);
                     std::error_code ec;
                     if (fs::is_regular_file(candidate, ec)) {
+                        resolved_bg_paths[bg_name] = candidate.string();
                         textures_to_decode.insert(candidate.string());
-                        found = true;
                         break;
                     }
                 }
-                if (found) break;
+                if (resolved_bg_paths.count(bg_name)) break;
             }
-            if (found) break;
+            if (resolved_bg_paths.count(bg_name)) break;
         }
     }
 
@@ -3177,16 +3263,13 @@ bool Viewport3DWidget::load_scene(const std::string& scene_path) {
                 textures[mesh_index] = it->second;
                 continue;
             }
-            for (const auto& candidate : av::assets::texture_candidates(fs::path(scene_path), name, scene_roots)) {
-                if (fs::exists(candidate)) {
-                    GLuint tex = load_texture_any(candidate.string());
-                    if (tex) {
-                        ground_tex_cache[name] = tex;
-                        textures[mesh_index] = tex;
-                        break;
-                    }
-                }
+            GLuint tex = 0;
+            auto it_path = resolved_ground_paths.find(name);
+            if (it_path != resolved_ground_paths.end()) {
+                tex = load_texture_any(it_path->second);
             }
+            ground_tex_cache[name] = tex;
+            textures[mesh_index] = tex;
         }
     }
 
@@ -3207,6 +3290,10 @@ bool Viewport3DWidget::load_scene(const std::string& scene_path) {
         ro.name = object.name;
         ro.mesh_name = object.mesh_name;
         ro.local_aabb = object.local_aabb;
+        ro.has_diffuse_color = object.has_model_diffuse_color;
+        ro.diffuse_color[0] = object.model_diffuse_color[0];
+        ro.diffuse_color[1] = object.model_diffuse_color[1];
+        ro.diffuse_color[2] = object.model_diffuse_color[2];
 
         ro.ground_textures = m_scene_ground_textures[object_index];
         ro.ground_gpu.reserve(object.ground_meshes.size());
@@ -3222,33 +3309,14 @@ bool Viewport3DWidget::load_scene(const std::string& scene_path) {
         m_render_objects.push_back(std::move(ro));
     }
 
-    for (const auto& object : m_scene.objects) {
-        if (object.background_name.empty() || m_scene_background_textures.count(object.background_name)) continue;
+    for (const auto& bg_name : unique_bg_names) {
+        if (m_scene_background_textures.count(bg_name)) continue;
         GLuint texture = 0;
-        std::vector<std::string> name_variants = {object.background_name};
-        std::string stripped = strip_image_extensions(object.background_name);
-        if (!stripped.empty() && stripped != object.background_name) {
-            name_variants.push_back(stripped);
+        auto it = resolved_bg_paths.find(bg_name);
+        if (it != resolved_bg_paths.end()) {
+            texture = load_texture_any(it->second);
         }
-        if (stripped.size() > 3 && stripped.rfind("_2x") == stripped.size() - 3) {
-            name_variants.push_back(stripped.substr(0, stripped.size() - 3));
-        } else {
-            name_variants.push_back(stripped + "_2x");
-        }
-        for (const auto& root : roots) {
-            for (const auto& name_var : name_variants) {
-                for (const char* suffix : suffixes) {
-                    const fs::path candidate = root / (name_var + suffix);
-                    std::error_code ec;
-                    if (fs::is_regular_file(candidate, ec) && (texture = load_texture_any(candidate.string()))) {
-                        break;
-                    }
-                }
-                if (texture) break;
-            }
-            if (texture) break;
-        }
-        m_scene_background_textures.emplace(object.background_name, texture);
+        m_scene_background_textures.emplace(bg_name, texture);
     }
     doneCurrent();
 
@@ -3544,17 +3612,23 @@ void Viewport3DWidget::load_scene_async(const std::string& scene_path,
             }
         }
 
-        std::unordered_set<std::string> textures_to_decode;
+        // 1C. Collect and pre-decode unique ground mesh textures and background textures in parallel
+        std::unordered_set<std::string> unique_ground_names;
         for (const auto& obj : loaded.objects) {
             for (const auto& name : obj.ground_mesh_textures) {
-                if (!name.empty()) {
-                    for (const auto& cand : av::assets::texture_candidates(fs::path(scene_path), name, scene_roots)) {
-                        std::error_code ec;
-                        if (fs::is_regular_file(cand, ec)) {
-                            textures_to_decode.insert(cand.string());
-                            break;
-                        }
-                    }
+                if (!name.empty()) unique_ground_names.insert(name);
+            }
+        }
+
+        std::unordered_map<std::string, std::string> resolved_ground_paths;
+        std::unordered_set<std::string> textures_to_decode;
+        for (const auto& name : unique_ground_names) {
+            for (const auto& cand : av::assets::texture_candidates(fs::path(scene_path), name, scene_roots)) {
+                std::error_code ec;
+                if (fs::is_regular_file(cand, ec)) {
+                    resolved_ground_paths[name] = cand.string();
+                    textures_to_decode.insert(cand.string());
+                    break;
                 }
             }
         }
@@ -3579,11 +3653,16 @@ void Viewport3DWidget::load_scene_async(const std::string& scene_path,
             "_2x.tex.png", ".tex.png", "_2x.pvr", ".pvr", "_2x.tex", ".tex", "_2x.png", ".png", ""
         };
 
+        std::unordered_set<std::string> unique_bg_names;
         for (const auto& object : loaded.objects) {
-            if (object.background_name.empty()) continue;
-            std::vector<std::string> name_variants = {object.background_name};
-            std::string stripped = strip_image_extensions(object.background_name);
-            if (!stripped.empty() && stripped != object.background_name) {
+            if (!object.background_name.empty()) unique_bg_names.insert(object.background_name);
+        }
+
+        std::unordered_map<std::string, std::string> resolved_bg_paths;
+        for (const auto& bg_name : unique_bg_names) {
+            std::vector<std::string> name_variants = {bg_name};
+            std::string stripped = strip_image_extensions(bg_name);
+            if (!stripped.empty() && stripped != bg_name) {
                 name_variants.push_back(stripped);
             }
             if (stripped.size() > 3 && stripped.rfind("_2x") == stripped.size() - 3) {
@@ -3591,21 +3670,20 @@ void Viewport3DWidget::load_scene_async(const std::string& scene_path,
             } else {
                 name_variants.push_back(stripped + "_2x");
             }
-            bool found = false;
             for (const auto& root : roots) {
                 for (const auto& name_var : name_variants) {
                     for (const char* suffix : suffixes) {
                         const fs::path candidate = root / (name_var + suffix);
                         std::error_code ec;
                         if (fs::is_regular_file(candidate, ec)) {
+                            resolved_bg_paths[bg_name] = candidate.string();
                             textures_to_decode.insert(candidate.string());
-                            found = true;
                             break;
                         }
                     }
-                    if (found) break;
+                    if (resolved_bg_paths.count(bg_name)) break;
                 }
-                if (found) break;
+                if (resolved_bg_paths.count(bg_name)) break;
             }
         }
 
@@ -3646,6 +3724,9 @@ void Viewport3DWidget::load_scene_async(const std::string& scene_path,
 
         QMetaObject::invokeMethod(this, [this, seq, scene_path, roots, scene_roots,
                                          prev_scene_path, prev_had_scene,
+                                         resolved_ground_paths = std::move(resolved_ground_paths),
+                                         resolved_bg_paths = std::move(resolved_bg_paths),
+                                         unique_bg_names = std::move(unique_bg_names),
                                          loaded = std::move(loaded),
                                          pre_models = std::move(pre_models)]() mutable {
             // Land only if this is still the newest load for THIS scene.
@@ -3690,16 +3771,13 @@ void Viewport3DWidget::load_scene_async(const std::string& scene_path,
                         textures[mesh_index] = it->second;
                         continue;
                     }
-                    for (const auto& candidate : av::assets::texture_candidates(fs::path(scene_path), name, scene_roots)) {
-                        if (fs::exists(candidate)) {
-                            GLuint tex = load_texture_any(candidate.string());
-                            if (tex) {
-                                ground_tex_cache[name] = tex;
-                                textures[mesh_index] = tex;
-                                break;
-                            }
-                        }
+                    GLuint tex = 0;
+                    auto it_path = resolved_ground_paths.find(name);
+                    if (it_path != resolved_ground_paths.end()) {
+                        tex = load_texture_any(it_path->second);
                     }
+                    ground_tex_cache[name] = tex;
+                    textures[mesh_index] = tex;
                 }
             }
 
@@ -3720,6 +3798,10 @@ void Viewport3DWidget::load_scene_async(const std::string& scene_path,
                 ro.name = object.name;
                 ro.mesh_name = object.mesh_name;
                 ro.local_aabb = object.local_aabb;
+                ro.has_diffuse_color = object.has_model_diffuse_color;
+                ro.diffuse_color[0] = object.model_diffuse_color[0];
+                ro.diffuse_color[1] = object.model_diffuse_color[1];
+                ro.diffuse_color[2] = object.model_diffuse_color[2];
 
                 ro.ground_textures = m_scene_ground_textures[object_index];
                 ro.ground_gpu.reserve(object.ground_meshes.size());
@@ -3735,36 +3817,14 @@ void Viewport3DWidget::load_scene_async(const std::string& scene_path,
                 m_render_objects.push_back(std::move(ro));
             }
 
-            static const char* bg_suffixes[] = {
-                "_2x.tex.png", ".tex.png", "_2x.pvr", ".pvr", "_2x.tex", ".tex", "_2x.png", ".png", ""
-            };
-            for (const auto& object : m_scene.objects) {
-                if (object.background_name.empty() || m_scene_background_textures.count(object.background_name)) continue;
+            for (const auto& bg_name : unique_bg_names) {
+                if (m_scene_background_textures.count(bg_name)) continue;
                 GLuint texture = 0;
-                std::vector<std::string> name_variants = {object.background_name};
-                std::string stripped = strip_image_extensions(object.background_name);
-                if (!stripped.empty() && stripped != object.background_name) {
-                    name_variants.push_back(stripped);
+                auto it = resolved_bg_paths.find(bg_name);
+                if (it != resolved_bg_paths.end()) {
+                    texture = load_texture_any(it->second);
                 }
-                if (stripped.size() > 3 && stripped.rfind("_2x") == stripped.size() - 3) {
-                    name_variants.push_back(stripped.substr(0, stripped.size() - 3));
-                } else {
-                    name_variants.push_back(stripped + "_2x");
-                }
-                for (const auto& root : roots) {
-                    for (const auto& name_var : name_variants) {
-                        for (const char* suffix : bg_suffixes) {
-                            const fs::path candidate = root / (name_var + suffix);
-                            std::error_code ec;
-                            if (fs::is_regular_file(candidate, ec) && (texture = load_texture_any(candidate.string()))) {
-                                break;
-                            }
-                        }
-                        if (texture) break;
-                    }
-                    if (texture) break;
-                }
-                m_scene_background_textures.emplace(object.background_name, texture);
+                m_scene_background_textures.emplace(bg_name, texture);
             }
             doneCurrent();
 
@@ -3963,6 +4023,33 @@ void Viewport3DWidget::mousePressEvent(QMouseEvent* event) {
                                pt.y() >= pad && pt.y() <= (pad + size));
 
     if (event->button() == Qt::LeftButton) {
+        // 0. Check Camera Bounds handles if visible
+        if (m_has_scene && m_show_camera_bounds && !m_mesh_edit) {
+            av::CameraBounds cb;
+            if (av::scene_get_camera_bounds(m_scene, cb)) {
+                BoundsHandle h = m_bounds_gizmo.hit_test(event->position(), cb,
+                                                         width(), height(),
+                                                         m_gizmo_view, m_gizmo_proj);
+                if (h != BoundsHandle::None) {
+                    m_bounds_active_handle = h;
+                    m_bounds_dragging = true;
+                    m_camera_bounds_selected = true;
+                    m_bounds_drag_initial = cb;
+                    float wx = 0.0f, wy = 0.0f;
+                    CameraBoundsGizmo::screen_to_world_xy(event->position().x(), event->position().y(),
+                                                          width(), height(),
+                                                          m_gizmo_view, m_gizmo_proj,
+                                                          wx, wy);
+                    m_bounds_drag_start_world_x = wx;
+                    m_bounds_drag_start_world_y = wy;
+                    set_selected_object(-1);
+                    emit cameraBoundsSelected(true);
+                    update();
+                    return;
+                }
+            }
+        }
+
         // 1. Check if user clicked on or inside the 3D ViewCube (top-left camera controller)
         if (in_cube_area) {
             int cube_box = hit_test_view_cube(pt);
@@ -4026,6 +4113,26 @@ void Viewport3DWidget::mousePressEvent(QMouseEvent* event) {
 void Viewport3DWidget::mouseMoveEvent(QMouseEvent* event) {
     if (m_mesh_edit) { mesh_edit_mouse_move(event); update(); return; }
     m_gizmo_cursor = event->position();
+
+    // While camera bounds is being dragged, update camera bounds
+    if (m_bounds_dragging && m_bounds_active_handle != BoundsHandle::None && m_has_scene) {
+        float curr_wx = 0.0f, curr_wy = 0.0f;
+        if (CameraBoundsGizmo::screen_to_world_xy(event->position().x(), event->position().y(),
+                                                  width(), height(),
+                                                  m_gizmo_view, m_gizmo_proj,
+                                                  curr_wx, curr_wy)) {
+            float dwx = curr_wx - m_bounds_drag_start_world_x;
+            float dwy = curr_wy - m_bounds_drag_start_world_y;
+            av::CameraBounds new_cb = CameraBoundsGizmo::calculate_drag(m_bounds_drag_initial,
+                                                                        m_bounds_active_handle,
+                                                                        dwx, dwy);
+            av::scene_set_camera_bounds(m_scene, new_cb);
+            emit cameraBoundsChanged(new_cb);
+            emit sceneEdited();
+            update();
+            return;
+        }
+    }
 
     // While the gizmo is being dragged it owns the mouse.
     // (is_active() is only true mid-drag now; a stale post-release true can no
@@ -4116,6 +4223,35 @@ void Viewport3DWidget::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
+    // Passive camera bounds hover test
+    if (m_has_scene && m_show_camera_bounds && !m_orbiting && !m_panning && !m_mesh_edit) {
+        av::CameraBounds cb;
+        if (av::scene_get_camera_bounds(m_scene, cb)) {
+            BoundsHandle h = m_bounds_gizmo.hit_test(event->position(), cb,
+                                                     width(), height(),
+                                                     m_gizmo_view, m_gizmo_proj);
+            if (h != m_bounds_hover_handle) {
+                m_bounds_hover_handle = h;
+                update();
+            }
+            if (h != BoundsHandle::None) {
+                switch (h) {
+                    case BoundsHandle::Center: setCursor(QCursor(Qt::SizeAllCursor)); break;
+                    case BoundsHandle::Left:
+                    case BoundsHandle::Right: setCursor(QCursor(Qt::SizeHorCursor)); break;
+                    case BoundsHandle::Bottom:
+                    case BoundsHandle::Top: setCursor(QCursor(Qt::SizeVerCursor)); break;
+                    case BoundsHandle::CornerBL:
+                    case BoundsHandle::CornerTR: setCursor(QCursor(Qt::SizeBDiagCursor)); break;
+                    case BoundsHandle::CornerBR:
+                    case BoundsHandle::CornerTL: setCursor(QCursor(Qt::SizeFDiagCursor)); break;
+                    default: break;
+                }
+                return;
+            }
+        }
+    }
+
     const int dx = event->pos().x() - m_last_mouse_pos.x();
     const int dy = event->pos().y() - m_last_mouse_pos.y();
     m_last_mouse_pos = event->pos();
@@ -4177,6 +4313,13 @@ void Viewport3DWidget::mouseMoveEvent(QMouseEvent* event) {
 
 void Viewport3DWidget::mouseReleaseEvent(QMouseEvent* event) {
     if (m_mesh_edit) { mesh_edit_mouse_release(event); update(); return; }
+    if (m_bounds_dragging) {
+        m_bounds_dragging = false;
+        m_bounds_active_handle = BoundsHandle::None;
+        setCursor(QCursor(Qt::ArrowCursor));
+        update();
+        return;
+    }
     if (event->button() == Qt::LeftButton) {
         const bool was_cube_dragging = m_view_cube_dragging;
         const bool was_cube_clicking = m_view_cube_clicking;
@@ -4281,6 +4424,22 @@ void Viewport3DWidget::mouseReleaseEvent(QMouseEvent* event) {
         const int travelled = (event->pos() - m_mouse_press_pos).manhattanLength();
         if (!gizmo_was_active && !was_cube_dragging && travelled <= 6 && m_has_scene) {
             pick_object_at(event->position());
+            if (m_selected_scene_object < 0) {
+                av::CameraBounds cb;
+                if (m_show_camera_bounds && av::scene_get_camera_bounds(m_scene, cb)) {
+                    BoundsHandle h = m_bounds_gizmo.hit_test(event->position(), cb,
+                                                             width(), height(),
+                                                             m_gizmo_view, m_gizmo_proj);
+                    m_camera_bounds_selected = (h != BoundsHandle::None);
+                    emit cameraBoundsSelected(m_camera_bounds_selected);
+                } else {
+                    m_camera_bounds_selected = false;
+                    emit cameraBoundsSelected(false);
+                }
+            } else {
+                m_camera_bounds_selected = false;
+                emit cameraBoundsSelected(false);
+            }
         }
         // An orbit/pan that ended keeps its inertia; a click kills it.
         if (travelled <= 6) {
@@ -4290,6 +4449,10 @@ void Viewport3DWidget::mouseReleaseEvent(QMouseEvent* event) {
     }
     if (event->button() == Qt::RightButton) {
         m_rmb_down = false;
+        const int travelled = (event->pos() - m_mouse_press_pos).manhattanLength();
+        if (travelled <= 6 && m_has_scene) {
+            show_viewport_context_menu(event->globalPosition().toPoint());
+        }
     }
     if (event->button() == Qt::MiddleButton) {
         m_panning = false;
@@ -4543,8 +4706,10 @@ void Viewport3DWidget::set_gizmo_mode(int mode) {
     m_gizmo_mode = std::clamp(mode, 0, 3);
     if (m_gizmo_bar) {
         const auto btns = m_gizmo_bar->findChildren<QToolButton*>();
-        for (QToolButton* b : btns)
-            b->setChecked(b->property("mode").toInt() == m_gizmo_mode);
+        for (QToolButton* b : btns) {
+            const int m = b->property("mode").toInt();
+            if (m >= 0) b->setChecked(m == m_gizmo_mode);
+        }
     }
     const char* hint =
         m_gizmo_mode == GizmoMove   ? "Move tool — drag an arrow (hold Ctrl to snap to 1-unit grid)"
@@ -5062,6 +5227,10 @@ void Viewport3DWidget::duplicate_scene_object(int index) {
     ro.name = dup.name;
     ro.mesh_name = dup.mesh_name;
     ro.local_aabb = dup.local_aabb;
+    ro.has_diffuse_color = dup.has_model_diffuse_color;
+    ro.diffuse_color[0] = dup.model_diffuse_color[0];
+    ro.diffuse_color[1] = dup.model_diffuse_color[1];
+    ro.diffuse_color[2] = dup.model_diffuse_color[2];
     m_render_objects.push_back(std::move(ro));
 
     set_selected_object(new_idx);
@@ -5283,10 +5452,13 @@ int Viewport3DWidget::append_render_object_for_index(int index) {
     ro.name = obj.name;
     ro.mesh_name = obj.mesh_name;
     ro.local_aabb = obj.local_aabb;
+    ro.has_diffuse_color = obj.has_model_diffuse_color;
+    ro.diffuse_color[0] = obj.model_diffuse_color[0];
+    ro.diffuse_color[1] = obj.model_diffuse_color[1];
+    if (m_scene_ground_textures.size() <= static_cast<size_t>(index))
+        m_scene_ground_textures.resize(index + 1);
 
     if (!obj.ground_meshes.empty()) {
-        if (m_scene_ground_textures.size() <= static_cast<size_t>(index))
-            m_scene_ground_textures.resize(index + 1);
         auto& textures = m_scene_ground_textures[index];
         textures.resize(obj.ground_meshes.size(), 0);
         const std::vector<fs::path> scene_roots = current_scene_roots();
@@ -6115,55 +6287,79 @@ void Viewport3DWidget::draw_mesh_edit_overlay() {
     p.end();
 }
 
-void Viewport3DWidget::add_scene_object(const QString& kind) {
+void Viewport3DWidget::add_scene_object(const QString& kind, const float* spawn_pos) {
     if (!has_scene()) return;
     const std::string before = capture_scene_snapshot();
     av::SceneObject obj;
-    obj.pos_x = m_cam_target[0];
-    obj.pos_y = m_cam_target[1];
-    obj.pos_z = m_cam_target[2];
-    obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
 
-    if (kind == "Spawn") {
-        obj.name = "spawn_point";
-        obj.is_spawn_point = true;
-    } else if (kind == "Portal") {
-        obj.name = "portal_gate";
-        obj.is_portal = true;
-    } else if (kind == "Model") {
-        obj.name = "new_model";
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    if (spawn_pos) {
+        x = spawn_pos[0];
+        y = spawn_pos[1];
+        z = spawn_pos[2];
     } else {
-        obj.name = "empty_object";
+        x = m_cam_target[0];
+        z = 0.0f;
+        y = av::scene_terrain_top_y(m_scene, x);
+        if (std::abs(y - m_cam_target[1]) > 300.0f) {
+            y = m_cam_target[1];
+        }
     }
 
-    m_scene.objects.push_back(obj);
-    int new_idx = static_cast<int>(m_scene.objects.size() - 1);
+    const std::string ident = av::scene_fresh_identifier(m_scene);
 
-    SceneRenderObject ro;
-    ro.pos[0] = obj.pos_x; ro.pos[1] = obj.pos_y; ro.pos[2] = obj.pos_z;
-    swk::object_world_matrix(obj, ro.world_matrix);
-    swk::object_render_matrix(obj, ro.render_matrix);
-    ro.hidden = false;
-    ro.is_portal = obj.is_portal;
-    ro.is_spawn_point = obj.is_spawn_point;
-    ro.is_camera = obj.is_camera;
-    ro.is_dimension_object = obj.is_dimension_object;
-    ro.object_index = new_idx;
-    ro.name = obj.name;
-    ro.mesh_name = obj.mesh_name;
-    ro.local_aabb = obj.local_aabb;
-    m_render_objects.push_back(std::move(ro));
+    if (kind == QStringLiteral("Spawn")) {
+        obj = av::scene_build_spawn_object(ident, x, y);
+        obj.pos_z = z;
+    } else if (kind == QStringLiteral("Portal")) {
+        obj = av::scene_build_portal_object(ident, x, y);
+        obj.pos_z = z;
+    } else {
+        obj.name = ident;
+        obj.pos_x = x;
+        obj.pos_y = y;
+        obj.pos_z = z;
+        obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
+        obj.local_aabb = av::scene_build_local_aabb(-20.0f, -20.0f, 20.0f, 20.0f);
+    }
+
+    m_scene.objects.push_back(std::move(obj));
+    const int new_idx = static_cast<int>(m_scene.objects.size() - 1);
+
+    if (m_scene_ground_textures.size() <= static_cast<size_t>(new_idx)) {
+        m_scene_ground_textures.resize(new_idx + 1);
+    }
+
+    av::scene_refresh(m_scene);
+    ensure_pasted_model_resources(m_scene.objects[new_idx]);
+    ensure_pasted_background_resources(m_scene.objects[new_idx].background_name);
+    append_render_object_for_index(new_idx);
+
+    const float dx = m_scene.bounds_max[0] - m_scene.bounds_min[0];
+    const float dy = m_scene.bounds_max[1] - m_scene.bounds_min[1];
+    const float dz = m_scene.bounds_max[2] - m_scene.bounds_min[2];
+    m_scene_extent = std::max(1000.0f, std::sqrt(dx * dx + dy * dy + dz * dz) * 1.5f);
+
+    auto wit = m_scene_cache.find(m_current_scene_path);
+    if (wit != m_scene_cache.end() && wit->second) {
+        wit->second->scene = m_scene;
+        wit->second->render_objects = m_render_objects;
+        wit->second->scene_ground_textures = m_scene_ground_textures;
+        wit->second->all_mesh_gpu = m_all_mesh_gpu;
+        wit->second->scene_extent = m_scene_extent;
+    }
 
     set_selected_object(new_idx);
     emit sceneObjectSelected(new_idx);
     update();
     emit sceneEdited();
-    push_scene_snapshot_undo(before, QString("Add %1").arg(kind));
+    push_scene_snapshot_undo(before, QStringLiteral("Add %1").arg(kind));
 }
 
 int Viewport3DWidget::add_template_object(const QString& template_name,
                                           const av::SceneObject* template_object,
-                                          float template_scaling) {
+                                          float template_scaling,
+                                          const float* spawn_pos) {
     if (!has_scene() || template_name.isEmpty()) return -1;
     const std::string before = capture_scene_snapshot();
     const std::string name = template_name.toStdString();
@@ -6171,89 +6367,154 @@ int Viewport3DWidget::add_template_object(const QString& template_name,
     av::SceneObject obj;
     obj.template_name = name;
     obj.name = av::scene_fresh_identifier(m_scene);
-    obj.pos_x = m_cam_target[0];
-    obj.pos_y = m_cam_target[1];
-    obj.pos_z = m_cam_target[2];
+
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    if (spawn_pos) {
+        x = spawn_pos[0];
+        y = spawn_pos[1];
+        z = spawn_pos[2];
+    } else {
+        x = m_cam_target[0];
+        z = 0.0f;
+        y = av::scene_terrain_top_y(m_scene, x);
+        if (std::abs(y - m_cam_target[1]) > 300.0f) {
+            y = m_cam_target[1];
+        }
+    }
+    obj.pos_x = x;
+    obj.pos_y = y;
+    obj.pos_z = z;
     obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
     obj.template_scaling = template_scaling;
+
     if (template_object) {
-        // Keep the link by name AND carry the template's components locally so
-        // the object renders even when the scene does not import this .scl —
-        // the game treats it as a template override (schema-merged, no dupes).
         obj.components = template_object->components;
         obj.local_aabb = template_object->local_aabb;
     }
+    if (obj.local_aabb.empty()) {
+        obj.local_aabb = av::scene_build_local_aabb(-25.0f, -25.0f, 25.0f, 25.0f);
+    }
+
     m_scene.objects.push_back(std::move(obj));
     const int new_idx = static_cast<int>(m_scene.objects.size() - 1);
 
-    // scene_refresh resolves the template (mesh_name, background, lights, …).
+    if (m_scene_ground_textures.size() <= static_cast<size_t>(new_idx)) {
+        m_scene_ground_textures.resize(new_idx + 1);
+    }
+
     av::scene_refresh(m_scene);
     ensure_pasted_model_resources(m_scene.objects[new_idx]);
     ensure_pasted_background_resources(m_scene.objects[new_idx].background_name);
     append_render_object_for_index(new_idx);
 
+    const float dx = m_scene.bounds_max[0] - m_scene.bounds_min[0];
+    const float dy = m_scene.bounds_max[1] - m_scene.bounds_min[1];
+    const float dz = m_scene.bounds_max[2] - m_scene.bounds_min[2];
+    m_scene_extent = std::max(1000.0f, std::sqrt(dx * dx + dy * dy + dz * dz) * 1.5f);
+
+    auto wit = m_scene_cache.find(m_current_scene_path);
+    if (wit != m_scene_cache.end() && wit->second) {
+        wit->second->scene = m_scene;
+        wit->second->render_objects = m_render_objects;
+        wit->second->scene_ground_textures = m_scene_ground_textures;
+        wit->second->all_mesh_gpu = m_all_mesh_gpu;
+        wit->second->scene_extent = m_scene_extent;
+    }
+
     set_selected_object(new_idx);
     emit sceneObjectSelected(new_idx);
     update();
     emit sceneEdited();
-    push_scene_snapshot_undo(before, "Add Template " + template_name);
+    push_scene_snapshot_undo(before, QStringLiteral("Add Template ") + template_name);
     return new_idx;
 }
 
-int Viewport3DWidget::add_model_object(const QString& pod_path, const QString& display_name) {
+int Viewport3DWidget::add_model_object(const QString& pod_path, const QString& display_name,
+                                      const float* spawn_pos) {
     if (!has_scene() || pod_path.isEmpty()) return -1;
     const std::string before = capture_scene_snapshot();
 
-    // Measure the model's own bounds for the LocalAABB (web editor §3.4
-    // parity — models added to a scene get a correct bounding box immediately).
     av::PODModel model = load_pod_to_ram(pod_path.toStdString(), "");
     const bool has_bounds = !model.meshes.empty();
     const fs::path pod(pod_path.toStdString());
     const std::string mesh_name = pod.stem().string();
 
-    av::SceneObject obj;
-    // Identifier = pod stem (or the palette's display name), deduped against
-    // the live scene like the ground-mesh add path.
-    std::string base_name = display_name.isEmpty()
-                                ? mesh_name
-                                : display_name.toStdString();
+    std::string base_name = display_name.isEmpty() ? mesh_name : display_name.toStdString();
     if (base_name.empty()) base_name = mesh_name;
-    obj.name = base_name;
+
+    av::SceneObject obj = av::scene_build_pod_object(pod_path.toStdString(), base_name);
+
+    // Deduplicate object name against live scene
     {
         bool taken = false;
-        for (const auto& o : m_scene.objects)
+        for (const auto& o : m_scene.objects) {
             if (o.name == obj.name) { taken = true; break; }
+        }
         int suffix = 2;
         while (taken) {
             const std::string cand = base_name + "_" + std::to_string(suffix++);
             taken = false;
-            for (const auto& o : m_scene.objects)
+            for (const auto& o : m_scene.objects) {
                 if (o.name == cand) { taken = true; break; }
+            }
             if (!taken) obj.name = cand;
         }
     }
-    obj.pos_x = m_cam_target[0];
-    obj.pos_y = m_cam_target[1];
-    obj.pos_z = m_cam_target[2];
-    obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
-    obj.mesh_name = mesh_name;
-    if (has_bounds) {
-        obj.local_aabb = av::scene_build_local_aabb(model.min_x, model.min_y,
-                                                    model.max_x, model.max_y);
+
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    if (spawn_pos) {
+        x = spawn_pos[0];
+        y = spawn_pos[1];
+        z = spawn_pos[2];
+    } else {
+        x = m_cam_target[0];
+        z = 0.0f;
+        y = av::scene_terrain_top_y(m_scene, x);
+        if (std::abs(y - m_cam_target[1]) > 300.0f) {
+            y = m_cam_target[1];
+        }
     }
-    obj.components.push_back(av::scene_make_model_component(mesh_name));
+
+    // Model lifting: lift model so its bottom sits on ground
+    if (has_bounds && model.min_y < 0.0f) {
+        y += (-model.min_y);
+    }
+
+    obj.pos_x = x;
+    obj.pos_y = y;
+    obj.pos_z = z;
+    obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
+
     m_scene.objects.push_back(std::move(obj));
     const int new_idx = static_cast<int>(m_scene.objects.size() - 1);
+
+    if (m_scene_ground_textures.size() <= static_cast<size_t>(new_idx)) {
+        m_scene_ground_textures.resize(new_idx + 1);
+    }
 
     av::scene_refresh(m_scene);
     ensure_pasted_model_resources(m_scene.objects[new_idx]);
     append_render_object_for_index(new_idx);
 
+    const float dx = m_scene.bounds_max[0] - m_scene.bounds_min[0];
+    const float dy = m_scene.bounds_max[1] - m_scene.bounds_min[1];
+    const float dz = m_scene.bounds_max[2] - m_scene.bounds_min[2];
+    m_scene_extent = std::max(1000.0f, std::sqrt(dx * dx + dy * dy + dz * dz) * 1.5f);
+
+    auto wit = m_scene_cache.find(m_current_scene_path);
+    if (wit != m_scene_cache.end() && wit->second) {
+        wit->second->scene = m_scene;
+        wit->second->render_objects = m_render_objects;
+        wit->second->scene_ground_textures = m_scene_ground_textures;
+        wit->second->all_mesh_gpu = m_all_mesh_gpu;
+        wit->second->scene_extent = m_scene_extent;
+    }
+
     set_selected_object(new_idx);
     emit sceneObjectSelected(new_idx);
     update();
     emit sceneEdited();
-    push_scene_snapshot_undo(before, QString("Add Model %1").arg(display_name));
+    push_scene_snapshot_undo(before, QStringLiteral("Add Model ") + QString::fromStdString(base_name));
     return new_idx;
 }
 
@@ -6367,6 +6628,10 @@ int Viewport3DWidget::add_ground_mesh_object(av::SceneObject obj) {
     ro.name = obj.name;
     ro.mesh_name = obj.mesh_name;
     ro.local_aabb = obj.local_aabb;
+    ro.has_diffuse_color = obj.has_model_diffuse_color;
+    ro.diffuse_color[0] = obj.model_diffuse_color[0];
+    ro.diffuse_color[1] = obj.model_diffuse_color[1];
+    ro.diffuse_color[2] = obj.model_diffuse_color[2];
     ro.ground_textures = textures;
     ro.ground_tex_names.reserve(obj.ground_meshes.size());
     for (size_t gi = 0; gi < obj.ground_meshes.size(); ++gi)
@@ -6814,6 +7079,275 @@ void Viewport3DWidget::draw_view_cube() {
 
     glViewport(orig_viewport[0], orig_viewport[1], orig_viewport[2], orig_viewport[3]);
     glEnable(GL_LIGHTING);
+}
+
+// ============================================================================
+// Camera Bounds & Smart Placement Operations
+// ============================================================================
+
+void Viewport3DWidget::toggle_show_camera_bounds(bool show) {
+    m_show_camera_bounds = show;
+    if (m_bounds_btn && m_bounds_btn->isChecked() != show) {
+        QSignalBlocker blocker(m_bounds_btn);
+        m_bounds_btn->setChecked(show);
+    }
+    if (!show) {
+        m_camera_bounds_selected = false;
+        m_bounds_hover_handle = BoundsHandle::None;
+        m_bounds_active_handle = BoundsHandle::None;
+        m_bounds_dragging = false;
+        unsetCursor();
+    }
+    update();
+}
+
+bool Viewport3DWidget::has_camera_bounds() const {
+    if (!has_scene()) return false;
+    av::CameraBounds cb;
+    return av::scene_get_camera_bounds(m_scene, cb);
+}
+
+av::CameraBounds Viewport3DWidget::camera_bounds() const {
+    av::CameraBounds cb;
+    if (has_scene()) {
+        av::scene_get_camera_bounds(m_scene, cb);
+    }
+    return cb;
+}
+
+void Viewport3DWidget::set_camera_bounds(const av::CameraBounds& cb) {
+    if (!has_scene()) return;
+    const std::string before = capture_scene_snapshot();
+    av::scene_set_camera_bounds(m_scene, cb);
+    emit cameraBoundsChanged(cb);
+    emit sceneEdited();
+    update();
+    push_scene_snapshot_undo(before, QStringLiteral("Set Camera Bounds"));
+}
+
+void Viewport3DWidget::fit_camera_bounds() {
+    if (!has_scene()) return;
+    av::CameraBounds cb = av::scene_fit_camera_bounds_to_level(m_scene);
+    set_camera_bounds(cb);
+    toggle_show_camera_bounds(true);
+}
+
+void Viewport3DWidget::remove_camera_bounds() {
+    if (!has_scene()) return;
+    const std::string before = capture_scene_snapshot();
+    av::scene_remove_camera_bounds(m_scene);
+    av::CameraBounds empty;
+    emit cameraBoundsChanged(empty);
+    emit sceneEdited();
+    toggle_show_camera_bounds(false);
+    update();
+    push_scene_snapshot_undo(before, QStringLiteral("Remove Camera Bounds"));
+}
+
+void Viewport3DWidget::frame_camera_bounds() {
+    if (!has_scene()) return;
+    av::CameraBounds cb;
+    if (!av::scene_get_camera_bounds(m_scene, cb)) return;
+    toggle_show_camera_bounds(true);
+    m_cam_target[0] = cb.center_x();
+    m_cam_target[1] = cb.center_y();
+    m_cam_target[2] = 0.0f;
+    m_cam_pitch = 0.0f;
+    m_cam_yaw = 0.0f;
+    const float max_dim = std::max(cb.width, cb.height * 1.33f);
+    m_cam_dist = std::max(300.0f, max_dim * 1.25f);
+    update();
+}
+
+void Viewport3DWidget::show_viewport_context_menu(const QPoint& screen_pos) {
+    if (!has_scene()) return;
+
+    QPoint widget_pos = mapFromGlobal(screen_pos);
+    float wx = 0.0f, wy = 0.0f;
+    CameraBoundsGizmo::screen_to_world_xy(widget_pos.x(), widget_pos.y(),
+                                          width(), height(),
+                                          m_gizmo_view, m_gizmo_proj,
+                                          wx, wy);
+
+    float snap_y = av::scene_terrain_top_y(m_scene, wx);
+    if (std::abs(snap_y - wy) < 150.0f) {
+        wy = snap_y;
+    }
+    const float spawn_pos[3] = { wx, wy, 0.0f };
+
+    QMenu menu(this);
+    menu.setStyleSheet(QStringLiteral(
+        "QMenu { background-color: #1e222b; color: #dce1e8; border: 1px solid #333a48; border-radius: 6px; padding: 4px; }"
+        "QMenu::item { padding: 5px 24px 5px 20px; border-radius: 4px; }"
+        "QMenu::item:selected { background-color: #3b82f6; color: #ffffff; }"
+        "QMenu::separator { height: 1px; background: #2f3542; margin: 4px 8px; }"
+    ));
+
+    QMenu* add_sub = menu.addMenu(QStringLiteral("Add Object Here"));
+    add_sub->addAction(QStringLiteral("Spawn Point"), this, [this, spawn_pos]() {
+        add_scene_object(QStringLiteral("Spawn"), spawn_pos);
+    });
+    add_sub->addAction(QStringLiteral("Portal Gate"), this, [this, spawn_pos]() {
+        add_scene_object(QStringLiteral("Portal"), spawn_pos);
+    });
+    add_sub->addAction(QStringLiteral("Empty Object"), this, [this, spawn_pos]() {
+        add_scene_object(QStringLiteral("Empty"), spawn_pos);
+    });
+    add_sub->addAction(QStringLiteral("Choose Model (.pod)..."), this, [this, spawn_pos]() {
+        const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Select Model"),
+                                                          QString(), QStringLiteral("POD Models (*.pod)"));
+        if (!file.isEmpty()) {
+            add_model_object(file, QString(), spawn_pos);
+        }
+    });
+
+    menu.addSeparator();
+
+    QMenu* bounds_sub = menu.addMenu(QStringLiteral("Camera Bounds"));
+    bounds_sub->addAction(QStringLiteral("Fit to Scene Level"), this, [this]() {
+        fit_camera_bounds();
+    });
+    bounds_sub->addAction(QStringLiteral("Frame Bounds in View"), this, [this]() {
+        frame_camera_bounds();
+    });
+    bounds_sub->addAction(m_show_camera_bounds ? QStringLiteral("Hide Bounds Shroud") : QStringLiteral("Show Bounds Shroud"),
+                          this, [this]() {
+        toggle_show_camera_bounds(!m_show_camera_bounds);
+    });
+    if (has_camera_bounds()) {
+        bounds_sub->addAction(QStringLiteral("Remove Camera Bounds"), this, [this]() {
+            remove_camera_bounds();
+        });
+    } else {
+        bounds_sub->addAction(QStringLiteral("Create Camera Bounds"), this, [this]() {
+            fit_camera_bounds();
+        });
+    }
+
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Center Camera Here"), this, [this, wx, wy]() {
+        m_cam_target[0] = wx;
+        m_cam_target[1] = wy;
+        m_cam_target[2] = 0.0f;
+        update();
+    });
+    menu.addAction(QStringLiteral("Reset View"), this, [this]() {
+        reset_camera();
+    });
+
+    menu.exec(screen_pos);
+}
+
+// ── Drag & Drop Overrides ──
+
+void Viewport3DWidget::dragEnterEvent(QDragEnterEvent* event) {
+    if (!m_has_scene) {
+        event->ignore();
+        return;
+    }
+    const QMimeData* mime = event->mimeData();
+    if (mime->hasFormat(QStringLiteral("application/x-ruby-template")) ||
+        mime->hasFormat(QStringLiteral("application/x-ruby-model")) ||
+        mime->hasUrls() || mime->hasText()) {
+        event->acceptProposedAction();
+        m_drag_hover_active = true;
+        update();
+    } else {
+        event->ignore();
+    }
+}
+
+void Viewport3DWidget::dragMoveEvent(QDragMoveEvent* event) {
+    if (!m_has_scene) {
+        event->ignore();
+        return;
+    }
+    event->acceptProposedAction();
+    m_drag_hover_screen_pos = event->position();
+    float wx = 0.0f, wy = 0.0f;
+    CameraBoundsGizmo::screen_to_world_xy(event->position().x(), event->position().y(),
+                                          width(), height(),
+                                          m_gizmo_view, m_gizmo_proj,
+                                          wx, wy);
+    float snap_y = av::scene_terrain_top_y(m_scene, wx);
+    if (std::abs(snap_y - wy) < 150.0f) {
+        wy = snap_y;
+    }
+    m_drag_hover_world[0] = wx;
+    m_drag_hover_world[1] = wy;
+    m_drag_hover_world[2] = 0.0f;
+
+    const QMimeData* mime = event->mimeData();
+    if (mime->hasFormat(QStringLiteral("application/x-ruby-template"))) {
+        m_drag_hover_label = QString::fromUtf8(mime->data(QStringLiteral("application/x-ruby-template")));
+    } else if (mime->hasFormat(QStringLiteral("application/x-ruby-model"))) {
+        m_drag_hover_label = QFileInfo(QString::fromUtf8(mime->data(QStringLiteral("application/x-ruby-model")))).baseName();
+    } else if (mime->hasUrls() && !mime->urls().isEmpty()) {
+        m_drag_hover_label = mime->urls().first().fileName();
+    } else if (mime->hasText()) {
+        m_drag_hover_label = mime->text();
+    }
+    m_drag_hover_active = true;
+    update();
+}
+
+void Viewport3DWidget::dragLeaveEvent(QDragLeaveEvent* event) {
+    Q_UNUSED(event);
+    m_drag_hover_active = false;
+    update();
+}
+
+void Viewport3DWidget::dropEvent(QDropEvent* event) {
+    m_drag_hover_active = false;
+    if (!m_has_scene) {
+        event->ignore();
+        return;
+    }
+    const QMimeData* mime = event->mimeData();
+    float wx = 0.0f, wy = 0.0f;
+    CameraBoundsGizmo::screen_to_world_xy(event->position().x(), event->position().y(),
+                                          width(), height(),
+                                          m_gizmo_view, m_gizmo_proj,
+                                          wx, wy);
+    float snap_y = av::scene_terrain_top_y(m_scene, wx);
+    if (std::abs(snap_y - wy) < 150.0f) {
+        wy = snap_y;
+    }
+    const float spawn_pos[3] = { wx, wy, 0.0f };
+
+    if (mime->hasFormat(QStringLiteral("application/x-ruby-template"))) {
+        QString templ = QString::fromUtf8(mime->data(QStringLiteral("application/x-ruby-template")));
+        add_template_object(templ, nullptr, 1.0f, spawn_pos);
+        event->acceptProposedAction();
+    } else if (mime->hasFormat(QStringLiteral("application/x-ruby-model"))) {
+        QString pod = QString::fromUtf8(mime->data(QStringLiteral("application/x-ruby-model")));
+        add_model_object(pod, QString(), spawn_pos);
+        event->acceptProposedAction();
+    } else if (mime->hasUrls()) {
+        bool handled = false;
+        for (const QUrl& url : mime->urls()) {
+            QString path = url.toLocalFile();
+            if (path.endsWith(QStringLiteral(".pod"), Qt::CaseInsensitive)) {
+                add_model_object(path, QString(), spawn_pos);
+                handled = true;
+                break;
+            }
+        }
+        if (handled) event->acceptProposedAction();
+        else event->ignore();
+    } else if (mime->hasText()) {
+        QString txt = mime->text().trimmed();
+        if (txt.endsWith(QStringLiteral(".pod"), Qt::CaseInsensitive)) {
+            add_model_object(txt, QString(), spawn_pos);
+            event->acceptProposedAction();
+        } else {
+            add_template_object(txt, nullptr, 1.0f, spawn_pos);
+            event->acceptProposedAction();
+        }
+    } else {
+        event->ignore();
+    }
+    update();
 }
 
 } // namespace ruby::viewport

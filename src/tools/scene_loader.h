@@ -59,6 +59,25 @@ struct SceneComponentField {
     std::string bytes_value;
 };
 
+// ============================================================
+// Camera Rectangle (Scene Bounds, Tag 3 Rectangle in wire format)
+// Stored as raw bytes in SceneData::bounds[0].
+// ============================================================
+struct CameraBounds {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 300.0f;
+    float height = 150.0f;
+    bool enabled = false;
+
+    float min_x() const { return x; }
+    float min_y() const { return y; }
+    float max_x() const { return x + width; }
+    float max_y() const { return y + height; }
+    float center_x() const { return x + width * 0.5f; }
+    float center_y() const { return y + height * 0.5f; }
+};
+
 // Forward declaration (full definition below SceneData).
 struct SceneGroup;
 
@@ -95,6 +114,12 @@ struct SceneObject {
     // Ignoring it makes doors/objects face the viewer instead of their mesh side.
     float       model_y_rotation = 0.0f;
     bool        has_model_y_rotation = false;
+    float       model_x_rotation = 0.0f;     // ModelComponent Tag 4: XRotation (radians)
+    bool        has_model_x_rotation = false;
+    float       model_origin[3] = {0.0f, 0.0f, 0.0f}; // ModelComponent Tag 6: Origin (Vector3)
+    bool        has_model_origin = false;
+    float       model_diffuse_color[3] = {1.0f, 1.0f, 1.0f}; // ModelComponent Tag 8: DiffuseColor (FloatColor)
+    bool        has_model_diffuse_color = false;
     bool        is_spawn_point = false;  // SpawnPoint component (camera port)
     int         spawn_facing = 1;        // SpawnPointComponent.FacingDirection
     float       spawn_offset[3] = {0.0f, 0.0f, 0.0f};
@@ -438,6 +463,22 @@ SceneComponent scene_make_model_component(const std::string& model_name);
 // LocalAABB (SceneObject field 8) = Rectangle { X, Y, W, H } fixed32 floats.
 std::string scene_build_local_aabb(float min_x, float min_y,
                                    float max_x, float max_y);
+
+// Camera Bounds (Tag 3 Rectangle) helpers
+bool scene_get_camera_bounds(const SceneData& scene, CameraBounds& out);
+void scene_set_camera_bounds(SceneData& scene, const CameraBounds& cb);
+void scene_remove_camera_bounds(SceneData& scene);
+CameraBounds scene_fit_camera_bounds_to_level(const SceneData& scene, float padding_x = 80.0f, float padding_y = 60.0f);
+
+// Terrain surface sampling: scans ground meshes in scene to find highest surface Y at coordinate X
+float scene_terrain_top_y(const SceneData& scene, float x, float tolerance = 150.0f);
+
+// Standard object construction helpers
+SceneComponent scene_make_spawn_component(int facing = 1, float off_x = 0, float off_y = 0, float off_z = 0);
+SceneComponent scene_make_portal_component(const std::string& destination = "", const std::string& spawn_point = "", bool tap_to_enter = false);
+SceneObject scene_build_pod_object(const std::string& pod_path, const std::string& identifier);
+SceneObject scene_build_spawn_object(const std::string& identifier, float x, float y, int facing = 1);
+SceneObject scene_build_portal_object(const std::string& identifier, float x, float y);
 
 // Serialize and atomically write a SceneData back to disk.
 // All objects are re-serialised via proto::Writer; all preserved raw-byte

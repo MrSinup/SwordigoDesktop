@@ -474,6 +474,78 @@ InspectorPanel::InspectorPanel(QWidget* parent) : QWidget(parent) {
     m_ground_mesh_layout->setSpacing(6);
     m_container_layout->addWidget(m_ground_mesh_group);
 
+    // ── Camera Bounds Group (Level Boundaries) ──
+    m_bounds_group = new QGroupBox(tr("Camera Bounds (Level Size)"), m_container);
+    auto* bounds_layout = new QVBoxLayout(m_bounds_group);
+    bounds_layout->setContentsMargins(8, 8, 8, 8);
+    bounds_layout->setSpacing(6);
+
+    auto make_bounds_sb = [this](QDoubleSpinBox*& sb, double min_v, double max_v, double step, int dec, double def_v) {
+        sb = new QDoubleSpinBox(m_bounds_group);
+        sb->setRange(min_v, max_v);
+        sb->setSingleStep(step);
+        sb->setDecimals(dec);
+        sb->setValue(def_v);
+        sb->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+        connect(sb, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, &InspectorPanel::on_bounds_spinbox_changed);
+    };
+
+    auto* bounds_pos_box = new QWidget(m_bounds_group);
+    auto* bpos_layout = new QHBoxLayout(bounds_pos_box);
+    bpos_layout->setContentsMargins(0, 0, 0, 0);
+    bpos_layout->setSpacing(4);
+    make_bounds_sb(m_bounds_x, -99999.0, 99999.0, 5.0, 1, 0.0);
+    make_bounds_sb(m_bounds_y, -99999.0, 99999.0, 5.0, 1, 0.0);
+    auto* bpos_lbl = new QLabel("Min:", bounds_pos_box);
+    bpos_lbl->setFixedWidth(30);
+    bpos_layout->addWidget(bpos_lbl);
+    bpos_layout->addWidget(new QLabel("X", bounds_pos_box)); bpos_layout->addWidget(m_bounds_x);
+    bpos_layout->addWidget(new QLabel("Y", bounds_pos_box)); bpos_layout->addWidget(m_bounds_y);
+    bounds_layout->addWidget(bounds_pos_box);
+
+    auto* bounds_size_box = new QWidget(m_bounds_group);
+    auto* bsize_layout = new QHBoxLayout(bounds_size_box);
+    bsize_layout->setContentsMargins(0, 0, 0, 0);
+    bsize_layout->setSpacing(4);
+    make_bounds_sb(m_bounds_w, 20.0, 99999.0, 10.0, 1, 400.0);
+    make_bounds_sb(m_bounds_h, 20.0, 99999.0, 10.0, 1, 300.0);
+    auto* bsize_lbl = new QLabel("Size:", bounds_size_box);
+    bsize_lbl->setFixedWidth(30);
+    bsize_layout->addWidget(bsize_lbl);
+    bsize_layout->addWidget(new QLabel("W", bounds_size_box)); bsize_layout->addWidget(m_bounds_w);
+    bsize_layout->addWidget(new QLabel("H", bounds_size_box)); bsize_layout->addWidget(m_bounds_h);
+    bounds_layout->addWidget(bounds_size_box);
+
+    auto* readouts_box = new QWidget(m_bounds_group);
+    auto* rd_layout = new QFormLayout(readouts_box);
+    rd_layout->setContentsMargins(0, 2, 0, 2);
+    rd_layout->setSpacing(4);
+    m_bounds_max_x_label = new QLabel("-", readouts_box);
+    m_bounds_max_y_label = new QLabel("-", readouts_box);
+    m_bounds_center_label = new QLabel("-", readouts_box);
+    rd_layout->addRow("Max (Right):", m_bounds_max_x_label);
+    rd_layout->addRow("Max (Top):", m_bounds_max_y_label);
+    rd_layout->addRow("Center:", m_bounds_center_label);
+    bounds_layout->addWidget(readouts_box);
+
+    auto* btns_box = new QWidget(m_bounds_group);
+    auto* btns_layout = new QHBoxLayout(btns_box);
+    btns_layout->setContentsMargins(0, 4, 0, 0);
+    btns_layout->setSpacing(4);
+    m_bounds_fit_btn = new QPushButton(tr("Fit Level"), btns_box);
+    m_bounds_frame_btn = new QPushButton(tr("Frame View"), btns_box);
+    m_bounds_remove_btn = new QPushButton(tr("Remove"), btns_box);
+    connect(m_bounds_fit_btn, &QPushButton::clicked, this, &InspectorPanel::cameraBoundsFitRequested);
+    connect(m_bounds_frame_btn, &QPushButton::clicked, this, &InspectorPanel::cameraBoundsFrameRequested);
+    connect(m_bounds_remove_btn, &QPushButton::clicked, this, &InspectorPanel::cameraBoundsRemoveRequested);
+    btns_layout->addWidget(m_bounds_fit_btn);
+    btns_layout->addWidget(m_bounds_frame_btn);
+    btns_layout->addWidget(m_bounds_remove_btn);
+    bounds_layout->addWidget(btns_box);
+
+    m_container_layout->addWidget(m_bounds_group);
+
     m_container_layout->addStretch();
     clear_inspection();
 }
@@ -488,6 +560,78 @@ void InspectorPanel::clear_inspection() {
     m_refs_group->hide();
     m_components_group->hide();
     m_ground_mesh_group->hide();
+    if (m_bounds_group) m_bounds_group->hide();
+}
+
+void InspectorPanel::inspect_scene(const av::SceneData& scene) {
+    m_inspected_object_idx = -1;
+    m_block_signals = true;
+
+    m_title_label->setText(QStringLiteral("SCENE / LEVEL"));
+    m_subtitle_label->setText(QStringLiteral("%1 Objects • %2 Waters • Bounds %3")
+        .arg(scene.objects.size())
+        .arg(scene.waters.size())
+        .arg(scene.bounds.empty() ? QStringLiteral("Off") : QStringLiteral("Active")));
+
+    m_stats_group->hide();
+    m_identity_group->hide();
+    m_transform_group->hide();
+    m_refs_group->hide();
+    m_components_group->hide();
+    m_ground_mesh_group->hide();
+
+    av::CameraBounds cb;
+    const bool has_cb = av::scene_get_camera_bounds(scene, cb);
+    if (has_cb) {
+        update_camera_bounds(cb);
+        m_bounds_remove_btn->setText(QStringLiteral("Remove"));
+    } else {
+        m_bounds_x->setValue(0);
+        m_bounds_y->setValue(0);
+        m_bounds_w->setValue(400);
+        m_bounds_h->setValue(300);
+        m_bounds_max_x_label->setText(QStringLiteral("None"));
+        m_bounds_max_y_label->setText(QStringLiteral("None"));
+        m_bounds_center_label->setText(QStringLiteral("None"));
+        m_bounds_remove_btn->setText(QStringLiteral("Create"));
+    }
+
+    m_bounds_group->show();
+    m_block_signals = false;
+}
+
+void InspectorPanel::update_camera_bounds(const av::CameraBounds& cb) {
+    const bool prev_block = m_block_signals;
+    m_block_signals = true;
+
+    if (m_bounds_x) m_bounds_x->setValue(cb.x);
+    if (m_bounds_y) m_bounds_y->setValue(cb.y);
+    if (m_bounds_w) m_bounds_w->setValue(cb.width);
+    if (m_bounds_h) m_bounds_h->setValue(cb.height);
+
+    if (m_bounds_max_x_label) m_bounds_max_x_label->setText(QString::number(cb.max_x(), 'f', 1));
+    if (m_bounds_max_y_label) m_bounds_max_y_label->setText(QString::number(cb.max_y(), 'f', 1));
+    if (m_bounds_center_label)
+        m_bounds_center_label->setText(QStringLiteral("(%1, %2)").arg(cb.center_x(), 0, 'f', 1).arg(cb.center_y(), 0, 'f', 1));
+
+    m_block_signals = prev_block;
+}
+
+void InspectorPanel::on_bounds_spinbox_changed() {
+    if (m_block_signals) return;
+    av::CameraBounds cb;
+    cb.enabled = true;
+    cb.x = static_cast<float>(m_bounds_x->value());
+    cb.y = static_cast<float>(m_bounds_y->value());
+    cb.width = static_cast<float>(m_bounds_w->value());
+    cb.height = static_cast<float>(m_bounds_h->value());
+
+    if (m_bounds_max_x_label) m_bounds_max_x_label->setText(QString::number(cb.max_x(), 'f', 1));
+    if (m_bounds_max_y_label) m_bounds_max_y_label->setText(QString::number(cb.max_y(), 'f', 1));
+    if (m_bounds_center_label)
+        m_bounds_center_label->setText(QStringLiteral("(%1, %2)").arg(cb.center_x(), 0, 'f', 1).arg(cb.center_y(), 0, 'f', 1));
+
+    emit cameraBoundsChanged(cb);
 }
 
 void InspectorPanel::inspect_file(const QString& path) {
@@ -508,7 +652,7 @@ void InspectorPanel::inspect_model_info(const QString& name, int meshCount, int 
 
 void InspectorPanel::inspect_scene_object(const av::SceneData& scene, int object_index) {
     if (object_index < 0 || object_index >= static_cast<int>(scene.objects.size())) {
-        clear_inspection();
+        inspect_scene(scene);
         return;
     }
 
@@ -547,6 +691,7 @@ void InspectorPanel::inspect_scene_object(const av::SceneData& scene, int object
 
     // Show appropriate groups
     m_stats_group->hide();
+    if (m_bounds_group) m_bounds_group->hide();
     m_identity_group->show();
     m_transform_group->show();
     m_refs_group->show();

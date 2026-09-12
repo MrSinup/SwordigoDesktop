@@ -34,6 +34,7 @@ namespace fs = std::filesystem;
 #include "tools/scene_loader.h"
 #include "tools/av_renderer.h"
 #include "tools/boulder.h"
+#include "ruby/viewport/camera_bounds_gizmo.h"
 
 class QToolButton;
 
@@ -189,7 +190,7 @@ public:
 
     // Scene object manipulation (called from SceneHierarchyPanel and Inspector)
     void focus_object(int index);
-    void add_scene_object(const QString& kind);
+    void add_scene_object(const QString& kind, const float* spawn_pos = nullptr);
     int add_ground_mesh_object(av::SceneObject obj);
     void duplicate_scene_object(int index);
     void delete_scene_object(int index);
@@ -208,46 +209,35 @@ public:
     bool has_scene_clipboard() const { return !m_scene_clipboard.empty(); }
 
     // ── In-scene mesh edit (projection-locked 2D polygon editor) ────────────
-    // Port of the ImGui viewer's inline ground-mesh editor (the "3D projection
-    // lock"): arm Mesh Edit on a selected ground-mesh object and the camera
-    // snaps to the polygon's own plane — a pure 2D front view along the
-    // object's local Z (yaw from rot_y). Drag vertices, RMB an edge to insert a
-    // node, RMB/Del a vertex to remove it, G toggles grid snap, arrows nudge.
-    // Esc/M/Enter commits (regenerates the GroundMesh via boulder + re-uploads
-    // the GPU buffers); R or Ctrl+Z reverts the whole session.
     void set_mesh_edit(bool on);
     bool mesh_edit_active() const { return m_mesh_edit; }
-    // True when a scene is loaded and the active object has an editable ground
-    // polygon (>= 3 points) — the toolbar Mesh button's enabled state.
     bool can_mesh_edit() const;
 
-    // ── Template palette / template hierarchy (master TODO 2.3 + 2.4) ──────
-    // Add a template-linked object. When `template_object` is non-null the
-    // template's components are copied into the object (kept linked by name,
-    // so it renders even if the scene does not import that .scl — the game
-    // treats it as a template override). Otherwise the object is a pure
-    // template reference resolved from the scene's own libraries.
+    // ── Template palette / template hierarchy ──────────────────────────────
     int add_template_object(const QString& template_name,
                             const av::SceneObject* template_object = nullptr,
-                            float template_scaling = 1.0f);
-    // Add a model asset as a scene object: Model component (Name = pod stem)
-    // + LocalAABB measured from the pod's own bounds at add time.
-    int add_model_object(const QString& pod_path, const QString& display_name);
-    // Retarget an object to another template ("" = pure unlink: local
-    // components stay, template ones stop resolving). Rebuilds the object's
-    // render entry (mesh/background may change) and is undoable.
+                            float template_scaling = 1.0f,
+                            const float* spawn_pos = nullptr);
+    int add_model_object(const QString& pod_path, const QString& display_name = QString(),
+                         const float* spawn_pos = nullptr);
     void set_scene_object_template(int index, const QString& template_name);
-    // Unlink + materialize: the object becomes self-contained (its resolved
-    // components are copied locally, template reference cleared).
     void materialize_scene_object_template(int index);
-    // Copy one inherited component into the object's local list (editable in
-    // the inspector) while keeping the template link.
     void override_inherited_component(int index, const QString& class_name);
-    // Reset to the clean template: drop local component overrides, keep the
-    // template reference (pure link again). Undoable.
     void reset_scene_object_to_template(int index);
 
+    // ── Camera Bounds (Tag 3 Scene Rectangle) ──────────────────────────────
+    bool show_camera_bounds() const { return m_show_camera_bounds; }
+    void toggle_show_camera_bounds(bool show);
+    void set_camera_bounds(const av::CameraBounds& bounds);
+    void fit_camera_bounds();
+    void remove_camera_bounds();
+    void frame_camera_bounds();
+    bool has_camera_bounds() const;
+    av::CameraBounds camera_bounds() const;
+
 signals:
+    void cameraBoundsChanged(const av::CameraBounds& bounds);
+    void cameraBoundsSelected(bool selected);
     void modelLoaded(const QString& name, int meshCount, int vertCount);
     void sceneLoaded(const av::SceneData& scene);
     void sceneLoadingFailed(const QString& error);
@@ -285,7 +275,31 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
 private:
+    // ── Camera Bounds interactive state ──
+    CameraBoundsGizmo m_bounds_gizmo;
+    bool m_show_camera_bounds = false;
+    QToolButton* m_bounds_btn = nullptr;
+    bool m_camera_bounds_selected = false;
+    BoundsHandle m_bounds_hover_handle = BoundsHandle::None;
+    BoundsHandle m_bounds_active_handle = BoundsHandle::None;
+    av::CameraBounds m_bounds_drag_initial;
+    float m_bounds_drag_start_world_x = 0.0f;
+    float m_bounds_drag_start_world_y = 0.0f;
+    bool m_bounds_dragging = false;
+
+    // ── Viewport Drag-and-drop state ──
+    bool m_drag_hover_active = false;
+    QPointF m_drag_hover_screen_pos;
+    float m_drag_hover_world[3] = {0.0f, 0.0f, 0.0f};
+    QString m_drag_hover_label;
+
+    void show_viewport_context_menu(const QPoint& screen_pos);
     // ── Scene-editing state (RubyGizmo transform gizmo) ──
     QWidget* m_gizmo_bar = nullptr;
     int  m_gizmo_mode   = 0;      // 0 off, 1 move, 2 rotate, 3 scale
@@ -497,6 +511,8 @@ private:
         std::string name;
         std::string mesh_name;
         std::string local_aabb;
+        float diffuse_color[3] = {1.0f, 1.0f, 1.0f};
+        bool has_diffuse_color = false;
         std::vector<GLuint> ground_textures;
         std::vector<std::string> ground_tex_names;   // per-mesh texture names (live-resync reuse)
         std::vector<MeshGpu> ground_gpu;
@@ -640,7 +656,8 @@ private:
     void draw_model();
     void draw_scene();
     void draw_pod_instance(const av::PODModel& model, const std::vector<GLuint>& textures,
-                           const std::vector<MeshGpu>* gpu_meshes, float frame);
+                           const std::vector<MeshGpu>* gpu_meshes, float frame,
+                           const float* tint_color = nullptr);
     // PVR/TEX (pvr_loader) or PNG/JPEG (QImage) — game packs ship many
     // background layers as *.tex.png, so PVR-only loading left scenes dark.
     GLuint load_texture_any(const std::string& path);

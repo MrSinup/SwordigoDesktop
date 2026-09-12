@@ -114,7 +114,7 @@ sudo pacman -S base-devel aarch64-linux-gnu-gcc \
 
 ```bash
 # Clone repository
-git clone https://github.com/OpenSwordigo/SwordigoDesktop.git
+git clone https://github.com/TheAevoraLabs/SwordigoDesktop.git
 cd SwordigoDesktop
 
 # Configure CMake build tree
@@ -180,12 +180,12 @@ This project is governed by a modular multi-license structure:
 
 | Component Domain | Directory Path | License Terms | Ownership / Rights Holders |
 | :--- | :--- | :--- | :--- |
-| **Swordigo Runtime Environment (SRE)** | `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | Jointly held by **OpenSwordigo Org** (`QuantumCreeper`, `Msinup`, `ManoK`) & **Lawncher Team** (`Raijin`, `Kiziyon`) |
-| **Ruby & Ruby GG Studio IDE** | `src/ruby/` | **GNU GPLv3** | Exclusively **OpenSwordigo Org** |
-| **Swordfare Launcher & Game Overlay** | `src/launcher/`, `src/platform/` | **GNU GPLv3** | Exclusively **OpenSwordigo Org** |
-| **Tooling & Converters** | `src/tools/`, `tools/` | **GNU GPLv3** | Exclusively **OpenSwordigo Org** |
-| **Host JNI & Android Shims** | `src/jni/`, `src/android/` | **MIT License** | Exclusively **OpenSwordigo Org** |
-| **Binary ELF Loader & SRE Host** | `src/loader/`, `src/srehost/` | **MIT License** | Exclusively **OpenSwordigo Org** |
+| **Swordigo Runtime Environment (SRE)** | `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | Jointly held by **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) & **Lawncher Team** (`Raijin`, `Kiziyon`) |
+| **Ruby & Ruby GG Studio IDE** | `src/ruby/` | **GNU GPLv3** | Exclusively **AevoraLabs** |
+| **Swordfare Launcher & Game Overlay** | `src/launcher/`, `src/platform/` | **GNU GPLv3** | Exclusively **AevoraLabs** |
+| **Tooling & Converters** | `src/tools/`, `tools/` | **GNU GPLv3** | Exclusively **AevoraLabs** |
+| **Host JNI & Android Shims** | `src/jni/`, `src/android/` | **MIT License** | Exclusively **AevoraLabs** |
+| **Binary ELF Loader & SRE Host** | `src/loader/`, `src/srehost/` | **MIT License** | Exclusively **AevoraLabs** |
 | **Third-Party Vendored Code** | `src/tools/ufbx/`, `src/sre/base/lua/`, etc. | Upstream (MIT / zlib / BSD) | Respective authors |
 
 See [`LICENSE.md`](LICENSE.md), [`.github/CLA.md`](.github/CLA.md), [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), and [`src/platform/LICENSE.md`](src/platform/LICENSE.md) for full legal terms.
@@ -194,11 +194,11 @@ See [`LICENSE.md`](LICENSE.md), [`.github/CLA.md`](.github/CLA.md), [`src/sre/LI
 
 ## 7. Community, Governance & Policies
 
-OpenSwordigo is developed collaboratively under clear legal, architectural, and community frameworks:
+**AevoraLabs (prev OpenSwordigo)** is developed collaboratively under clear legal, architectural, and community frameworks:
 
 * **[Contributor License Agreement (CLA)](.github/CLA.md)** — Defines the 50/50 dual-ownership copyright retention model and multi-license contribution rules.
 * **[Contributing Guidelines](.github/CONTRIBUTING.md)** — Toolchain requirements, C++17 / C99 / Python standards, clean-room rules, and PR checklist.
-* **[Project Governance Model](.github/GOVERNANCE.md)** — Administrative structure and sole decision-making authority of OpenSwordigo Org & Lawncher Team.
+* **[Project Governance Model](.github/GOVERNANCE.md)** — Administrative structure and sole decision-making authority of AevoraLabs & Lawncher Team.
 * **[Code of Conduct](.github/CODE_OF_CONDUCT.md)** — Contributor Covenant v2.1 community pledge and enforcement procedures.
 * **[Terms of Use & Online Services](.github/TERMS_OF_USE.md)** — Acceptable use policy and conditions for the Lawncher Mod Store network and online infrastructure.
 

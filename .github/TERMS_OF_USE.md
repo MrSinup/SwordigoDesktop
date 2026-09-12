@@ -12,7 +12,7 @@ By downloading, installing, launching the software, or connecting to the Online 
 
 The software and its associated network infrastructure are provided collaboratively by two independent groups:
 
-1. **OpenSwordigo Org**: Stewards of the client applications, build toolchains, Ruby GG Studio IDE, and desktop launcher codebase (see [Project Governance](./GOVERNANCE.md)).
+1. **AevoraLabs (prev OpenSwordigo)**: Stewards of the client applications, build toolchains, Ruby GG Studio IDE, and desktop launcher codebase (see [Project Governance](./GOVERNANCE.md)).
 2. **Lawncher Team**: Sole operators, administrators, and hosts of the **online infrastructure**, including the Mod Store API, mod content delivery networks (CDN), remote asset indexing, and user profile management services (see [Project Governance](./GOVERNANCE.md)).
 
 ---
@@ -20,7 +20,7 @@ The software and its associated network infrastructure are provided collaborativ
 ## 2. Online Services & Server Infrastructure
 
 ### 2.1 "As-Is" and "As-Available" Provision
-The Online Services (including browsing, searching, downloading, rating, and uploading community modifications via the Mod Store) are provided as a community courtesy on an **"AS-IS" and "AS-AVAILABLE"** basis, free of charge. Neither the Lawncher Team nor OpenSwordigo Org guarantees:
+The Online Services (including browsing, searching, downloading, rating, and uploading community modifications via the Mod Store) are provided as a community courtesy on an **"AS-IS" and "AS-AVAILABLE"** basis, free of charge. Neither the Lawncher Team nor AevoraLabs guarantees:
 * Uninterrupted, timely, secure, or error-free server availability;
 * Permanent retention of uploaded mods, comments, ratings, or profile statistics; or
 * Continued operation of any specific API endpoint or backend protocol.
@@ -58,11 +58,11 @@ Any mod uploaded to the Mod Store must strictly adhere to clean, legal community
 
 ### 4.2 Hosting License Granted by Mod Authors
 When you upload or submit a mod to the Mod Store, you retain your underlying copyright in your original creation (consistent with our [CLA](./CLA.md)):
-* You grant the **Lawncher Team** and **OpenSwordigo Org** a non-exclusive, worldwide, royalty-free, perpetual license to **host, cache, index, re-encode, display, and distribute** your mod and its metadata to end users through the launcher, game overlay, and API.
+* You grant the **Lawncher Team** and **AevoraLabs (prev OpenSwordigo)** a non-exclusive, worldwide, royalty-free, perpetual license to **host, cache, index, re-encode, display, and distribute** your mod and its metadata to end users through the launcher, game overlay, and API.
 * You warrant that you are the author of the mod or possess sufficient legal authorization to publish it.
 
 ### 4.3 Takedown & Content Moderation Authority
-The Lawncher Team and OpenSwordigo Org reserve the right, but assume no obligation, to:
+The Lawncher Team and AevoraLabs reserve the right, but assume no obligation, to:
 * Review, inspect, scan, or analyze any uploaded mod for malicious behavior; and
 * Edit, delist, unpublish, or permanently delete any mod from the store at any time, for any reason, including upon receipt of copyright infringement notices or safety concerns, without prior liability to the mod author.
 
@@ -72,11 +72,11 @@ The Lawncher Team and OpenSwordigo Org reserve the right, but assume no obligati
 
 ### 5.1 Use at Your Own Risk
 Community mods execute custom code within the Swordigo runtime environment. You acknowledge and agree that:
-* Neither OpenSwordigo Org nor Lawncher Team independently validates or guarantees the safety, stability, balance, or bug-free nature of any community mod.
+* Neither AevoraLabs nor Lawncher Team independently validates or guarantees the safety, stability, balance, or bug-free nature of any community mod.
 * **Downloading and running mods is done entirely at your own risk.**
 
 ### 5.2 Disclaimer of Damages
-Under no circumstances shall OpenSwordigo Org, the Lawncher Team, or individual project contributors be liable for:
+Under no circumstances shall AevoraLabs, the Lawncher Team, or individual project contributors be liable for:
 * Corruption or loss of game save files, player profiles, or character progress;
 * Application crashes, memory leaks, performance degradation, or graphics corruption caused by third-party mods; or
 * Direct, indirect, incidental, special, or consequential damages resulting from the use of or inability to use the software or Online Services.
@@ -101,7 +101,7 @@ We reserve the right to revise these Terms of Use at any time. Updated versions 
 
 ## 8. Contact & Reporting
 
-To report security vulnerabilities, abusive network behavior, or intellectual property concerns regarding content on the Mod Store, please contact the OpenSwordigo and Lawncher Team administrators via official project channels.
+To report security vulnerabilities, abusive network behavior, or intellectual property concerns regarding content on the Mod Store, please contact the AevoraLabs and Lawncher Team administrators via official project channels.
 
 ---
 

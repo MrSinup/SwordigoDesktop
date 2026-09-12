@@ -1,6 +1,6 @@
 # GNU GENERAL PUBLIC LICENSE, Version 3 (GPLv3)
 
-**Copyright © 2026 OpenSwordigo Org. All Rights Reserved.**
+**Copyright © 2026 AevoraLabs (prev OpenSwordigo). All Rights Reserved.**
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -23,6 +23,6 @@ This license applies to the Swordigo-specific platform implementations, includin
 - **Platform Integrations**: Video background player, dynamic FFmpeg symbol loaders, audio bridges, display scalers, and input mapping routines.
 - **Engine Pod Host Infrastructure**: IPC ring buffers and child process orchestrators.
 
-All rights, titles, and interests in this software are exclusively held by **OpenSwordigo Org**.
+All rights, titles, and interests in this software are exclusively held by **AevoraLabs**.
 
 *(Note: Generic host Android bridge shims and low-level emulator bindings that serve as general infrastructure remain MIT-licensed as specified in the project root LICENSE.md).*

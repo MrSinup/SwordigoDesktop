@@ -1,6 +1,6 @@
 # SwordigoDesktop Multi-License Notice
 
-**OpenSwordigo Project Licensing Framework**
+**AevoraLabs (prev OpenSwordigo) Project Licensing Framework**
 
 > **Translations**: [हिन्दी (Hindi)](LICENSE_hi.md) | [Français (French)](LICENSE_fr.md) | [简体中文 (Chinese)](LICENSE_cn.md)
 
@@ -9,7 +9,7 @@ This repository is a composite project consisting of components licensed under t
 2. **MIT License** — Generic host infrastructure, Android emulation layers, and JNI bridges.
 3. **All Rights Reserved (ARR)** — Proprietary Swordigo Runtime Environment (SRE).
 
-Except where specifically co-attributed for SRE, all original works across this repository are **exclusively licensed to OpenSwordigo Org** (`QuantumCreeper`, `Msinup`, `ManoK`).
+Except where specifically co-attributed for SRE, all original works across this repository are **exclusively licensed to AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`).
 
 ---
 
@@ -25,7 +25,7 @@ The following subsystems and directories are licensed under the terms of the **G
 - **Swordigo Tooling & Converters** (`src/tools/`, `tools/`):
   - SCL/Scene to graph converters, boulder terrain generator, rubymesh formats, glTF bridge, and asset compilers.
 
-**Copyright © 2026 OpenSwordigo Org. All Rights Reserved.**
+**Copyright © 2026 AevoraLabs. All Rights Reserved.**
 Licensed under GPLv3. See [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) and [`src/platform/LICENSE.md`](src/platform/LICENSE.md).
 
 ---
@@ -42,7 +42,7 @@ The generic host environment, portable runtime shims, and low-level emulation pl
 - **Generic Engine Platform Helpers** (portions of `src/platform/`):
   - Generic windowing wrappers, timer abstractions, and PVRTC/ASTC image decoders.
 
-**Copyright © 2026 OpenSwordigo Org.**
+**Copyright © 2026 AevoraLabs.**
 *(Portions Copyright © 2023 Rinnegatamante — Swordigo Vita Port; Imagination Technologies Ltd. — PVR SDK)*
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -65,7 +65,7 @@ The entire **Swordigo Runtime Environment (SRE)** contained within `src/sre/` is
 
 ### Joint Rights Ownership:
 All rights, titles, and intellectual property over SRE are jointly owned and held exclusively by:
-- **OpenSwordigo Org**: `QuantumCreeper`, `Msinup`, `ManoK`
+- **AevoraLabs (prev OpenSwordigo)**: `QuantumCreeper`, `Msinup`, `ManoK`
 - **Lawncher Team**: `Raijin`, `Kiziyon`
 
 **No unauthorized redistribution, modification, sublicensing, decompilation, or public mirroring is permitted without express prior written authorization.**
@@ -78,13 +78,13 @@ See [`src/sre/LICENSE.md`](src/sre/LICENSE.md) for full terms.
 
 | Directory / Component | License | Exclusivity / Copyright Holders |
 | :--- | :--- | :--- |
-| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | **OpenSwordigo Org** (`QuantumCreeper`, `Msinup`, `ManoK`) & **Lawncher Team** (`Raijin`, `Kiziyon`) |
-| `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | Exclusively **OpenSwordigo Org** |
-| `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | Exclusively **OpenSwordigo Org** |
-| `src/tools/`, `tools/` (Converters & Compilers) | **GNU GPLv3** | Exclusively **OpenSwordigo Org** |
-| `src/jni/`, `src/android/` (JNI Bridges & Shims) | **MIT** | Exclusively **OpenSwordigo Org** |
-| `src/loader/`, `src/srehost/` (Host ELF Loader) | **MIT** | Exclusively **OpenSwordigo Org** |
-| Generic Platform Decoders (ASTC, PVRTC) | **MIT** | Upstream authors & **OpenSwordigo Org** |
+| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) & **Lawncher Team** (`Raijin`, `Kiziyon`) |
+| `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | Exclusively **AevoraLabs** |
+| `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | Exclusively **AevoraLabs** |
+| `src/tools/`, `tools/` (Converters & Compilers) | **GNU GPLv3** | Exclusively **AevoraLabs** |
+| `src/jni/`, `src/android/` (JNI Bridges & Shims) | **MIT** | Exclusively **AevoraLabs** |
+| `src/loader/`, `src/srehost/` (Host ELF Loader) | **MIT** | Exclusively **AevoraLabs** |
+| Generic Platform Decoders (ASTC, PVRTC) | **MIT** | Upstream authors & **AevoraLabs** |
 
 ---
 

@@ -32,6 +32,7 @@ if (SWORDIGO_BUILD_RUBY_GG)
         # RubyGizmo & Raylib Math / Picking (Gem 0)
         ${SRC_DIR}/ruby/viewport/ruby_gizmo.cpp
         ${SRC_DIR}/ruby/viewport/ruby_picking.cpp
+        ${SRC_DIR}/ruby/viewport/camera_bounds_gizmo.cpp
         # RubyGit offline Git integration & FileRift diff (Gem 1 & 2)
         ${SRC_DIR}/ruby/git/ruby_git.cpp
         ${SRC_DIR}/ruby/git/ruby_git_diff.cpp

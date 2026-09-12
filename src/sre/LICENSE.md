@@ -1,13 +1,13 @@
 # Swordigo Runtime Environment (SRE) — Software License
 
-**Copyright © 2026 OpenSwordigo Org & Lawncher Team. All Rights Reserved.**
+**Copyright © 2026 AevoraLabs (prev OpenSwordigo) & Lawncher Team. All Rights Reserved.**
 
 ---
 
 ### Copyright Holders & Authorship Attribution
 The entirety of the **Swordigo Runtime Environment (SRE)** is proprietary software owned and held under All Rights Reserved (ARR) by:
 
-- **OpenSwordigo Org**:
+- **AevoraLabs (prev OpenSwordigo)**:
   - `QuantumCreeper`
   - `Msinup`
   - `ManoK`
@@ -40,13 +40,13 @@ This license applies to all modules, components, headers, source files, and asse
 
 ### Terms & Conditions (All Rights Reserved)
 1. **Proprietary & Confidential**: The software is proprietary and subject to strict copyright protection.
-2. **No Unauthorized Redistribution**: Redistribution, sublicensing, publication, mirroring, or public hosting of any source code or compiled binaries belonging to SRE, in whole or in part, in original or modified form, is strictly prohibited without explicit, prior written consent from both **OpenSwordigo Org** and **Lawncher Team**.
+2. **No Unauthorized Redistribution**: Redistribution, sublicensing, publication, mirroring, or public hosting of any source code or compiled binaries belonging to SRE, in whole or in part, in original or modified form, is strictly prohibited without explicit, prior written consent from both **AevoraLabs** and **Lawncher Team**.
 3. **No Reverse Engineering**: Decompilation, disassembly, or reverse engineering of any proprietary portions of SRE beyond fair-use interoperability is strictly prohibited.
 4. **Third-Party Vendored Components**:
    - Upstream vendored components within `src/sre/base/` (such as the standard Lua 5.1 engine, LuaSocket, LuaFileSystem, toml-c, and RakNet) retain their original upstream licenses (e.g. MIT, BSD, zlib).
-   - All custom patches, wrappers, glue code, ABI integrations, and Swordigo-specific modifications applied to these libraries are Copyright © OpenSwordigo Org and Lawncher Team under All Rights Reserved terms.
+   - All custom patches, wrappers, glue code, ABI integrations, and Swordigo-specific modifications applied to these libraries are Copyright © AevoraLabs and Lawncher Team under All Rights Reserved terms.
 
 ---
 
 ### Inquiries & Licensing Permissions
-For licensing inquiries, permissions, or collaborative usage, please contact **OpenSwordigo Org** or **Lawncher Team**.
+For licensing inquiries, permissions, or collaborative usage, please contact **AevoraLabs** or **Lawncher Team**.

@@ -42,6 +42,7 @@ include(cmake/components/swgui.cmake)
 include(cmake/components/swfmt_swpod.cmake)
 include(cmake/components/filerift.cmake)
 include(cmake/components/caver.cmake)      # Ruby's own recovered Caver runtime
+include(cmake/components/opensw.cmake)     # Boot the recovered runtime into a level
 include(cmake/components/swgfx.cmake)
 include(cmake/components/swemu.cmake)
 include(cmake/components/swordfare.cmake)
@@ -183,6 +184,15 @@ if (BUILD_TESTING)
     target_link_libraries(library_manager_test PRIVATE caver swpod swcore Threads::Threads)
     add_test(NAME library_manager_test COMMAND library_manager_test)
 
+    # Component decoding against real shipping .scl data: every payload slot of a
+    # component is decoded (a CollisionShape carries ShapeComponent *and*
+    # CollisionShapeComponent, a MonsterEntity carries the base Entity slot too).
+    # Skips when the extracted assets are not on the machine.
+    add_executable(caver_runtime_test tests/caver_runtime_test.cpp)
+    target_include_directories(caver_runtime_test PRIVATE ${SRC_DIR})
+    target_link_libraries(caver_runtime_test PRIVATE caver swpod swcore Threads::Threads)
+    add_test(NAME caver_runtime_test COMMAND caver_runtime_test)
+
     # Template Palette + template hierarchy (master TODO 2.3/2.4): the .scl/
     # .pod scan, the link → override → materialize → reset lifecycle and the
     # Model-component / LocalAABB wire builders. Pure RAM unit test.
@@ -215,7 +225,8 @@ if (BUILD_TESTING)
     # "Add to Scene" object round trip. Runs headless (offscreen platform).
     add_executable(ground_mesh_studio_test
         tests/ground_mesh_studio_test.cpp
-        ${SRC_DIR}/ruby/tools/ground_mesh_studio.cpp)
+        ${SRC_DIR}/ruby/tools/ground_mesh_studio.cpp
+        ${SRC_DIR}/ruby/core/project_context.cpp)
     set_target_properties(ground_mesh_studio_test PROPERTIES AUTOMOC ON)
     target_include_directories(ground_mesh_studio_test PRIVATE ${SRC_DIR})
     target_link_libraries(ground_mesh_studio_test PRIVATE
@@ -279,6 +290,7 @@ if (BUILD_TESTING)
     # acceptance tests below (offscreen GL, Mesa swrast; data file optional).
     set(RUBY_VIEWPORT_TEST_SOURCES
         ${SRC_DIR}/ruby/viewport/viewport_3d_widget.cpp
+        ${SRC_DIR}/ruby/viewport/camera_bounds_gizmo.cpp
         ${SRC_DIR}/ruby/viewport/ruby_gizmo.cpp
         ${SRC_DIR}/ruby/viewport/ruby_picking.cpp
         ${SRC_DIR}/ruby/viewport/scene_loading_overlay.cpp
@@ -402,7 +414,7 @@ if (BUILD_TESTING)
             ${VORBISFILE_INCLUDE_DIRS})
         target_link_libraries(scene_save_preserves_edit_test PRIVATE
             Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network
-            OpenGL::GL ZLIB::ZLIB swcore swfmt swpod filerift git2_static
+            OpenGL::GL ZLIB::ZLIB swcore swfmt swpod filerift git2_static caver
             SDL3::SDL3 ${SDL3_IMAGE_LINK}
             ${MPG123_LIBRARIES} ${VORBISFILE_LIBRARIES}
             ${SWORDIGO_LIBM} ${SWORDIGO_SOCKLIB})
@@ -445,7 +457,7 @@ if (BUILD_TESTING)
             ${VORBISFILE_INCLUDE_DIRS})
         target_link_libraries(scene_undo_test PRIVATE
             Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network
-            OpenGL::GL ZLIB::ZLIB swcore swfmt swpod filerift git2_static
+            OpenGL::GL ZLIB::ZLIB swcore swfmt swpod filerift git2_static caver
             SDL3::SDL3 ${SDL3_IMAGE_LINK}
             ${MPG123_LIBRARIES} ${VORBISFILE_LIBRARIES}
             ${SWORDIGO_LIBM} ${SWORDIGO_SOCKLIB})

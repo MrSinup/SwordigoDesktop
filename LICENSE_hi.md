@@ -1,6 +1,6 @@
 # SwordigoDesktop बहु-लाइसेंस सूचना (Multi-License Notice)
 
-**OpenSwordigo परियोजना लाइसेंसिंग रूपरेखा (Licensing Framework)**
+**AevoraLabs (prev OpenSwordigo) परियोजना लाइसेंसिंग रूपरेखा (Licensing Framework)**
 
 > **मूल अंग्रेज़ी दस्तावेज़**: [English (LICENSE.md)](LICENSE.md) | [Français (French)](LICENSE_fr.md) | [简体中文 (Chinese)](LICENSE_cn.md)
 
@@ -9,7 +9,7 @@
 2. **MIT License** — सामान्य होस्ट इंफ्रास्ट्रक्चर, एंड्रॉइड इम्यूलेशन लेयर्स, और JNI ब्रिजेस।
 3. **सर्वाधिकार सुरक्षित (All Rights Reserved - ARR)** — मालिकाना स्वॉर्डिगो रनटाइम एनवायरनमेंट (SRE)।
 
-SRE के संयुक्त स्वामित्व को छोड़कर, इस रिपॉजिटरी में किए गए सभी मूल कार्य **विशेष रूप से OpenSwordigo Org** (`QuantumCreeper`, `Msinup`, `ManoK`) द्वारा लाइसेंस प्राप्त हैं।
+SRE के संयुक्त स्वामित्व को छोड़कर, इस रिपॉजिटरी में किए गए सभी मूल कार्य **विशेष रूप से AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) द्वारा लाइसेंस प्राप्त हैं।
 
 ---
 
@@ -25,7 +25,7 @@ SRE के संयुक्त स्वामित्व को छोड़
 - **स्वॉर्डिगो टूलिंग और कन्वर्टर्स** (`src/tools/`, `tools/`):
   - SCL/Scene से ग्राफ कन्वर्टर्स, बोल्डर टेरेन जनरेटर, रूबिमेश फॉर्मेट्स, glTF ब्रिज, और एसेट कम्पाइलर्स।
 
-**कॉपीराइट © 2026 OpenSwordigo Org. सर्वाधिकार सुरक्षित।**
+**कॉपीराइट © 2026 AevoraLabs. सर्वाधिकार सुरक्षित।**
 GPLv3 के तहत लाइसेंस प्राप्त। देखें [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) और [`src/platform/LICENSE.md`](src/platform/LICENSE.md)।
 
 ---
@@ -42,7 +42,7 @@ GPLv3 के तहत लाइसेंस प्राप्त। देख�
 - **सामान्य इंजन प्लेटफ़ॉर्म हेल्पर्स** (`src/platform/` के हिस्से):
   - सामान्य विंडोइंग रैपर्स, टाइमर एब्स्ट्रैक्शंस, और PVRTC/ASTC इमेज डिकोडर्स।
 
-**कॉपीराइट © 2026 OpenSwordigo Org.**
+**कॉपीराइट © 2026 AevoraLabs.**
 *(कुछ हिस्से कॉपीराइट © 2023 Rinnegatamante — Swordigo Vita Port; Imagination Technologies Ltd. — PVR SDK)*
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -65,7 +65,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### संयुक्त अधिकार स्वामित्व:
 SRE पर सभी अधिकार, शीर्षक और बौद्धिक संपदा संयुक्त रूप से और विशेष रूप से इनके पास हैं:
-- **OpenSwordigo Org**: `QuantumCreeper`, `Msinup`, `ManoK`
+- **AevoraLabs (prev OpenSwordigo)**: `QuantumCreeper`, `Msinup`, `ManoK`
 - **Lawncher Team**: `Raijin`, `Kiziyon`
 
 **बिना पूर्व लिखित अनुमति के किसी भी प्रकार का अनधिकृत पुनर्वितरण, संशोधन, उप-लाइसेंसिंग, डीकंपाइलेशन, या सार्वजनिक मिररिंग प्रतिबंधित है।**
@@ -78,13 +78,13 @@ SRE पर सभी अधिकार, शीर्षक और बौद्�
 
 | डायरेक्टरी / घटक | लाइसेंस | विशिष्टता / कॉपीराइट धारक |
 | :--- | :--- | :--- |
-| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **सर्वाधिकार सुरक्षित (ARR)** | **OpenSwordigo Org** & **Lawncher Team** |
-| `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | विशेष रूप से **OpenSwordigo Org** |
-| `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | विशेष रूप से **OpenSwordigo Org** |
-| `src/tools/`, `tools/` (कन्वर्टर्स और कम्पाइलर्स) | **GNU GPLv3** | विशेष रूप से **OpenSwordigo Org** |
-| `src/jni/`, `src/android/` (JNI ब्रिजेस और शिम्स) | **MIT** | विशेष रूप से **OpenSwordigo Org** |
-| `src/loader/`, `src/srehost/` (होस्ट ELF लोडर) | **MIT** | विशेष रूप से **OpenSwordigo Org** |
-| सामान्य प्लेटफ़ॉर्म डिकोडर्स (ASTC, PVRTC) | **MIT** | मूल लेखक और **OpenSwordigo Org** |
+| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **सर्वाधिकार सुरक्षित (ARR)** | **AevoraLabs (prev OpenSwordigo)** & **Lawncher Team** |
+| `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | विशेष रूप से **AevoraLabs** |
+| `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | विशेष रूप से **AevoraLabs** |
+| `src/tools/`, `tools/` (कन्वर्टर्स और कम्पाइलर्स) | **GNU GPLv3** | विशेष रूप से **AevoraLabs** |
+| `src/jni/`, `src/android/` (JNI ब्रिजेस और शिम्स) | **MIT** | विशेष रूप से **AevoraLabs** |
+| `src/loader/`, `src/srehost/` (होस्ट ELF लोडर) | **MIT** | विशेष रूप से **AevoraLabs** |
+| सामान्य प्लेटफ़ॉर्म डिकोडर्स (ASTC, PVRTC) | **MIT** | मूल लेखक और **AevoraLabs** |
 
 ---
 

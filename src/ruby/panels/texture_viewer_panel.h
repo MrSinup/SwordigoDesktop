@@ -5,6 +5,7 @@
 #include <QVector>
 
 class QLabel;
+class QPushButton;
 class QScrollArea;
 class QSlider;
 class QImage;
@@ -21,6 +22,7 @@ private slots:
     void set_zoom(int percent);
     void set_channel(int channel);
     void export_png();
+    void export_pvr();
     void rotate_left();
     void rotate_right();
     void flip_horizontal();
@@ -33,10 +35,12 @@ private:
     QImage m_original;
     QVector<QImage> m_undo;
     QString m_path;
+    bool m_is_pvr = false;        // true for .pvr / .tex / .tex.png source files
     QLabel* m_metadata = nullptr;
     QLabel* m_preview = nullptr;
     QSlider* m_zoom = nullptr;
     QScrollArea* m_scroll = nullptr;
+    QPushButton* m_export_btn = nullptr;
     int m_channel = 0;
 };
 

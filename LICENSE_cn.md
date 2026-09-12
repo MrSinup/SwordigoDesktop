@@ -1,6 +1,6 @@
 # SwordigoDesktop 多重许可声明 (Multi-License Notice)
 
-**OpenSwordigo 项目许可框架 (Licensing Framework)**
+**AevoraLabs (prev OpenSwordigo) 项目许可框架 (Licensing Framework)**
 
 > **英文原版文件**: [English (LICENSE.md)](LICENSE.md) | [हिन्दी (Hindi)](LICENSE_hi.md) | [Français (French)](LICENSE_fr.md)
 
@@ -9,7 +9,7 @@
 2. **MIT 许可证** — 通用宿主基础设施、Android 模拟层和 JNI 桥接。
 3. **保留所有权利 (All Rights Reserved - ARR)** — 专有 Swordigo 运行时环境 (SRE)。
 
-除 SRE 特别注明的共同所有权外，本仓库内的所有原创作品均**独家授权归 OpenSwordigo Org** (`QuantumCreeper`, `Msinup`, `ManoK`) 所有。
+除 SRE 特别注明的共同所有权外，本仓库内的所有原创作品均**独家授权归 AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) 所有。
 
 ---
 
@@ -25,7 +25,7 @@
 - **Swordigo 工具链与转换器** (`src/tools/`, `tools/`)：
   - SCL/Scene 转图表转换器、boulder 地形生成器、rubymesh 格式、glTF 桥接器及资产编译器。
 
-**版权所有 © 2026 OpenSwordigo Org。保留所有权利。**
+**版权所有 © 2026 AevoraLabs。保留所有权利。**
 基于 GPLv3 许可。详见 [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) 和 [`src/platform/LICENSE.md`](src/platform/LICENSE.md)。
 
 ---
@@ -35,14 +35,14 @@
 
 不包含游戏专用逻辑的通用宿主环境、可移植运行时垫片以及底层模拟桥接采用宽松的 **MIT 许可证**：
 
-- **通用 Android 模拟与 JNI 桥接** (`src/jni/`, `src/android/`):
+- **通用 Android 模拟与 JNI 桥接** (`src/jni/`, `src/android/`)：
   - POSIX Android 兼容层、资产管理器、日志记录器和 JNI 封送处理桥接。
-- **二进制 ELF 加载器与架构支持** (`src/loader/`, `src/srehost/`):
+- **二进制 ELF 加载器与架构支持** (`src/loader/`, `src/srehost/`)：
   - 动态 ELF 加载器、符号重定位表以及客体-宿体 ABI 边界胶水层。
 - **通用引擎平台辅助模块** (`src/platform/` 的部分组件)：
   - 通用窗口包装器、定时器抽象及 PVRTC/ASTC 图像解码器。
 
-**版权所有 © 2026 OpenSwordigo Org。**
+**版权所有 © 2026 AevoraLabs。**
 *(部分版权 © 2023 Rinnegatamante — Swordigo Vita Port；Imagination Technologies Ltd. — PVR SDK)*
 
 特此免费授予任何获得本软件副本和相关文档文件（“软件”）的人无限制地处理本软件的许可，包括但不限于使用、复制、修改、合并、发布、分发、再许可和/或出售软件副本的权利，并允许向其提供软件的人在满足以下条件的情况下这样做：
@@ -65,7 +65,7 @@
 
 ### 联合权利所有权：
 SRE 的所有权利、所有权和知识产权均由以下两方共同且独家拥有：
-- **OpenSwordigo Org**：`QuantumCreeper`, `Msinup`, `ManoK`
+- **AevoraLabs (prev OpenSwordigo)**：`QuantumCreeper`, `Msinup`, `ManoK`
 - **Lawncher Team**：`Raijin`, `Kiziyon`
 
 **未经明确事先书面授权，严禁任何形式的未授权再分发、修改、二次许可、反编译或公开镜像。**
@@ -78,13 +78,13 @@ SRE 的所有权利、所有权和知识产权均由以下两方共同且独家�
 
 | 目录 / 组件 | 许可证 | 专有性 / 版权所有者 |
 | :--- | :--- | :--- |
-| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **保留所有权利 (ARR)** | **OpenSwordigo Org** & **Lawncher Team** |
-| `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | 独家归 **OpenSwordigo Org** 所有 |
-| `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | 独家归 **OpenSwordigo Org** 所有 |
-| `src/tools/`, `tools/` (转换器与编译器) | **GNU GPLv3** | 独家归 **OpenSwordigo Org** 所有 |
-| `src/jni/`, `src/android/` (JNI 桥接与垫片) | **MIT** | 独家归 **OpenSwordigo Org** 所有 |
-| `src/loader/`, `src/srehost/` (宿主 ELF 加载器) | **MIT** | 独家归 **OpenSwordigo Org** 所有 |
-| 通用平台解码器 (ASTC, PVRTC) | **MIT** | 上游作者 & **OpenSwordigo Org** |
+| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **保留所有权利 (ARR)** | **AevoraLabs (prev OpenSwordigo)** & **Lawncher Team** |
+| `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | 独家归 **AevoraLabs** 所有 |
+| `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | 独家归 **AevoraLabs** 所有 |
+| `src/tools/`, `tools/` (转换器与编译器) | **GNU GPLv3** | 独家归 **AevoraLabs** 所有 |
+| `src/jni/`, `src/android/` (JNI 桥接与垫片) | **MIT** | 独家归 **AevoraLabs** 所有 |
+| `src/loader/`, `src/srehost/` (宿主 ELF 加载器) | **MIT** | 独家归 **AevoraLabs** 所有 |
+| 通用平台解码器 (ASTC, PVRTC) | **MIT** | 上游作者 & **AevoraLabs** |
 
 ---
 

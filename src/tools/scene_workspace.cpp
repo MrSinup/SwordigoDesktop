@@ -184,19 +184,30 @@ void object_world_matrix(const av::SceneObject& obj, float out[16]) {
     av::mat4_multiply(out, temp, S);
 }
 
-// Render matrix: object_world_matrix + the ModelComponent's baked Y-rotation
-// (main.js addModel applies it as rotation.y on a wrapper holding the model).
-// Applied in model space, before the scene object's own Z-spin, so doors and
-// props face their mesh side in-game instead of toward the viewer. The gizmo
-// / picking paths keep using object_world_matrix (unrotated) so editing stays
-// stable.
+// Render matrix: object_world_matrix + ModelComponent's baked rotations & origin offset
+// Matching web editor (main.js addModel / Three.js scene hierarchy):
+//   e (scene object) -> o (wrapper with rotation.x and rotation.y) -> r (model with position -Origin)
+// In Euler XYZ order: Rx(model_x_rotation) * Ry(model_y_rotation), then T(-model_origin).
 void object_render_matrix(const av::SceneObject& obj, float out[16]) {
     object_world_matrix(obj, out);
-    if (!obj.has_model_y_rotation) return;
-    float RY[16], temp[16];
-    av::mat4_rotate_y(RY, obj.model_y_rotation * 180.0f / kPi);
-    av::mat4_multiply(temp, out, RY);   // post-multiply: model-space rotation
-    std::memcpy(out, temp, 16 * sizeof(float));
+
+    // Apply ModelComponent rotations: Rx(XRotation) * Ry(YRotation)
+    if (obj.has_model_x_rotation || obj.has_model_y_rotation) {
+        float RX[16], RY[16], R_model[16], temp[16];
+        av::mat4_rotate_x(RX, obj.model_x_rotation * 180.0f / kPi);
+        av::mat4_rotate_y(RY, obj.model_y_rotation * 180.0f / kPi);
+        av::mat4_multiply(R_model, RX, RY);   // Three.js Euler order XYZ (Rx * Ry)
+        av::mat4_multiply(temp, out, R_model);
+        std::memcpy(out, temp, 16 * sizeof(float));
+    }
+
+    // Apply ModelComponent Origin offset: -Origin
+    if (obj.has_model_origin) {
+        float T_orig[16], temp[16];
+        av::mat4_translate(T_orig, -obj.model_origin[0], -obj.model_origin[1], -obj.model_origin[2]);
+        av::mat4_multiply(temp, out, T_orig);
+        std::memcpy(out, temp, 16 * sizeof(float));
+    }
 }
 
 void recompute_ground_mesh_geometry(av::PODMesh& pm) {

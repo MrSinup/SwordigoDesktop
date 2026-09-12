@@ -28,10 +28,12 @@ public:
 
     void inspect_file(const QString& path);
     void inspect_model_info(const QString& name, int meshCount, int vertCount);
+    void inspect_scene(const av::SceneData& scene);
     void inspect_scene_object(const av::SceneData& scene, int object_index);
     void update_transform(float px, float py, float pz,
                           float rx, float rz, float ry,
                           float sx, float sy, float sz);
+    void update_camera_bounds(const av::CameraBounds& cb);
     // Incremental: append a single new component group to the existing UI
     // without tearing down and rebuilding all component widgets. Used by the
     // bridge for Add Component / Paste Component so the panel feels live.
@@ -53,9 +55,14 @@ signals:
     // fresh type id (scene_paste_component does the id rewrite).
     void componentPasted(int object_index, const av::SceneComponent& component);
     void groundMeshRegenNormals(int object_index);
+    void cameraBoundsChanged(const av::CameraBounds& cb);
+    void cameraBoundsFitRequested();
+    void cameraBoundsFrameRequested();
+    void cameraBoundsRemoveRequested();
 
 private slots:
     void on_transform_spinbox_changed();
+    void on_bounds_spinbox_changed();
     void on_identity_changed();
     void on_hidden_toggled(bool checked);
 
@@ -117,6 +124,19 @@ private:
     // Ground Meshes
     QGroupBox* m_ground_mesh_group = nullptr;
     QVBoxLayout* m_ground_mesh_layout = nullptr;
+
+    // Camera Bounds
+    QGroupBox* m_bounds_group = nullptr;
+    QDoubleSpinBox* m_bounds_x = nullptr;
+    QDoubleSpinBox* m_bounds_y = nullptr;
+    QDoubleSpinBox* m_bounds_w = nullptr;
+    QDoubleSpinBox* m_bounds_h = nullptr;
+    QLabel* m_bounds_max_x_label = nullptr;
+    QLabel* m_bounds_max_y_label = nullptr;
+    QLabel* m_bounds_center_label = nullptr;
+    QPushButton* m_bounds_fit_btn = nullptr;
+    QPushButton* m_bounds_frame_btn = nullptr;
+    QPushButton* m_bounds_remove_btn = nullptr;
 };
 
 } // namespace ruby::panels

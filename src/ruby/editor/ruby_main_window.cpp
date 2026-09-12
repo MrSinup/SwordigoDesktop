@@ -743,7 +743,7 @@ void RubyMainWindow::setup_dock_panels() {
     connect(m_scene_hierarchy, &ruby::panels::SceneHierarchyPanel::objectFocusRequested,
             m_viewport_3d, &ruby::viewport::Viewport3DWidget::focus_object);
     connect(m_scene_hierarchy, &ruby::panels::SceneHierarchyPanel::objectCreated,
-            m_viewport_3d, &ruby::viewport::Viewport3DWidget::add_scene_object);
+            this, [this](const QString& kind) { m_viewport_3d->add_scene_object(kind); });
     connect(m_scene_hierarchy, &ruby::panels::SceneHierarchyPanel::objectDuplicated,
             m_viewport_3d, &ruby::viewport::Viewport3DWidget::duplicate_scene_object);
     connect(m_scene_hierarchy, &ruby::panels::SceneHierarchyPanel::objectDeleted,
@@ -897,6 +897,41 @@ void RubyMainWindow::setup_dock_panels() {
                 }
             });
 
+    // Camera Bounds viewport <-> inspector bidirectional sync
+    connect(m_viewport_3d, &ruby::viewport::Viewport3DWidget::cameraBoundsChanged,
+            m_inspector, &ruby::panels::InspectorPanel::update_camera_bounds);
+    connect(m_viewport_3d, &ruby::viewport::Viewport3DWidget::cameraBoundsSelected,
+            this, [this](bool sel) {
+                if (sel && m_viewport_3d->has_scene()) {
+                    m_inspector->inspect_scene(m_viewport_3d->scene());
+                    m_scene_hierarchy->select_object(-1);
+                }
+            });
+    connect(m_inspector, &ruby::panels::InspectorPanel::cameraBoundsChanged,
+            m_viewport_3d, &ruby::viewport::Viewport3DWidget::set_camera_bounds);
+    connect(m_inspector, &ruby::panels::InspectorPanel::cameraBoundsFitRequested,
+            m_viewport_3d, &ruby::viewport::Viewport3DWidget::fit_camera_bounds);
+    connect(m_inspector, &ruby::panels::InspectorPanel::cameraBoundsFrameRequested,
+            m_viewport_3d, &ruby::viewport::Viewport3DWidget::frame_camera_bounds);
+    connect(m_inspector, &ruby::panels::InspectorPanel::cameraBoundsRemoveRequested,
+            this, [this]() {
+                if (m_viewport_3d->has_camera_bounds()) {
+                    m_viewport_3d->remove_camera_bounds();
+                } else {
+                    m_viewport_3d->fit_camera_bounds();
+                }
+            });
+
+    // Scene hierarchy camera bounds action
+    connect(m_scene_hierarchy, &ruby::panels::SceneHierarchyPanel::cameraBoundsFitRequested,
+            m_viewport_3d, &ruby::viewport::Viewport3DWidget::fit_camera_bounds);
+
+    // Asset browser "Add Model to Scene" action
+    connect(m_asset_browser, &ruby::panels::AssetBrowserPanel::addModelToSceneRequested,
+            this, [this](const QString& pod_path) {
+                m_viewport_3d->add_model_object(pod_path);
+            });
+
     connect(m_viewport_3d, &ruby::viewport::Viewport3DWidget::sceneLoaded,
             m_scene_hierarchy, &ruby::panels::SceneHierarchyPanel::set_scene);
     connect(m_viewport_3d, &ruby::viewport::Viewport3DWidget::sceneLoaded,
@@ -915,7 +950,7 @@ void RubyMainWindow::setup_dock_panels() {
                     m_inspector->inspect_scene_object(sc, sel);
                     m_scene_hierarchy->select_object(sel);
                 } else {
-                    m_inspector->clear_inspection();
+                    m_inspector->inspect_scene(sc);
                 }
                 perf_ms("inspector");
                 refresh_scene_templates();

@@ -380,6 +380,8 @@ AssetBrowserPanel::AssetBrowserPanel(QWidget* parent) : QWidget(parent) {
     m_tree_view->setColumnWidth(2, 110);
 
     m_tree_view->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_tree_view->setDragEnabled(true);
+    m_tree_view->setDragDropMode(QAbstractItemView::DragOnly);
     connect(m_tree_view, &QTreeView::customContextMenuRequested, this, &AssetBrowserPanel::onCustomContextMenu);
     connect(m_tree_view, &QTreeView::doubleClicked, this, &AssetBrowserPanel::onItemDoubleClicked);
     layout->addWidget(m_tree_view);
@@ -552,6 +554,12 @@ void AssetBrowserPanel::onCustomContextMenu(const QPoint& pt) {
         });
 
         const QString ext = QFileInfo(selected_path).suffix().toLower();
+        if (ext == "pod") {
+            auto* add_to_scene_act = menu->addAction("Add Model to Scene");
+            connect(add_to_scene_act, &QAction::triggered, this, [this, selected_path]() {
+                emit addModelToSceneRequested(selected_path);
+            });
+        }
         if (ext == "glb" || ext == "gltf" || ext == "fbx" || ext == "obj" || ext == "pod") {
             auto* conv_act = menu->addAction("Convert to Game POD...");
             connect(conv_act, &QAction::triggered, this, [this, selected_path]() {

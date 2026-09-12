@@ -55,12 +55,14 @@ out vec3 vNormal;   // surface normal in VIEW space (normalised)
 out vec2 vUV;
 
 void main() {
-    vec4 vp     = uModelView * vec4(aPos, 1.0);
-    vViewPos    = vp.xyz;
+    vec4 vp      = uModelView * vec4(aPos, 1.0);
+    vViewPos     = vp.xyz;
     mat3 normMat = transpose(inverse(mat3(uModelView)));
-    vNormal     = normalize(normMat * aNorm);
-    vUV         = aUV;
-    gl_Position = uProj * vp;
+    vec3 n       = normMat * aNorm;
+    float nlen   = length(n);
+    vNormal      = (nlen > 1e-5) ? (n / nlen) : vec3(0.0, 1.0, 0.0);
+    vUV          = aUV;
+    gl_Position  = uProj * vp;
 }
 )GLSL";
 
@@ -124,7 +126,8 @@ out vec4 FragColor;
     // ── Main ──────────────────────────────────────────────────────────────────
     src += R"GLSL(
 void main() {
-    vec3 N = normalize(vNormal);
+    float nlen = length(vNormal);
+    vec3 N = (nlen > 1e-5) ? (vNormal / nlen) : vec3(0.0, 1.0, 0.0);
 
     // ── Sample albedo ─────────────────────────────────────────────────────────
     // Swordigo textures are PVRTC/ETC1 decoded to RGBA8 (GL_RGBA internal format,

@@ -1,6 +1,6 @@
 # GNU GENERAL PUBLIC LICENSE, Version 3 (GPLv3)
 
-**Copyright © 2026 OpenSwordigo Org. All Rights Reserved.**
+**Copyright © 2026 AevoraLabs (prev OpenSwordigo). All Rights Reserved.**
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -30,4 +30,4 @@ This license applies to the entire **Ruby** and **Ruby GG** studio editor, inclu
 - `src/ruby/database/`: Engine symbol databases and FileRift language services.
 - `src/ruby/zauonlok/`: Vendored software renderer reference algorithms (MIT License — see `LICENSE.zauonlok-renderer`).
 
-All rights, titles, and interests in this software are exclusively held by **OpenSwordigo Org** (except the MIT reference algorithms in `src/ruby/zauonlok/`).
+All rights, titles, and interests in this software are exclusively held by **AevoraLabs** (except the MIT reference algorithms in `src/ruby/zauonlok/`).

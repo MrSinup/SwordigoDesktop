@@ -1,4 +1,4 @@
-# Contributing to OpenSwordigo
+# Contributing to AevoraLabs (prev OpenSwordigo)
 
 Thank you for your interest in contributing to **SwordigoDesktop**, the **Ruby GG Studio IDE**, the **Swordfare Launcher**, and the **Swordigo Runtime Environment (SRE)**!
 
@@ -25,7 +25,7 @@ Before writing or editing code, identify which **licensing tier** your target di
 └───────────────────────┴─────────────────────────────┴───────────────────────┘
 ```
 
-> **Contributor License Agreement**: By opening a pull request or submitting code to this repository, you agree to the terms of the [OpenSwordigo Contributor License Agreement (CLA.md)](./CLA.md). You retain copyright in your own original work while granting the project the perpetual, irrevocable right to distribute and maintain the composite software.
+> **Contributor License Agreement**: By opening a pull request or submitting code to this repository, you agree to the terms of the [AevoraLabs (prev OpenSwordigo) Contributor License Agreement (CLA.md)](./CLA.md). You retain copyright in your own original work while granting the project the perpetual, irrevocable right to distribute and maintain the composite software.
 
 ---
 
@@ -55,7 +55,7 @@ Before writing or editing code, identify which **licensing tier** your target di
 ### 3.1 Branching & Commit Guidelines
 1. **Fork and Branch**:
    ```bash
-   git clone https://github.com/OpenSwordigo/SwordigoDesktop.git
+   git clone https://github.com/TheAevoraLabs/SwordigoDesktop.git
    cd SwordigoDesktop
    git checkout -b feature/your-feature-name
    ```
@@ -79,7 +79,6 @@ Before opening a pull request, compile all targets and execute the test suite:
 ```bash
 # Configure build
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
-
 # Build all binaries
 cmake --build build -j$(nproc)
 
@@ -99,7 +98,7 @@ When submitting your Pull Request, verify that:
 - [ ] Changes respect the directory licensing tier (ARR in [`../src/sre/`](../src/sre/), GPLv3 in [`../src/ruby/`](../src/ruby/), MIT in [`../src/jni/`](../src/jni/)).
 - [ ] Commit does not mix binary artifacts, `.so` files, zip archives, or `__pycache__` directories.
 - [ ] Automated unit and regression tests in [`../tests/`](../tests/) pass.
-- [ ] You acknowledge and accept the [OpenSwordigo CLA](./CLA.md).
+- [ ] You acknowledge and accept the [AevoraLabs CLA](./CLA.md).
 
 ---
 
@@ -110,4 +109,4 @@ For questions, architectural discussions, or collaboration on reverse engineerin
 * Review our [Code of Conduct](./CODE_OF_CONDUCT.md) for community standards.
 * Review our [Terms of Use](./TERMS_OF_USE.md) for Online Mod Store and network infrastructure usage rules.
 * Check root [`../LICENSE.md`](../LICENSE.md) for overall project licensing terms.
-* Join the OpenSwordigo developer discussions and modding channels.
+* Join the AevoraLabs developer discussions and modding channels.

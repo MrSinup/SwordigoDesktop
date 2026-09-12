@@ -1,6 +1,6 @@
 # Contributor Covenant Code of Conduct
 
-**OpenSwordigo Community Code of Conduct — Version 2.1**
+**AevoraLabs (prev OpenSwordigo) Community Code of Conduct — Version 2.1**
 
 ---
 
@@ -34,7 +34,7 @@ Examples of unacceptable behavior include:
 
 ## 3. Enforcement Responsibilities
 
-Community leaders (OpenSwordigo Org and Lawncher Team, see [Project Governance](./GOVERNANCE.md)) are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
+Community leaders (AevoraLabs and Lawncher Team, see [Project Governance](./GOVERNANCE.md)) are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
 
 Community leaders have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, and will communicate reasons for moderation decisions when appropriate.
 
@@ -48,7 +48,7 @@ This Code of Conduct applies within all community spaces (including GitHub repos
 
 ## 5. Enforcement & Reporting
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the OpenSwordigo leadership team via project channels or directly to the project maintainers. All complaints will be reviewed and investigated promptly and fairly. For contribution workflows, see [Contributing Guidelines](./CONTRIBUTING.md). For online service moderation, see [Terms of Use](./TERMS_OF_USE.md).
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the AevoraLabs leadership team via project channels or directly to the project maintainers. All complaints will be reviewed and investigated promptly and fairly. For contribution workflows, see [Contributing Guidelines](./CONTRIBUTING.md). For online service moderation, see [Terms of Use](./TERMS_OF_USE.md).
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

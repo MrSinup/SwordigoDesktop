@@ -38,6 +38,8 @@ SceneHierarchyPanel::SceneHierarchyPanel(QWidget* parent) : QWidget(parent) {
     add_menu->addAction("Model Object", this, [this]() { emit objectCreated("Model"); });
     add_menu->addAction("Spawn Point", this, [this]() { emit objectCreated("Spawn"); });
     add_menu->addAction("Portal", this, [this]() { emit objectCreated("Portal"); });
+    add_menu->addSeparator();
+    add_menu->addAction("Camera Bounds (Fit to Level)", this, [this]() { emit cameraBoundsFitRequested(); });
     add_btn->setMenu(add_menu);
     header_layout->addWidget(add_btn);
 

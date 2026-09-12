@@ -221,7 +221,8 @@ static std::vector<float> unpack_vertex_data(
     if (type == 1) comp_size = 4; // float
     else if (type == 2 || type == 17) comp_size = 4; // int / uint
     else if (type == 3 || type == 11 || type == 12 || type == 16) comp_size = 2; // short / ushort
-    else if (type == 10 || type == 13 || type == 14 || type == 15) comp_size = 1; // byte / ubyte
+    else if (type == 7 || type == 10 || type == 13 || type == 14 || type == 15) comp_size = 1; // byte / ubyte / ubyte4
+    else if (type == 4 || type == 5 || type == 6) comp_size = 1; // packed color (RGBA / ARGB / D3DCOLOR)
 
     // libswordigo_arm32.c Is(): stride defaults to blockNumComponents * compSize when 0
     uint32_t block_components = (de.num_components > 0) ? de.num_components : (uint32_t)num_components;
@@ -232,7 +233,7 @@ static std::vector<float> unpack_vertex_data(
 
     for (int i = 0; i < num_vertices; ++i) {
         const uint8_t* vert_ptr = src_ptr + i * stride;
-        if (vert_ptr + stride > limit_ptr) break;
+        if (vert_ptr + (size_t)read_components * comp_size > limit_ptr) break;
 
         for (int c = 0; c < read_components; ++c) {
             const uint8_t* comp_ptr = vert_ptr + c * comp_size;
@@ -253,9 +254,9 @@ static std::vector<float> unpack_vertex_data(
             } else if (type == 12) { // Signed Short Normalized
                 int16_t v; std::memcpy(&v, comp_ptr, 2);
                 val = static_cast<float>(v) / 32767.0f;
-            } else if (type == 10) { // Unsigned Byte
+            } else if (type == 10 || type == 7) { // Unsigned Byte / UBYTE4 (e.g. bone indices)
                 val = static_cast<float>(comp_ptr[0]);
-            } else if (type == 15) { // Unsigned Byte Normalized
+            } else if (type == 15 || type == 4 || type == 5 || type == 6) { // Unsigned Byte Normalized / RGBA / ARGB / D3DCOLOR
                 val = static_cast<float>(comp_ptr[0]) / 255.0f;
             } else if (type == 13) { // Signed Byte
                 val = static_cast<float>(static_cast<int8_t>(comp_ptr[0]));
@@ -384,6 +385,100 @@ static void apply_unpack_matrix(float* positions, size_t pos_count,
         normals[i]     = m[0] * x + m[4] * y + m[8]  * z;
         normals[i + 1] = m[1] * x + m[5] * y + m[9]  * z;
         normals[i + 2] = m[2] * x + m[6] * y + m[10] * z;
+    }
+}
+
+// Merges multiple bone batches per the PowerVR POD 2.1 Specification and
+// PowerVR Native SDK PODReader::mergeBoneBatches.
+//
+// In POD files with multiple bone batches (eMeshNumBoneBatches > 1), vertex bone
+// indices stored in the vertex stream are BATCH-LOCAL (0 .. max_bones - 1).
+// Each batch b influences a specific range of triangles/faces given by
+// eMeshBoneOffsetPerBatch[b].
+//
+// This function adds (b * max_bones) to the bone indices of all vertices
+// belonging to batch b, flattening all batches so that bone lookups into
+// mesh.bone_batches.indices index the correct bone palette for every vertex.
+static void merge_bone_batches(PODMesh& mesh) {
+    if (!mesh.has_bone_batches || mesh.bone_batches.count <= 1 ||
+        mesh.bone_batches.max_bones <= 0 || mesh.bone_batches.offsets.empty() ||
+        mesh.bones_per_vertex <= 0 || mesh.bone_indices.empty()) {
+        return;
+    }
+
+    const int max_bones = mesh.bone_batches.max_bones;
+    const size_t num_batches = static_cast<size_t>(mesh.bone_batches.count);
+    const int bpv = mesh.bones_per_vertex;
+    std::vector<bool> vertex_offset_applied(mesh.num_vertices, false);
+
+    if (!mesh.indices.empty()) {
+        // Indexed mesh: offsets can be face counts (PowerVR standard) or raw index counts.
+        const size_t total_faces = mesh.indices.size() / 3;
+        bool offsets_are_face_counts = true;
+        for (size_t b = 0; b < mesh.bone_batches.offsets.size(); ++b) {
+            if (mesh.bone_batches.offsets[b] > total_faces) {
+                offsets_are_face_counts = false;
+                break;
+            }
+        }
+
+        for (size_t b = 0; b < num_batches && b < mesh.bone_batches.offsets.size(); ++b) {
+            size_t start_idx = 0;
+            size_t end_idx = mesh.indices.size();
+
+            if (offsets_are_face_counts) {
+                start_idx = static_cast<size_t>(mesh.bone_batches.offsets[b]) * 3;
+                if (b + 1 < mesh.bone_batches.offsets.size()) {
+                    end_idx = static_cast<size_t>(mesh.bone_batches.offsets[b + 1]) * 3;
+                }
+            } else {
+                start_idx = static_cast<size_t>(mesh.bone_batches.offsets[b]);
+                if (b + 1 < mesh.bone_batches.offsets.size()) {
+                    end_idx = static_cast<size_t>(mesh.bone_batches.offsets[b + 1]);
+                }
+            }
+
+            if (start_idx > mesh.indices.size()) start_idx = mesh.indices.size();
+            if (end_idx > mesh.indices.size()) end_idx = mesh.indices.size();
+
+            const float batch_offset = static_cast<float>(b * max_bones);
+            for (size_t i = start_idx; i < end_idx; ++i) {
+                uint32_t v = mesh.indices[i];
+                if (v < static_cast<uint32_t>(mesh.num_vertices) && !vertex_offset_applied[v]) {
+                    vertex_offset_applied[v] = true;
+                    if (batch_offset > 0.0f) {
+                        for (int inf = 0; inf < bpv; ++inf) {
+                            size_t idx = static_cast<size_t>(v * bpv + inf);
+                            if (idx < mesh.bone_indices.size()) {
+                                mesh.bone_indices[idx] += batch_offset;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Non-indexed mesh: offsets[b] is the starting vertex index.
+        const size_t total_verts = static_cast<size_t>(mesh.num_vertices);
+        for (size_t b = 0; b < num_batches && b < mesh.bone_batches.offsets.size(); ++b) {
+            size_t start_vert = static_cast<size_t>(mesh.bone_batches.offsets[b]);
+            size_t end_vert = (b + 1 < mesh.bone_batches.offsets.size()) ?
+                               static_cast<size_t>(mesh.bone_batches.offsets[b + 1]) : total_verts;
+            if (start_vert > total_verts) start_vert = total_verts;
+            if (end_vert > total_verts) end_vert = total_verts;
+
+            const float batch_offset = static_cast<float>(b * max_bones);
+            if (batch_offset > 0.0f) {
+                for (size_t v = start_vert; v < end_vert; ++v) {
+                    for (int inf = 0; inf < bpv; ++inf) {
+                        size_t idx = static_cast<size_t>(v * bpv + inf);
+                        if (idx < mesh.bone_indices.size()) {
+                            mesh.bone_indices[idx] += batch_offset;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -568,6 +663,9 @@ static PODMesh readMeshBlock(const uint8_t* data, size_t size, size_t& off) {
     }
 
     mesh.bones_per_vertex = bone_idx_element.num_components;
+    if (mesh.bones_per_vertex == 0 && (bone_idx_element.type == 7 || bone_idx_element.type == 4) && bone_idx_element.payload != nullptr) {
+        mesh.bones_per_vertex = 4;
+    }
     if (mesh.bones_per_vertex > 0) {
         mesh.bone_indices = unpack_vertex_data(interleaved_payload, interleaved_size, bone_idx_element, mesh.num_vertices, mesh.bones_per_vertex);
         mesh.bone_weights = unpack_vertex_data(interleaved_payload, interleaved_size, bone_wgt_element, mesh.num_vertices, mesh.bones_per_vertex);
@@ -580,6 +678,8 @@ static PODMesh readMeshBlock(const uint8_t* data, size_t size, size_t& off) {
         mesh.bone_batches.offsets = std::move(bone_batch_offsets);
         mesh.bone_batches.max_bones = max_bones_per_batch;
         mesh.bone_batches.count = num_bone_batches;
+
+        merge_bone_batches(mesh);
     }
 
     if (mesh.has_unpack_matrix &&
@@ -1428,10 +1528,40 @@ bool skin_mesh(const PODModel& model, int mesh_node_idx, float frame,
         if (weight_sum <= 0.0f) {
             std::memcpy(&positions[static_cast<size_t>(vertex) * 3], &mesh.positions[static_cast<size_t>(vertex) * 3], 3 * sizeof(float));
             if (!mesh.normals.empty()) std::memcpy(&normals[static_cast<size_t>(vertex) * 3], &mesh.normals[static_cast<size_t>(vertex) * 3], 3 * sizeof(float));
-        } else if (!normals.empty()) {
-            float* normal = &normals[static_cast<size_t>(vertex) * 3];
-            float length = std::sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2]);
-            if (length > 1e-8f) { normal[0] /= length; normal[1] /= length; normal[2] /= length; }
+        } else {
+            if (std::abs(weight_sum - 1.0f) > 1e-4f) {
+                const float inv_w = 1.0f / weight_sum;
+                float* result = &positions[static_cast<size_t>(vertex) * 3];
+                result[0] *= inv_w;
+                result[1] *= inv_w;
+                result[2] *= inv_w;
+                if (!normals.empty()) {
+                    float* normal_result = &normals[static_cast<size_t>(vertex) * 3];
+                    normal_result[0] *= inv_w;
+                    normal_result[1] *= inv_w;
+                    normal_result[2] *= inv_w;
+                }
+            }
+            if (!normals.empty()) {
+                float* normal = &normals[static_cast<size_t>(vertex) * 3];
+                float length = std::sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2]);
+                if (length > 1e-8f) {
+                    normal[0] /= length;
+                    normal[1] /= length;
+                    normal[2] /= length;
+                } else {
+                    // Fallback to original mesh normal or up vector to avoid GLSL normalize(0) -> NaN -> solid black pixels
+                    if (vertex * 3 + 2 < static_cast<int>(mesh.normals.size())) {
+                        normal[0] = mesh.normals[vertex * 3 + 0];
+                        normal[1] = mesh.normals[vertex * 3 + 1];
+                        normal[2] = mesh.normals[vertex * 3 + 2];
+                    } else {
+                        normal[0] = 0.0f;
+                        normal[1] = 1.0f;
+                        normal[2] = 0.0f;
+                    }
+                }
+            }
         }
     }
     return true;
@@ -1451,29 +1581,15 @@ static void finalize_model_bounds(PODModel& model) {
 
     for (int i = 0; i < static_cast<int>(model.nodes.size()); ++i) {
         if (model.nodes[i].name != "CenterPoint") continue;
-        // The game (arm32 libswordigo_ida32.c, CenterPoint handling) reads the
-        // CenterPoint node's OWN LOCAL translation vector (v15 = node
-        // translation at the node-struct offset; a2[20..22] = v15[0..2]) and
-        // offsets the model by -that. It does NOT walk the parent chain.
-        //
-        // Ruby previously used get_node_matrix() here, which accumulates the
-        // full parent chain and returns the CenterPoint's WORLD translation.
-        // When the CenterPoint node has a transformed parent (common on chests
-        // and other props), that world Y is larger than the local Y, so we
-        // subtracted too much and the model floated ABOVE the ground in the
-        // editor even though it sits correctly on the ground in-game. Match the
-        // game: use the node's LOCAL translation only.
-        const auto& cp = model.nodes[i];
-        if (cp.has_matrix) {
-            // An explicit local matrix stores its translation in [12..14].
-            model.center_point[0] = cp.matrix[12];
-            model.center_point[1] = cp.matrix[13];
-            model.center_point[2] = cp.matrix[14];
-        } else {
-            model.center_point[0] = cp.translation[0];
-            model.center_point[1] = cp.translation[1];
-            model.center_point[2] = cp.translation[2];
-        }
+        // Match reference web editor (index.js qa()):
+        // Accumulate full parent chain to get CenterPoint's world position.
+        // Combined with ModelComponent::Origin offset in object_render_matrix,
+        // this gives pixel-accurate model placement matching the original game.
+        float matrix[16];
+        get_node_matrix(model, i, 0.0f, matrix);
+        model.center_point[0] = matrix[12];
+        model.center_point[1] = matrix[13];
+        model.center_point[2] = matrix[14];
         model.has_center_point = true;
         break;
     }

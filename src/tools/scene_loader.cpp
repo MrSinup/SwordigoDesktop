@@ -34,6 +34,8 @@
 #include "scene_schemas.h"
 #include "platform/protobuf_reader.h"
 
+#include <memory>
+#include <chrono>
 #include <fstream>
 #include <algorithm>
 #include <cmath>
@@ -43,6 +45,7 @@
 #include <mutex>
 #include <system_error>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -409,6 +412,12 @@ static void resolve_object_render_data(SceneObject& obj) {
     obj.background_name.clear();
     obj.model_y_rotation = 0.0f;
     obj.has_model_y_rotation = false;
+    obj.model_x_rotation = 0.0f;
+    obj.has_model_x_rotation = false;
+    obj.model_origin[0] = obj.model_origin[1] = obj.model_origin[2] = 0.0f;
+    obj.has_model_origin = false;
+    obj.model_diffuse_color[0] = obj.model_diffuse_color[1] = obj.model_diffuse_color[2] = 1.0f;
+    obj.has_model_diffuse_color = false;
     obj.is_spawn_point = false;
     obj.spawn_facing = 1;
     obj.spawn_offset[0] = obj.spawn_offset[1] = obj.spawn_offset[2] = 0.0f;
@@ -573,6 +582,23 @@ static void resolve_object_render_data(SceneObject& obj) {
                             if (sf.field_number == 2 && sf.wire_type == proto::WIRE_I32) {
                                 obj.model_y_rotation = sf.float_val;
                                 obj.has_model_y_rotation = std::fabsf(sf.float_val) > 1e-5f;
+                            } else if (sf.field_number == 4 && sf.wire_type == proto::WIRE_I32) {
+                                obj.model_x_rotation = sf.float_val;
+                                obj.has_model_x_rotation = std::fabsf(sf.float_val) > 1e-5f;
+                            } else if (sf.field_number == 6 && sf.wire_type == proto::WIRE_LEN) {
+                                read_vector3(sf.bytes_val, obj.model_origin);
+                                obj.has_model_origin = true;
+                            } else if (sf.field_number == 8 && sf.wire_type == proto::WIRE_LEN) {
+                                proto::Reader cr(sf.bytes_val);
+                                proto::Field cf;
+                                while (cr.read_field(cf)) {
+                                    if (cf.wire_type == proto::WIRE_I32) {
+                                        if (cf.field_number == 1) obj.model_diffuse_color[0] = cf.float_val;
+                                        else if (cf.field_number == 2) obj.model_diffuse_color[1] = cf.float_val;
+                                        else if (cf.field_number == 3) obj.model_diffuse_color[2] = cf.float_val;
+                                    }
+                                }
+                                obj.has_model_diffuse_color = true;
                             }
                         }
                     }
@@ -613,13 +639,72 @@ struct SceneTemplate {
     std::vector<SceneComponent> components;
 };
 
-// parse_object_library is defined below; forward declare for scene_list_templates
-static std::vector<SceneTemplate> parse_object_library(const std::string& bytes);
+static uint64_t hash_scl_bytes(const std::string& bytes) {
+    uint64_t h = 14695981039346656037ull ^ static_cast<uint64_t>(bytes.size());
+    const size_t n = bytes.size();
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(bytes.data());
+    const size_t step = std::max<size_t>(1, n / 256);
+    for (size_t i = 0; i < n; i += step) {
+        h = (h ^ p[i]) * 1099511628211ull;
+    }
+    return h;
+}
+
+static std::vector<SceneTemplate> parse_object_library(const std::string& bytes) {
+    std::vector<SceneTemplate> templates;
+    try {
+        proto::Reader library(bytes);
+        proto::Field field;
+        while (library.read_field(field)) {
+            if (field.field_number != 2 || field.wire_type != proto::WIRE_LEN) continue;
+            SceneTemplate item;
+            proto::Reader object_template(field.bytes_val);
+            proto::Field template_field;
+            while (object_template.read_field(template_field)) {
+                if (template_field.field_number == 1 && template_field.wire_type == proto::WIRE_LEN) {
+                    SceneObject object = parse_object(template_field.bytes_val);
+                    item.name = object.name.empty() ? object.template_name : object.name;
+                    item.components = std::move(object.components);
+                } else if (template_field.field_number == 2 && template_field.wire_type == proto::WIRE_I32) {
+                    item.scaling = template_field.float_val;
+                }
+            }
+            if (!item.name.empty()) templates.push_back(std::move(item));
+        }
+    } catch (...) {}
+    return templates;
+}
+
+struct SclParseCacheEntry {
+    std::shared_ptr<const std::vector<SceneTemplate>> templates;
+    size_t byte_size = 0;
+};
+static std::unordered_map<uint64_t, SclParseCacheEntry> s_scl_parse_cache;
+static std::mutex s_scl_parse_mutex;
+
+static std::shared_ptr<const std::vector<SceneTemplate>> parse_object_library_cached(const std::string& bytes) {
+    if (bytes.empty()) return std::make_shared<std::vector<SceneTemplate>>();
+    const uint64_t h = hash_scl_bytes(bytes);
+    {
+        std::lock_guard<std::mutex> lock(s_scl_parse_mutex);
+        auto it = s_scl_parse_cache.find(h);
+        if (it != s_scl_parse_cache.end() && it->second.byte_size == bytes.size()) {
+            return it->second.templates;
+        }
+    }
+    auto parsed = std::make_shared<std::vector<SceneTemplate>>(parse_object_library(bytes));
+    {
+        std::lock_guard<std::mutex> lock(s_scl_parse_mutex);
+        s_scl_parse_cache[h] = {parsed, bytes.size()};
+    }
+    return parsed;
+}
 
 std::vector<SceneTemplateInfo> scene_list_templates(const SceneData& scene) {
     std::unordered_map<std::string, SceneTemplateInfo> merged;
     auto collect = [&](const std::string& bytes) {
-        for (const auto& item : parse_object_library(bytes)) {
+        auto lib = parse_object_library_cached(bytes);
+        for (const auto& item : *lib) {
             auto& info = merged[item.name];
             info.name = item.name;
             info.scaling = item.scaling;
@@ -638,31 +723,6 @@ std::vector<SceneTemplateInfo> scene_list_templates(const SceneData& scene) {
     return result;
 }
 
-static std::vector<SceneTemplate> parse_object_library(const std::string& bytes) {
-    std::vector<SceneTemplate> templates;
-    try {
-        proto::Reader library(bytes);
-        proto::Field field;
-        while (library.read_field(field)) {
-            if (field.field_number != 2 || field.wire_type != proto::WIRE_LEN) continue;
-            SceneTemplate item;
-            proto::Reader object_template(field.bytes_val);
-            proto::Field template_field;
-            while (object_template.read_field(template_field)) {
-                if (template_field.field_number == 1 && template_field.wire_type == proto::WIRE_LEN) {
-                    SceneObject object = parse_object(template_field.bytes_val);
-                    item.name = object.name;
-                    item.components = std::move(object.components);
-                } else if (template_field.field_number == 2 && template_field.wire_type == proto::WIRE_I32) {
-                    item.scaling = template_field.float_val;
-                }
-            }
-            if (!item.name.empty()) templates.push_back(std::move(item));
-        }
-    } catch (...) {}
-    return templates;
-}
-
 // ObjectLibrary.ImportedLibrary (tag 3, repeated string): names of external
 // .scl files whose templates must be merged for object template resolution.
 static std::vector<std::string> parse_imported_library_names(const std::string& bytes) {
@@ -675,6 +735,22 @@ static std::vector<std::string> parse_imported_library_names(const std::string& 
                 names.emplace_back(field.bytes_val.data(), field.bytes_val.size());
         }
     } catch (...) {}
+    return names;
+}
+
+static std::vector<std::string> parse_imported_library_names_cached(const std::string& bytes) {
+    static std::unordered_map<uint64_t, std::vector<std::string>> s_imported_cache;
+    static std::mutex s_imported_mutex;
+    if (bytes.empty()) return {};
+    const uint64_t h = hash_scl_bytes(bytes);
+    {
+        std::lock_guard<std::mutex> lock(s_imported_mutex);
+        auto it = s_imported_cache.find(h);
+        if (it != s_imported_cache.end()) return it->second;
+    }
+    auto names = parse_imported_library_names(bytes);
+    std::lock_guard<std::mutex> lock(s_imported_mutex);
+    s_imported_cache[h] = names;
     return names;
 }
 
@@ -814,7 +890,7 @@ static void load_external_libraries(SceneData& scene, const std::vector<std::str
 
     // 1. Direct imports from the scene's embedded ObjectLibrary
     for (const auto& library : scene.object_libraries) {
-        for (const auto& name : parse_imported_library_names(library))
+        for (const auto& name : parse_imported_library_names_cached(library))
             enqueue(name);
     }
 
@@ -830,6 +906,14 @@ static void load_external_libraries(SceneData& scene, const std::vector<std::str
             }
         }
     }
+
+    struct SclFileEntry {
+        std::string bytes;
+        uintmax_t file_size = 0;
+        int64_t mtime_ns = 0;
+    };
+    static std::unordered_map<std::string, SclFileEntry> s_scl_file_cache;
+    static std::mutex s_scl_file_mutex;
 
     // 3. Process worklist transitively (queue grows as child libraries are parsed)
     size_t q_head = 0;
@@ -851,12 +935,31 @@ static void load_external_libraries(SceneData& scene, const std::vector<std::str
             roots.push_back(found_dir.parent_path() / "resources");
         }
 
-        std::ifstream in(found, std::ios::binary);
-        if (!in) continue;
-        std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string bytes;
+        {
+            std::error_code ec;
+            uintmax_t fsize = fs::file_size(found, ec);
+            int64_t mtime = 0;
+            if (!ec) {
+                auto t = fs::last_write_time(found, ec);
+                if (!ec) mtime = std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+            }
+            std::lock_guard<std::mutex> lock(s_scl_file_mutex);
+            auto it = s_scl_file_cache.find(found.string());
+            if (it != s_scl_file_cache.end() && it->second.file_size == fsize && it->second.mtime_ns == mtime) {
+                bytes = it->second.bytes;
+            } else {
+                std::ifstream in(found, std::ios::binary);
+                if (in) {
+                    bytes.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    s_scl_file_cache[found.string()] = {bytes, fsize, mtime};
+                }
+            }
+        }
+
         if (!bytes.empty()) {
             // Transitive resolution: enqueue any libraries imported by this .scl
-            for (const auto& child : parse_imported_library_names(bytes)) {
+            for (const auto& child : parse_imported_library_names_cached(bytes)) {
                 enqueue(child);
             }
             scene.external_libraries.push_back(std::move(bytes));
@@ -867,25 +970,33 @@ static void load_external_libraries(SceneData& scene, const std::vector<std::str
 }
 
 static void resolve_scene_templates(SceneData& scene) {
-    std::unordered_map<std::string, SceneTemplate> templates;
+    std::unordered_map<std::string, const SceneTemplate*> templates;
+    std::vector<std::shared_ptr<const std::vector<SceneTemplate>>> active_libs;
+    active_libs.reserve(scene.object_libraries.size() + scene.external_libraries.size());
+
     for (const auto& library : scene.object_libraries) {
-        for (auto& item : parse_object_library(library))
-            templates[item.name] = std::move(item);
+        auto lib = parse_object_library_cached(library);
+        for (const auto& item : *lib)
+            templates[item.name] = &item;
+        active_libs.push_back(std::move(lib));
     }
     // Merge templates from external .scl libraries (ImportedLibrary refs).
     for (const auto& library : scene.external_libraries) {
-        for (auto& item : parse_object_library(library)) {
+        auto lib = parse_object_library_cached(library);
+        for (const auto& item : *lib) {
             if (templates.find(item.name) == templates.end())
-                templates[item.name] = std::move(item);
+                templates[item.name] = &item;
         }
+        active_libs.push_back(std::move(lib));
     }
 
     for (auto& object : scene.objects) {
         object.resolved_components = object.components;
-        const auto item = templates.find(object.template_name);
-        if (item != templates.end()) {
+        const auto it = templates.find(object.template_name);
+        if (it != templates.end()) {
+            const SceneTemplate* templ = it->second;
             if (object.components.empty()) {
-                object.resolved_components = item->second.components;
+                object.resolved_components = templ->components;
             } else {
                 // Determine which component classes are explicitly overridden by the object.
                 // Matching by component schema class (e.g. GroundMeshComponent) rather than
@@ -897,7 +1008,7 @@ static void resolve_scene_templates(SceneData& scene) {
                     if (!sname.empty()) overridden_schemas.insert(sname);
                 }
                 std::vector<SceneComponent> merged;
-                for (const auto& component : item->second.components) {
+                for (const auto& component : templ->components) {
                     std::string sname = component_schema_name(component);
                     if (sname.empty() || overridden_schemas.find(sname) == overridden_schemas.end()) {
                         merged.push_back(component);
@@ -906,7 +1017,7 @@ static void resolve_scene_templates(SceneData& scene) {
                 merged.insert(merged.end(), object.components.begin(), object.components.end());
                 object.resolved_components = std::move(merged);
             }
-            object.template_scaling = item->second.scaling;
+            object.template_scaling = templ->scaling;
         }
         resolve_object_render_data(object);
     }
@@ -1131,6 +1242,10 @@ static std::string serialize_object(const SceneObject& obj) {
         }
     } else if (!obj.local_aabb.empty()) {
         w.write_bytes_field(8, obj.local_aabb);
+    } else {
+        // Tag 8 LocalAabb is mandatory in Swordigo wire format.
+        // Fallback to a sensible 40x40 bounding box so the engine/deserializer never hits null.
+        w.write_bytes_field(8, scene_build_local_aabb(-20.0f, -20.0f, 20.0f, 20.0f));
     }
 
     // Tag 9: Hidden
@@ -2062,8 +2177,26 @@ SceneComponent scene_make_model_component(const std::string& model_name) {
     proto::Writer wrapper;
     wrapper.write_string_field(1, "Model");
     wrapper.write_varint_field(2, static_cast<uint64_t>(component.type_id));
-    proto::Writer payload;
-    payload.write_string_field(1, model_name);   // ModelComponent.Name
+
+    proto::Writer payload;   // ModelComponent
+    payload.write_string_field(1, model_name);      // Name
+    payload.write_float_field(2, 0.0f);             // YRotation
+    payload.write_float_field(3, 0.0f);             // EmissionFactor
+    payload.write_float_field(4, 0.0f);             // XRotation
+    proto::Writer shc;                              // ShatterColor (black)
+    shc.write_float_field(1, 0.0f); shc.write_float_field(2, 0.0f);
+    shc.write_float_field(3, 0.0f); shc.write_float_field(4, 1.0f);
+    payload.write_nested_field(5, shc);
+    proto::Writer org;                              // Origin (0,0,0)
+    org.write_float_field(1, 0.0f); org.write_float_field(2, 0.0f);
+    org.write_float_field(3, 0.0f);
+    payload.write_nested_field(6, org);
+    payload.write_varint_field(7, 0);               // Transparent
+    proto::Writer dfc;                              // DiffuseColor (white: 1, 1, 1, 1)
+    dfc.write_float_field(1, 1.0f); dfc.write_float_field(2, 1.0f);
+    dfc.write_float_field(3, 1.0f); dfc.write_float_field(4, 1.0f);
+    payload.write_nested_field(8, dfc);
+
     wrapper.write_nested_field(101, payload);
     component.raw_data = wrapper.to_string();
     return component;
@@ -2077,6 +2210,225 @@ std::string scene_build_local_aabb(float min_x, float min_y,
     w.write_float_field(3, max_x - min_x);
     w.write_float_field(4, max_y - min_y);
     return w.to_string();
+}
+
+bool scene_get_camera_bounds(const SceneData& scene, CameraBounds& out) {
+    if (scene.bounds.empty()) {
+        out = CameraBounds{};
+        out.enabled = false;
+        return false;
+    }
+    try {
+        proto::Reader reader(scene.bounds[0]);
+        proto::Field f;
+        while (reader.read_field(f)) {
+            if (f.wire_type == proto::WIRE_I32) {
+                if (f.field_number == 1) out.x = f.float_val;
+                else if (f.field_number == 2) out.y = f.float_val;
+                else if (f.field_number == 3) out.width = f.float_val;
+                else if (f.field_number == 4) out.height = f.float_val;
+            }
+        }
+        out.enabled = true;
+        return true;
+    } catch (...) {
+        out = CameraBounds{};
+        out.enabled = false;
+        return false;
+    }
+}
+
+void scene_set_camera_bounds(SceneData& scene, const CameraBounds& cb) {
+    proto::Writer w;
+    w.write_float_field(1, cb.x);
+    w.write_float_field(2, cb.y);
+    w.write_float_field(3, cb.width);
+    w.write_float_field(4, cb.height);
+    const std::string raw = w.to_string();
+    if (scene.bounds.empty()) {
+        scene.bounds.push_back(raw);
+    } else {
+        scene.bounds[0] = raw;
+    }
+}
+
+void scene_remove_camera_bounds(SceneData& scene) {
+    scene.bounds.clear();
+}
+
+CameraBounds scene_fit_camera_bounds_to_level(const SceneData& scene, float padding_x, float padding_y) {
+    float min_x = 1e9f, min_y = 1e9f, max_x = -1e9f, max_y = -1e9f;
+    bool found = false;
+    for (const auto& obj : scene.objects) {
+        if (obj.hidden) continue;
+        if (!obj.ground_meshes.empty()) {
+            const float s = std::abs(obj.scale_x * obj.template_scaling);
+            for (const auto& gm : obj.ground_meshes) {
+                const float* p = gm.positions.data();
+                for (size_t i = 0; i + 2 < gm.positions.size(); i += 3) {
+                    const float wx = obj.pos_x + p[i] * s;
+                    const float wy = obj.pos_y + p[i + 1] * s;
+                    if (wx < min_x) min_x = wx;
+                    if (wx > max_x) max_x = wx;
+                    if (wy < min_y) min_y = wy;
+                    if (wy > max_y) max_y = wy;
+                    found = true;
+                }
+            }
+        }
+        if (!obj.local_aabb.empty()) {
+            try {
+                proto::Reader r(obj.local_aabb);
+                proto::Field f;
+                float lx = 0, ly = 0, lw = 0, lh = 0;
+                while (r.read_field(f)) {
+                    if (f.wire_type == proto::WIRE_I32) {
+                        if (f.field_number == 1) lx = f.float_val;
+                        else if (f.field_number == 2) ly = f.float_val;
+                        else if (f.field_number == 3) lw = f.float_val;
+                        else if (f.field_number == 4) lh = f.float_val;
+                    }
+                }
+                if (lw > 0 && lh > 0) {
+                    float o_min_x = obj.pos_x + lx * obj.scale_x;
+                    float o_max_x = o_min_x + lw * obj.scale_x;
+                    float o_min_y = obj.pos_y + ly * obj.scale_y;
+                    float o_max_y = o_min_y + lh * obj.scale_y;
+                    if (o_min_x > o_max_x) std::swap(o_min_x, o_max_x);
+                    if (o_min_y > o_max_y) std::swap(o_min_y, o_max_y);
+                    if (o_min_x < min_x) min_x = o_min_x;
+                    if (o_max_x > max_x) max_x = o_max_x;
+                    if (o_min_y < min_y) min_y = o_min_y;
+                    if (o_max_y > max_y) max_y = o_max_y;
+                    found = true;
+                }
+            } catch (...) {}
+        }
+        if (!found) {
+            if (obj.pos_x < min_x) min_x = obj.pos_x;
+            if (obj.pos_x > max_x) max_x = obj.pos_x;
+            if (obj.pos_y < min_y) min_y = obj.pos_y;
+            if (obj.pos_y > max_y) max_y = obj.pos_y;
+            found = true;
+        }
+    }
+
+    CameraBounds cb;
+    if (found && min_x < max_x && min_y < max_y) {
+        cb.x = min_x - padding_x;
+        cb.y = min_y - padding_y;
+        cb.width = std::max(200.0f, (max_x - min_x) + padding_x * 2.0f);
+        cb.height = std::max(120.0f, (max_y - min_y) + padding_y * 2.0f);
+    } else {
+        cb.x = -200.0f;
+        cb.y = -100.0f;
+        cb.width = 400.0f;
+        cb.height = 200.0f;
+    }
+    cb.enabled = true;
+    return cb;
+}
+
+float scene_terrain_top_y(const SceneData& scene, float x, float tolerance) {
+    float best = -1e9f;
+    for (const auto& obj : scene.objects) {
+        if (obj.ground_meshes.empty()) continue;
+        const float s = std::abs(obj.scale_x * obj.template_scaling);
+        for (const auto& gm : obj.ground_meshes) {
+            const float* p = gm.positions.data();
+            for (size_t i = 0; i + 2 < gm.positions.size(); i += 3) {
+                const float wx = obj.pos_x + p[i] * s;
+                if (std::fabs(wx - x) <= tolerance) {
+                    const float wy = obj.pos_y + p[i + 1] * s;
+                    if (wy > best) best = wy;
+                }
+            }
+        }
+    }
+    return best;
+}
+
+SceneComponent scene_make_spawn_component(int facing, float off_x, float off_y, float off_z) {
+    SceneComponent component;
+    component.type_name = "SpawnPoint";
+    component.type_id = 101;
+    component.payload_field = 501;
+
+    proto::Writer wrapper;
+    wrapper.write_string_field(1, "SpawnPoint");
+    wrapper.write_varint_field(2, 101);
+
+    proto::Writer payload;
+    payload.write_varint_field(1, static_cast<uint64_t>(static_cast<int64_t>(facing)));
+    proto::Writer offset;
+    offset.write_float_field(1, off_x);
+    offset.write_float_field(2, off_y);
+    offset.write_float_field(3, off_z);
+    payload.write_nested_field(2, offset);
+
+    wrapper.write_nested_field(501, payload);
+    component.raw_data = wrapper.to_string();
+    return component;
+}
+
+SceneComponent scene_make_portal_component(const std::string& destination, const std::string& spawn_point, bool tap_to_enter) {
+    SceneComponent component;
+    component.type_name = "Portal";
+    component.type_id = 104;
+    component.payload_field = 104;
+
+    proto::Writer wrapper;
+    wrapper.write_string_field(1, "Portal");
+    wrapper.write_varint_field(2, 104);
+
+    proto::Writer payload;
+    payload.write_string_field(1, destination);
+    payload.write_string_field(2, spawn_point);
+    payload.write_varint_field(3, tap_to_enter ? 1ULL : 0ULL);
+    payload.write_varint_field(4, 101); // trigger shape id
+
+    wrapper.write_nested_field(104, payload);
+    component.raw_data = wrapper.to_string();
+    return component;
+}
+
+SceneObject scene_build_pod_object(const std::string& pod_path, const std::string& identifier) {
+    const std::string stem = fs::path(pod_path).stem().string();
+    av::SceneObject obj;
+    obj.template_name = "SceneObject";
+    obj.name = identifier;
+    obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
+    obj.mesh_name = stem;
+    obj.local_aabb = scene_build_local_aabb(-25.0f, -25.0f, 25.0f, 25.0f);
+    obj.components.push_back(scene_make_model_component(stem));
+    return obj;
+}
+
+SceneObject scene_build_spawn_object(const std::string& identifier, float x, float y, int facing) {
+    av::SceneObject obj;
+    obj.name = identifier;
+    obj.pos_x = x;
+    obj.pos_y = y;
+    obj.pos_z = 0.0f;
+    obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
+    obj.is_spawn_point = true;
+    obj.spawn_facing = facing;
+    obj.local_aabb = scene_build_local_aabb(-30.0f, -30.0f, 30.0f, 30.0f);
+    obj.components.push_back(scene_make_spawn_component(facing));
+    return obj;
+}
+
+SceneObject scene_build_portal_object(const std::string& identifier, float x, float y) {
+    av::SceneObject obj;
+    obj.name = identifier;
+    obj.pos_x = x;
+    obj.pos_y = y;
+    obj.pos_z = 0.0f;
+    obj.scale_x = obj.scale_y = obj.scale_z = 1.0f;
+    obj.is_portal = true;
+    obj.local_aabb = scene_build_local_aabb(-45.0f, -200.0f, 45.0f, 200.0f);
+    obj.components.push_back(scene_make_portal_component());
+    return obj;
 }
 
 std::string scene_program_source(const std::string& program_data) {

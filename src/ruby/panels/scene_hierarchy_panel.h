@@ -25,6 +25,7 @@ signals:
     void objectDuplicated(int index);
     void objectDeleted(int index);
     void objectFocusRequested(int index);
+    void cameraBoundsFitRequested();
 
     // Keyboard shortcuts (Del / Ctrl+C / Ctrl+V / Ctrl+D / Alt+Up-Down) —
     // ImGui asset_viewer parity. Emitted from QShortcuts so they work while

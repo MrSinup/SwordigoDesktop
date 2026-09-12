@@ -34,6 +34,7 @@ signals:
     void fileSelected(const QString& file_path);
     void newFileRequested(const QString& target_folder);
     void convertModelRequested(const QString& file_path);
+    void addModelToSceneRequested(const QString& file_path);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
