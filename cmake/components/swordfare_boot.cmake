@@ -7,43 +7,28 @@ add_executable(swordfare_boot
     ${SRC_DIR}/main.cpp
     ${SRC_DIR}/platform/arm64_reloc.cpp
     ${SRC_DIR}/platform/display.cpp
+    ${SRC_DIR}/platform/pod_ipc.cpp
     ${SRC_DIR}/platform/loading_screen.cpp
     ${SRC_DIR}/platform/crash_dialog.cpp
     ${SRC_DIR}/platform/openswordigo_host.cpp
     ${SRC_DIR}/platform/gui.cpp
     ${SRC_DIR}/platform/input_config.cpp
-    ${SRC_DIR}/platform/binary_selector.cpp)
-set_target_properties(swordfare_boot PROPERTIES OUTPUT_NAME swordfare)
+    ${SRC_DIR}/platform/binary_selector.cpp
+    ${SRC_DIR}/platform/ffmpeg_dyn.cpp)
+set_target_properties(swordfare_boot PROPERTIES OUTPUT_NAME swordfare AUTOMOC ON)
 swordigo_target(swordfare_boot)
 
 target_link_libraries(swordfare_boot PRIVATE
     swcore swgui swfmt swpod filerift swgfx swemu swordfare
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
     SDL3::SDL3 ${SDL3_IMAGE_LINK} ${VORBISFILE_LIBRARIES} ${MPG123_LIBRARIES}
     ZLIB::ZLIB OpenAL::OpenAL OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS} ${SWORDIGO_LIBM} ${SWORDIGO_SOCKLIB})
 
-# Static FFmpeg: on GNU linkers pull the archives in whole so their symbols are
-# visible to the shared component libs; MSVC uses /WHOLEARCHIVE.
-# On Windows, SWORDIGO_USE_FFMPEG links the bundled static build; when disabled
-# the video-background FFmpeg code is compiled out (see video_background.cpp).
-if (SWORDIGO_USE_FFMPEG)
-    if (MSVC)
-        target_link_options(swordfare_boot PRIVATE
-            /WHOLEARCHIVE:${FFMPEG_LIB_DIR}/libavformat.a
-            /WHOLEARCHIVE:${FFMPEG_LIB_DIR}/libavcodec.a
-            /WHOLEARCHIVE:${FFMPEG_LIB_DIR}/libswscale.a
-            /WHOLEARCHIVE:${FFMPEG_LIB_DIR}/libavutil.a)
-    else()
-        target_link_libraries(swordfare_boot PRIVATE
-            -Wl,--whole-archive
-            ${FFMPEG_LIB_DIR}/libavformat.a
-            ${FFMPEG_LIB_DIR}/libavcodec.a
-            ${FFMPEG_LIB_DIR}/libswscale.a
-            ${FFMPEG_LIB_DIR}/libavutil.a
-            -Wl,--no-whole-archive)
-        # GNU-ld only flags. MSVC linker has no rdynamic/allow-shlib-undefined.
-        target_link_options(swordfare_boot PRIVATE -rdynamic -Wl,--allow-shlib-undefined)
-    endif()
+# shm_open / mmap for the Ruby GG engine-pod frame ring (pod_ipc.cpp).
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(swordfare_boot PRIVATE rt)
 endif()
+
 
 if (SWORDIGO_USE_DYNARMIC)
     if (MSVC)

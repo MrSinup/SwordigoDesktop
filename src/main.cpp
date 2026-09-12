@@ -33,6 +33,11 @@ namespace fs = std::filesystem;
 #endif
 #include "srehost/srehost_abi.h"   // ProHook Phase 1: SVC #0x5352 gateway
 #include "platform/display.h"
+#include "platform/pod_ipc.h"        // Ruby GG engine-pod frame/control IPC
+#include <deque>
+#include <mutex>
+#include <thread>
+#include "platform/gui.h"            // GuiAction (GUI_MUSIC_MUTE etc.)
 #include "platform/openswordigo_host.h"
 #include "android/asset_manager.h"
 extern "C" void asset_manager_init_arm32(const char* base_path);
@@ -106,6 +111,262 @@ static std::string g_lib_name = "engine/v1.4.12/arm64-v8a/libswordigo.so";
 std::string g_assets_dir = "assets";  // "assets" for vanilla, "rl_assets" for RLSwordigo
 std::string g_instance_assets_dir = "assets";
 static float TOUCH_SCALE_Y = (float)GAME_H / 544.0f;   // ~1.985
+
+// =========================================================================
+// Engine-pod preview mode (Ruby GG dock) — see platform/pod_ipc.h
+//
+// When swordfare is launched with `--pod-preview <shm>:<W>x<H>` it runs the
+// whole boot + Dynarmic + SRE pipeline against a HIDDEN SDL/GL window at low
+// resolution, skips all host ImGui/debug overlays, and publishes every
+// finished frame into a shared-memory triple buffer that Ruby GG paints in a
+// dock widget. Input / pause / mute / quit come back over stdin as a stream
+// of pod::PodMsg records read by a dedicated control thread.
+// =========================================================================
+static bool     g_pod_enabled  = false;   // --pod-preview mode active
+static bool     g_pod_paused   = false;   // freeze button (skips update+draw)
+static int      g_pod_w = 1280;           // requested preview resolution
+static int      g_pod_h = 720;
+static std::string g_pod_shm_name;
+static pod::FrameRing* g_pod_ring = nullptr;
+static std::vector<uint8_t> g_pod_rgba;   // row-flipped frame scratch
+
+// Pod-injected virtual keyboard state (mirrors SDL_GetKeyboardState for the
+// ARM64 loop's control-button dispatch). SDL_PushEvent synthetic KEY events
+// are not reflected in SDL_GetKeyboardState inside a hidden-window pod, so the
+// loop consults THIS array (merged over SDL state) for pod key presses. This
+// is the same "bypass SDL" fix that made pod touch work.
+static uint8_t g_pod_key_state[512] = {0};
+
+// Scene Shifter guest VAs (mirror of the SwordfareGUI wiring). Filled once the
+// SRE globals resolve during ARM64 boot; enables the "Run scene" flow from
+// ruby: write target/spawn into guest memory and set g_sre_scene_shift_pending
+// — the per-frame sre_scene_shifter_tick() performs the actual GotoLevel.
+static bool     g_ss_ready = false;
+static uint64_t g_ss_pend_va = 0, g_ss_targ_va = 0, g_ss_spwn_va = 0,
+               g_ss_err_va  = 0, g_ss_act_va  = 0, g_ss_cur_va  = 0;
+static std::deque<pod::PodMsg> g_pod_cmds;
+static std::mutex  g_pod_cmds_mutex;
+static std::string g_pod_carry;           // partial stdin stream bytes
+
+// Called from the stdin reader thread → push into the command queue.
+static void pod_reader_dispatch(const pod::PodMsg& msg, void* /*user*/) {
+    std::lock_guard<std::mutex> lk(g_pod_cmds_mutex);
+    if (g_pod_cmds.size() < 4096) g_pod_cmds.push_back(msg);
+}
+
+static void pod_reader_thread() {
+    char buf[2048];
+#if defined(_WIN32)
+    _setmode(_fileno(stdin), _O_BINARY);
+    for (;;) {
+        int n = (int)::_read(0, buf, sizeof(buf));
+        if (n <= 0) break;
+        pod::pod_dispatch_stream((const uint8_t*)buf, (size_t)n,
+                                 &g_pod_carry, pod_reader_dispatch, nullptr);
+    }
+#else
+    for (;;) {
+        ssize_t n = ::read(0, buf, sizeof(buf));
+        if (n <= 0) break;
+        pod::pod_dispatch_stream((const uint8_t*)buf, (size_t)n,
+                                 &g_pod_carry, pod_reader_dispatch, nullptr);
+    }
+#endif
+}
+
+static void pod_start_reader() {
+    static std::thread* t = nullptr;
+    if (t) return;
+    t = new std::thread(pod_reader_thread);
+}
+
+// Pop one queued command (loop thread). Returns false when empty.
+static bool pod_pop_cmd(pod::PodMsg& out) {
+    std::lock_guard<std::mutex> lk(g_pod_cmds_mutex);
+    if (g_pod_cmds.empty()) return false;
+    out = g_pod_cmds.front();
+    g_pod_cmds.pop_front();
+    return true;
+}
+
+// Helper forward declarations used by pod_process_commands() below.
+void process_gui_action(GuiAction gui_action, bool& running);
+static void pod_touch_direct(int action, int finger_id,
+                             float nx, float ny, float ndx, float ndy);
+
+// Handle queued control messages on the game-loop thread.
+static void pod_process_commands(bool& running) {
+    if (!g_pod_enabled) return;
+    pod::PodMsg m;
+    while (pod_pop_cmd(m)) {
+        switch (m.kind) {
+            case pod::kMsgQuit:
+                running = false;
+                std::memset(g_pod_key_state, 0, sizeof(g_pod_key_state));
+                if (g_pod_ring) g_pod_ring->set_state(pod::kStateExiting);
+                break;
+            case pod::kMsgPause: {
+                g_pod_paused = (m.a != 0);
+                if (g_pod_ring)
+                    g_pod_ring->set_state(g_pod_paused ? pod::kStatePaused
+                                                       : pod::kStateRunning);
+                std::cout << "[Pod] " << (g_pod_paused ? "PAUSED" : "RESUMED")
+                          << std::endl;
+                break;
+            }
+            case pod::kMsgMute:
+                process_gui_action(GUI_MUSIC_MUTE, running);
+                std::cout << "[Pod] Music mute toggled" << std::endl;
+                break;
+            case pod::kMsgVolume: {
+                float v = (float)(m.a > 100 ? 100 : m.a) / 100.0f;
+                std::cout << "[Pod] Volume -> " << (int)(v * 100) << "%" << std::endl;
+                break;
+            }
+            case pod::kMsgKey: {
+                // Drive the loop's control dispatch DIRECTLY via the pod key
+                // state (SDL_PushEvent KEY events never reach
+                // SDL_GetKeyboardState in a hidden-window pod).
+                if (m.scancode > 0 && m.scancode < 512) {
+                    g_pod_key_state[m.scancode] = m.a ? 1 : 0;
+                }
+                // Also keep a pushed SDL event for any real-keyboard pollers.
+                SDL_Event e;
+                SDL_zero(e);
+                e.type = (m.a ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP);
+                e.key.key = (SDL_Keycode)m.key;
+                e.key.scancode = (SDL_Scancode)m.scancode;
+                e.key.mod = (SDL_Keymod)m.mods;
+                e.key.repeat = (m.x != 0);
+                SDL_PushEvent(&e);
+                break;
+            }
+            case pod::kMsgMouseBtn: {
+                // f[0],f[1] = normalized position (top-left origin). mods holds
+                // 1=down/0=up, a holds the SDL button number.
+                SDL_Event e;
+                SDL_zero(e);
+                e.type = (m.mods ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP);
+                e.button.button = (Uint8)(m.a & 0xFF);
+                e.button.x = (int)(m.f[0] * g_win_w);
+                e.button.y = (int)(m.f[1] * g_win_h);
+                SDL_PushEvent(&e);
+                break;
+            }
+            case pod::kMsgMouseMove: {
+                SDL_Event e;
+                SDL_zero(e);
+                e.type = SDL_EVENT_MOUSE_MOTION;
+                e.motion.x = (int)(m.f[0] * g_win_w);
+                e.motion.y = (int)(m.f[1] * g_win_h);
+                SDL_PushEvent(&e);
+                break;
+            }
+            case pod::kMsgWheel: {
+                SDL_Event e;
+                SDL_zero(e);
+                e.type = SDL_EVENT_MOUSE_WHEEL;
+                e.wheel.y = m.a ? (float)m.a : 1.0f;
+                SDL_PushEvent(&e);
+                break;
+            }
+            case pod::kMsgTouch: {
+                // a = action (1 down, 2 up, 4 motion); mods = finger id;
+                // f[0..3] = normalized x, y, dx, dy (y top-down origin).
+                // Dispatch DIRECTLY into the ARM64 guest handler (see
+                // pod_touch_direct) — synthetic SDL finger events can be
+                // swallowed by event filtering in hidden-window pod mode.
+                const int finger_id = m.mods + 20;   // keep clear of touch HUD ids
+                pod_touch_direct(m.a, finger_id,
+                                 m.f[0], m.f[1], m.f[2], m.f[3]);
+                break;
+            }
+            case pod::kMsgText: {
+                // SDL3 text events carry a borrowed const char* — keep the
+                // payload in a small rotating buffer so it stays alive until
+                // the event is polled later in this same frame.
+                static char s_text_ring[8][64];
+                static int s_text_idx = 0;
+                char* slot = s_text_ring[(s_text_idx++) & 7];
+                std::memset(slot, 0, 64);
+                std::strncpy(slot, m.text, 63);
+                SDL_Event e;
+                SDL_zero(e);
+                e.type = SDL_EVENT_TEXT_INPUT;
+                e.text.text = slot;
+                SDL_PushEvent(&e);
+                break;
+            }
+            case pod::kMsgShiftScene: {
+                // Ruby "▶ Run scene": dispatch through the SAME Scene Shifter
+                // state machine the SwordfareGUI panel uses — write target +
+                // spawn into the guest globals and set the pending flag; the
+                // per-frame sre_scene_shifter_tick() then calls the engine's
+                // GotoLevel(level, spawn) with the SRE recovery in place.
+                if (!g_ss_ready || !g_guest_memory) {
+                    std::cerr << "[Pod] Scene shift ignored: shifter not ready"
+                              << std::endl;
+                    break;
+                }
+                const char* target = m.target[0] ? m.target : nullptr;
+                if (!target) break;
+                const char* spawn = m.spawn[0] ? m.spawn : "start";
+                std::snprintf((char*)(g_guest_memory + g_ss_targ_va), 127, "%s", target);
+                std::snprintf((char*)(g_guest_memory + g_ss_spwn_va), 63, "%s", spawn);
+                *(volatile int*)(g_guest_memory + g_ss_pend_va) = (m.a == 2) ? 2 : 1;
+                std::cout << "[Pod] Scene shift -> " << target << " @ "
+                          << spawn << " (mode " << ((m.a == 2) ? "forced" : "normal")
+                          << ")" << std::endl;
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
+// glReadPixels the finished back buffer (top-left origin RGBA), row-flip it and
+// publish to the shared-memory ring. Called on the game-loop thread right
+// before SwapWindow so the captured frame matches exactly what a visible
+// window would have shown (host overlays are disabled in pod mode).
+static void pod_publish_frame() {
+    if (!g_pod_enabled || !g_pod_ring) return;
+    const uint32_t w = (uint32_t)g_draw_w;
+    const uint32_t h = (uint32_t)g_draw_h;
+    if (!w || !h) return;
+    const size_t bytes = (size_t)w * h * 4;
+    if (g_pod_rgba.size() != bytes) {
+        g_pod_rgba.resize(bytes);
+    }
+    std::vector<uint8_t> raw(bytes);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, (GLsizei)w, (GLsizei)h, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+    // OpenGL rows are bottom-up; ruby expects top-down like a normal image.
+    const uint32_t stride = w * 4;
+    uint8_t* dst = g_pod_rgba.data();
+    for (uint32_t row = 0; row < h; ++row) {
+        std::memcpy(dst + (h - 1 - row) * stride,
+                    raw.data() + row * stride, stride);
+    }
+    g_pod_ring->publish(dst, w, h);
+    static uint64_t s_fps_frames = 0;
+    static Uint64 s_fps_last = 0;
+    s_fps_frames++;
+    Uint64 now = SDL_GetTicks();
+    if (!s_fps_last) s_fps_last = now;
+    if (now - s_fps_last >= 1000) {
+        g_pod_ring->set_fps((uint32_t)(s_fps_frames * 1000u / (uint32_t)(now - s_fps_last)));
+        s_fps_frames = 0;
+        s_fps_last = now;
+    }
+}
+
+// Direct pod touch injection (defined after g_emulator_64 is declared).
+static void pod_touch_direct(int action, int finger_id,
+                             float nx, float ny, float ndx, float ndy);
+
+// Convenience: synthesize a pod key/mouse message from normalized Qt coords.
+// (Only used host-side in ruby — see ruby/emulator/engine_pod.cpp.)
 
 // =========================================================================
 // Render Resolution Preset System
@@ -227,6 +488,50 @@ static std::string sre_normalize_vfs_path(const std::string& p) {
 }
 JniBridge64 g_bridge_64;
 IEmulatorArm64* g_emulator_64 = nullptr;
+
+// =========================================================================
+// Direct pod touch injection (Ruby GG dock)
+//
+// The preview's taps arrive as normalized pod touch messages. We dispatch them
+// straight into the ARM64 guest's handleTouchEvent — the exact same AAPCS64
+// call the gamepad/mouse paths use — instead of round-tripping through
+// SDL_PushEvent -> SDL_PollEvent -> event filtering, which can silently swallow
+// synthetic finger events in hidden-window pod mode. This mirrors call_touch_64
+// inside the ARM64 game loop.
+// =========================================================================
+static uint64_t g_touch_64_handle = 0;   // Java_..._handleTouchEvent (ARM64 guest)
+
+static void pod_touch_direct(int action, int finger_id,
+                             float nx, float ny, float ndx, float ndy) {
+    if (!g_pod_enabled) return;
+    if (!g_touch_64_handle || !g_emulator_64 || !g_guest_memory) return;
+    extern volatile int g_sre_controls_disabled;
+    if (g_sre_controls_disabled) return;
+    // Never feed touch into an already-faulted guest.
+    if (g_emulator_64->has_faulted()) return;
+
+    // Normalized (top-left origin) -> legacy 960x544 space, y-up, exactly as
+    // the SDL finger handler does, then scaled to the current render preset.
+    float x     = nx * 960.0f;
+    float y     = (1.0f - ny) * 544.0f;
+    float old_x = (nx - ndx) * 960.0f;
+    float old_y = (1.0f - (ny - ndy)) * 544.0f;
+    x     *= TOUCH_SCALE_X;  y     *= TOUCH_SCALE_Y;
+    old_x *= TOUCH_SCALE_X;  old_y *= TOUCH_SCALE_Y;
+
+    double time_val = (double)SDL_GetTicks() / 1000.0;
+    const int tap = (action == 1) ? 1 : 0;
+
+    g_emulator_64->set_dreg(0, time_val);
+    g_emulator_64->set_sreg(1, x);
+    g_emulator_64->set_sreg(2, y);
+    g_emulator_64->set_sreg(3, old_x);
+    g_emulator_64->set_sreg(4, old_y);
+    // env=0x10000 (fake JNI env), obj=0, action, id, tapCount
+    g_emulator_64->call(g_touch_64_handle,
+                        {0x10000ULL, 0, (uint64_t)action,
+                         (uint64_t)finger_id, (uint64_t)tap});
+}
 
 // Architecture flag — set during boot based on selected binary
 bool g_is_arm64 = false;
@@ -1797,7 +2102,7 @@ void load_and_boot() {
             }
 
             // Render SRT overlay (inventory editor, etc.) — F11 toggle
-            if (g_display_active && g_srt_overlay.is_visible()) {
+            if (g_display_active && !g_pod_enabled && g_srt_overlay.is_visible()) {
                 glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                 glViewport(0, 0, g_draw_w, g_draw_h);
                 glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
@@ -1843,7 +2148,7 @@ void load_and_boot() {
             }
             
             // Draw Swordfare GUI F3 Overlay if visible
-            if (g_display_active) {
+            if (g_display_active && !g_pod_enabled) {
                 g_swordfare_gui.begin_frame();
                 if (g_swordfare_gui.is_visible()) {
                     SwordfareDebugStats st;
@@ -1918,6 +2223,7 @@ void load_and_boot() {
 #endif
                 {
                     RedstellGC::instance().process_main_thread_deletions();
+                    if (g_pod_enabled) pod_publish_frame();
                     g_display_ptr->swap();
                 }
                 // Reclaim stale deferred guest frees every frame, on BOTH render paths
@@ -2145,6 +2451,14 @@ void load_and_boot() {
                                 break;
                             }
                             if (event.key.key == SDLK_F7 && !event.key.repeat) {
+                                if (!g_video_background_enabled) {
+                                    extern bool ffmpeg_dyn_available();
+                                    extern bool ffmpeg_dyn_init();
+                                    if (!ffmpeg_dyn_available() && !ffmpeg_dyn_init()) {
+                                        std::cout << "[VideoBackground] Cannot enable video background: FFmpeg runtime libraries not found on this system." << std::endl;
+                                        break;
+                                    }
+                                }
                                 g_video_background_enabled = !g_video_background_enabled;
                                 std::cout << "[VideoBackground] Video playback: " << (g_video_background_enabled ? "ENABLED" : "DISABLED") << std::endl;
                                 break;
@@ -3020,9 +3334,10 @@ void load_and_boot_arm64() {
 
 
     // =========================================================================
-    // libsre.so — Swordigo Runtime Engine (guest-side ARM64 library)
+    // SRE version module — Swordigo Runtime Engine (guest-side ARM64 library)
     // =========================================================================
-    // Loads libsre.so into guest memory and installs hooks that redirect
+    // Loads libsre12.so (1.4.12) / libsre13.so (1.4.13) into guest memory and
+    // installs hooks that redirect
     // problematic functions in libswordigo.so to clean C reimplementations.
     // This eliminates atomic spin loops (STXR), threading issues, and more.
     //
@@ -3047,26 +3362,34 @@ void load_and_boot_arm64() {
         std::cerr << "============================================" << std::endl;
 
         std::string sre_path;
-        if (swordi_abi == 13) {
-            sre_path = "bin/libs/libsre13.so";
-            if (access(sre_path.c_str(), F_OK) != 0) {
-                std::string alt_path = get_data_path("bin/libs/libsre13.so");
-                if (!alt_path.empty() && access(alt_path.c_str(), F_OK) == 0) {
-                    sre_path = alt_path;
-                } else if (access("libsre13.so", F_OK) == 0) {
-                    sre_path = "libsre13.so";
-                } else {
-                    sre_path = "";
-                }
+        const char* lib_name = (swordi_abi == 13) ? "libsre13.so" : "libsre12.so";
+        const char* candidate_paths[] = {
+            (swordi_abi == 13) ? "bin/libs/libsre13.so" : "bin/libs/libsre12.so",
+            (swordi_abi == 13) ? "libs/libsre13.so" : "libs/libsre12.so",
+            lib_name,
+            nullptr
+        };
+        for (int i = 0; candidate_paths[i]; i++) {
+            if (access(candidate_paths[i], F_OK) == 0) {
+                sre_path = candidate_paths[i];
+                break;
             }
-        } else {
-            sre_path = "bin/libs/libsre.so";
+            std::string alt = get_data_path(candidate_paths[i]);
+            if (!alt.empty() && access(alt.c_str(), F_OK) == 0) {
+                sre_path = alt;
+                break;
+            }
+        }
+        if (false) {
+            // Swordigo 1.4.12 runtime = libsre12.so (the shared base infra is
+            // compiled INTO it; there is no separate libsre.so anymore).
+            sre_path = "bin/libs/libsre12.so";
             if (access(sre_path.c_str(), F_OK) != 0) {
-                std::string alt_path = get_data_path("bin/libs/libsre.so");
+                std::string alt_path = get_data_path("bin/libs/libsre12.so");
                 if (!alt_path.empty() && access(alt_path.c_str(), F_OK) == 0) {
                     sre_path = alt_path;
-                } else if (access("libsre.so", F_OK) == 0) {
-                    sre_path = "libsre.so";
+                } else if (access("libsre12.so", F_OK) == 0) {
+                    sre_path = "libsre12.so";
                 }
             }
         }
@@ -3077,7 +3400,7 @@ void load_and_boot_arm64() {
             std::cout << "[SRE] Path: " << sre_path << std::endl;
 
             remove("/home/quantumcreeper/SwordigoDesktop/sre_hook_debug.txt");
-            // Load libsre.so at a separate guest address (after libswordigo.so)
+            // Load the SRE version module at a separate guest address (after libswordigo.so)
             uint64_t sre_load_addr = 0x2000000;  // 32MB — well above swordigo's ~7MB
 
             int sre_ret = g_loader_64->load(&g_sre_mod, sre_path, sre_load_addr);
@@ -3095,6 +3418,31 @@ void load_and_boot_arm64() {
                 g_loader_64->resolve_all_to_bridge(&g_sre_mod, &g_bridge_64, GUEST_GLOBALS_BASE);
                 fprintf(stderr, "[DBG-FFI] after resolve_all_to_bridge: GOT[0x20b0930]=0x%lx (want 0x2064180)\n",
                         *(uint64_t*)(g_guest_memory + 0x20b0930));
+
+                // ─── Run the SRE module's .init_array (constructors) ──────────
+                // The lawncher-derived hooks in libsre13.so (HOOK_SYMBOL /
+                // HOOK_OFFSET / DL_SYMBOL / G_DL_SYMBOL in sre13/hooks/*.c and
+                // core/{assets,saves}.c) register their installers/resolvers via
+                // __attribute__((constructor)) — which NEVER runs unless we walk
+                // the module's own .init_array here. The game binary's
+                // init_array is run later at boot; this one must run BEFORE
+                // sre_init() so init_hooks() (called inside sre_init) finds the
+                // registered installers and actually applies the lawncher hooks.
+                // ARM64 .init_array entries are 8-byte pointers (like the game's
+                // at [Boot64]). sre12's lib ships no init_array — no-op there.
+                if (g_sre_mod.init_array_vaddr != 0 && g_sre_mod.init_array_size > 0) {
+                    int sre_init_count = g_sre_mod.init_array_size / 8;
+                    std::cout << "[SRE] Executing " << sre_init_count
+                              << " module initializers..." << std::endl;
+                    uint64_t* sre_init_array =
+                        (uint64_t*)(g_guest_memory + g_sre_mod.init_array_vaddr);
+                    for (int i = 0; i < sre_init_count; i++) {
+                        uint64_t init_func = sre_init_array[i];
+                        if (init_func != 0)
+                            g_emulator_64->call(init_func, {});
+                    }
+                    std::cout << "[SRE] Module initializers completed" << std::endl;
+                }
 
                 // Record the exact executable range. Exception recovery must never
                 // accept writable libsre data merely because it is inside the broad
@@ -3318,7 +3666,7 @@ void load_and_boot_arm64() {
                 std::cout << "[SRE] Resolved " << lua_resolved << "/" << NUM_LUA_SYMS 
                           << " Lua symbols" << std::endl;
                 
-                // Call sre_init_lua() in libsre.so to pass the addresses
+                // Call sre_init_lua() in the SRE module to pass the addresses
                 uint64_t sre_init_lua_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "sre_init_lua");
                 if (sre_init_lua_addr && lua_resolved > 0) {
                     g_emulator_64->call(sre_init_lua_addr, {lua_addrs_guest});
@@ -3385,10 +3733,14 @@ void load_and_boot_arm64() {
                     }
 
                     // =============================================================
-                    // Optional addon: libsre-extras.so (CLOSED SOURCE)
-                    // Mini.MemoryAddress + Raijin signature FFI. Loaded ONLY when
-                    // the file exists next to libsre.so. Without it, SRE registers
-                    // safe stubs for the same Lua API (sre_extras_stubs.c).
+                    // Optional addon: libsre-extras.so (ABI-aware — one module,
+                    // served to both 1.4.12 and 1.4.13). Mini.MemoryAddress +
+                    // Raijin signature FFI. Loaded ONLY when the file exists next
+                    // to the SRE library. Without it, SRE registers safe stubs
+                    // for the same Lua API (sre_extras_stubs.c / the sre13
+                    // equivalent). Version-dependent offsets are passed through
+                    // SreExtrasInit::abi (see sre_extras.h) and validated by
+                    // sre_extras_abi_validate() in the module.
                     // =============================================================
                     {
                         std::string extras_path = "bin/libs/libsre-extras.so";
@@ -3403,7 +3755,7 @@ void load_and_boot_arm64() {
 
                         if (!extras_path.empty() && access(extras_path.c_str(), F_OK) == 0) {
                             std::cout << "[SRE-Extras] FOUND: " << extras_path << std::endl;
-                            uint64_t extras_load_addr = 0x2400000;  // after libsre.so (0x2000000)
+                            uint64_t extras_load_addr = 0x2400000;  // after the SRE module (0x2000000)
                             int ex_ret = g_loader_64->load(&g_sre_extras_mod, extras_path, extras_load_addr);
                             if (ex_ret == 0) {
                                 g_loader_64->relocate(&g_sre_extras_mod);
@@ -3415,7 +3767,7 @@ void load_and_boot_arm64() {
                                 std::cerr << "[SRE-Extras] FAILED to load (ret=" << ex_ret << ") — using stubs" << std::endl;
                             }
                         } else {
-                            std::cerr << "[SRE-Extras] Not found — using stub memory/ffi API (libsre.so works without it)" << std::endl;
+                            std::cerr << "[SRE-Extras] Not found — using stub memory/ffi API (SRE works without it)" << std::endl;
                         }
                     }
 
@@ -3424,11 +3776,24 @@ void load_and_boot_arm64() {
                     if (g_sre_extras_loaded) {
                         uint64_t sre_extras_init_addr = g_loader_64->get_symbol_vaddr(&g_sre_extras_mod, "sre_extras_init");
                         if (sre_extras_init_addr) {
-                            // Guest-side SreExtrasInit = { swordigo_base, resolve_fn, lua[33] }
+                            // Guest-side SreExtrasInit = { swordigo_base, resolve_fn,
+                            //   abi (24 bytes = 3 u64 slots), lua[33] }.
+                            // Field order MUST match sre_extras.h: SreExtrasAbi is
+                            // { u32 swordi_abi, u32 cppstring_data_off, u32
+                            //   cppstring_rep_len, u32 _reserved, u64 cwi_fn }
+                            // (24 bytes, 8-aligned), then SreExtrasLuaApi (33 u64s).
                             const int EXTRAS_LUA_FIELDS = 33;
-                            const int EXTRAS_STRUCT_FIELDS = 2 + EXTRAS_LUA_FIELDS;  // 35
+                            const int EXTRAS_ABI_FIELDS  = 3;   /* 24 bytes of abi */
+                            const int EXTRAS_STRUCT_FIELDS = 2 + EXTRAS_ABI_FIELDS + EXTRAS_LUA_FIELDS;  // 38
                             uint64_t extras_init_guest = 0x49000;
                             uint64_t* extras_init = (uint64_t*)(g_guest_memory + extras_init_guest);
+
+                            // ComponentWithInterface guest vaddr — resolved from THIS
+                            // engine binary (same mangled symbol in 1.4.12 and 1.4.13,
+                            // verified via nm -D). Passed in the abi block so the
+                            // extras never hardcode the symbol/mangled name.
+                            uint64_t cwi_fn = g_loader_64->get_symbol_vaddr(
+                                &g_main_mod_64, "_ZNK5Caver11SceneObject22ComponentWithInterfaceEl");
 
                             auto lua_sym_addr = [&](const char* name) -> uint64_t {
                                 for (int i = 0; i < NUM_LUA_SYMS; i++)
@@ -3452,10 +3817,21 @@ void load_and_boot_arm64() {
 
                             extras_init[0] = load_addr;                    /* swordigo_base */
                             extras_init[1] = 0;                            /* resolve_fn (bridge import already wired) */
+
+                            /* abi block — packed per the SreExtrasAbi C layout:
+                             *   [2] = swordi_abi | (cppstring_data_off << 32)
+                             *   [3] = cppstring_rep_len | (_reserved << 32)
+                             *   [4] = component_with_interface_fn */
+                            extras_init[2] = (uint64_t)(uint32_t)swordi_abi
+                                           | ((uint64_t)0u << 32);   /* COW data ptr @0 */
+                            extras_init[3] = ((uint64_t)24u)        /* GNU COW _Rep header */
+                                           | ((uint64_t)0u << 32);
+                            extras_init[4] = cwi_fn;
+
                             int ex_resolved = 0;
                             for (int i = 0; i < EXTRAS_LUA_FIELDS; i++) {
-                                extras_init[2 + i] = lua_sym_addr(ex_lua_names[i]);
-                                if (extras_init[2 + i]) ex_resolved++;
+                                extras_init[2 + EXTRAS_ABI_FIELDS + i] = lua_sym_addr(ex_lua_names[i]);
+                                if (extras_init[2 + EXTRAS_ABI_FIELDS + i]) ex_resolved++;
                             }
                             std::cout << "[SRE-Extras] Lua API: " << ex_resolved << "/" << EXTRAS_LUA_FIELDS
                                       << " symbols resolved" << std::endl;
@@ -3464,7 +3840,7 @@ void load_and_boot_arm64() {
                             std::cout << "[SRE-Extras] sre_extras_init() called" << std::endl;
 
                             // Wire SRE's stub-vs-real routing: store the extras'
-                            // miniLL_open_memory guest vaddr into libsre.so's global.
+                            // miniLL_open_memory guest vaddr into the SRE module's global.
                             uint64_t mini_ll_addr = g_loader_64->get_symbol_vaddr(
                                 &g_sre_extras_mod, "miniLL_open_memory");
                             uint64_t sre_router = g_loader_64->get_symbol_vaddr(
@@ -3651,6 +4027,12 @@ void load_and_boot_arm64() {
                     {"sre_AudioSystem_EndAudioInterruptionIfNecessary", "_ZN5Caver11AudioSystem31EndAudioInterruptionIfNecessaryEv"},
                     {"sre_stack_chk_fail",             "__stack_chk_fail"},
                     {"sre_GameOverViewController_ShowAdMaybe", "_ZN5Caver22GameOverViewController11ShowAdMaybeEv"},
+                    // 1.4.13 Clang INLINED ShowAdMaybe into GameOverVC::Update
+                    // (IDA: ShowAdMaybe callers = 0) — hook Update for the real
+                    // death-screen timer gate (respawn queue, see sre13_safety.c).
+                    {"sre_GameOverViewController_Update", "_ZN5Caver22GameOverViewController6UpdateEf"},
+                    // Frame master tick - live Lua console per-frame service
+                    {"sre13_CaverShell_Update", "_ZN5Caver10CaverShell6UpdateEf"},
                     // Scene Loading & Transition
                     {"sre_SceneLoadingView_InitWithGameState", "_ZN5Caver16SceneLoadingView17InitWithGameStateERKN5boost10shared_ptrINS_9GameStateEEERKNS2_INS_7MapNodeEEE"},
                     {"sre_SceneLoadingView_Update",            "_ZN5Caver16SceneLoadingView6UpdateEf"},
@@ -3751,7 +4133,7 @@ void load_and_boot_arm64() {
                 const int NUM_SYM_HOOKS = (swordi_abi == 13) ? (sizeof(sym_hooks_13) / sizeof(sym_hooks_13[0]))
                                                              : (sizeof(sym_hooks_12) / sizeof(sym_hooks_12[0]));
 
-                // Read the hook table from libsre.so and install trampolines
+                // Read the hook table from the SRE module and install trampolines
                 uint64_t table_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "sre_hook_table");
                 uint64_t count_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "sre_hook_count");
 
@@ -3876,6 +4258,8 @@ void load_and_boot_arm64() {
                             {"_ZN5Caver19ComponentOutletBase7ConnectEPKNS_9ComponentE", "g_orig_ComponentOutletBase_Connect"},
                             {"_ZN5Caver5Proto8GameData5ClearEv", "g_orig_GameData_Clear"},
                             {"_ZN5Caver5Proto11SceneObject5ClearEv", "g_orig_Proto_SceneObject_Clear"},
+                            {"_ZN5Caver22GameOverViewController6UpdateEf", "g_orig_GameOverViewController_Update"},
+                            {"_ZN5Caver10CaverShell6UpdateEf", "g_orig_CaverShell_Update"},
                         };
                         for (const auto& r : relays_13) {
                             uint64_t fn_vaddr = g_loader_64->get_symbol_vaddr(&g_main_mod_64, r.engine_sym);
@@ -3989,7 +4373,7 @@ void load_and_boot_arm64() {
                         uint64_t target_addr = load_addr + target_offset;
                         entry->orig_func = target_addr;
 
-                        // Look up the replacement function in libsre.so
+                        // Look up the replacement function in the SRE module
                         uint64_t replacement = g_loader_64->get_symbol_vaddr(&g_sre_mod, sym_name);
                         {
                             FILE* f = fopen("/home/quantumcreeper/SwordigoDesktop/sre_hook_debug.txt", "a");
@@ -4019,6 +4403,10 @@ void load_and_boot_arm64() {
                             relay_orig_sym = "g_orig_GameOverlayView_SetControlsHidden";
                         else if (strcmp(sym_name, "sre_SceneLoadingView_Update") == 0)
                             relay_orig_sym = "g_orig_SceneLoadingView_Update";
+                        else if (strcmp(sym_name, "sre_GameOverViewController_Update") == 0)
+                            relay_orig_sym = "g_orig_GameOverViewController_Update";
+                        else if (strcmp(sym_name, "sre13_CaverShell_Update") == 0)
+                            relay_orig_sym = "g_orig_CaverShell_Update";
                         else if (strcmp(sym_name, "sre_SceneLoadingView_AnimateIn") == 0)
                             relay_orig_sym = "g_orig_SceneLoadingView_AnimateIn";
                         else if (strcmp(sym_name, "sre_Scene_FinishLoad") == 0)
@@ -4135,22 +4523,32 @@ void load_and_boot_arm64() {
                     };
 
                     int resolved_interfaces = 0;
+                    int na_interfaces = 0;  // module exports no such global (abi 13 lawncher path)
                     for (const char* cls : component_classes) {
                         std::string sre_var_name = std::string(cls) + "_Interface";
                         std::string mangled_sym = "_ZN5Caver" + std::to_string(strlen(cls)) + cls + "9InterfaceEv";
 
                         uint64_t sre_var_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, sre_var_name.c_str());
+                        // The sre12 ABI exports <Class>_Interface globals for the host to
+                        // fill; sre13 (lawncher port) resolves the same interfaces internally
+                        // via its G_DL_SYMBOL tables, so an absent global is NOT an error.
+                        if (!sre_var_addr) { na_interfaces++; continue; }
+
                         uint64_t engine_fn_addr = g_loader_64->get_symbol_vaddr(&g_main_mod_64, mangled_sym.c_str());
 
-                        if (sre_var_addr && engine_fn_addr) {
+                        if (engine_fn_addr) {
                             uint64_t iface_id_ptr = g_emulator_64->call(engine_fn_addr, {});
                             *(uint64_t*)(g_guest_memory + sre_var_addr) = iface_id_ptr;
                             resolved_interfaces++;
                         } else {
-                            std::cerr << "[SRE-Resolver] Failed to find symbols for: " << cls << std::endl;
+                            std::cerr << "[SRE-Resolver] Failed to find engine symbol for: " << cls << std::endl;
                         }
                     }
-                    std::cout << "[SRE-Resolver] Dynamically resolved " << resolved_interfaces << " component interfaces." << std::endl;
+                    std::string iface_summary = "[SRE-Resolver] Dynamically resolved "
+                                                + std::to_string(resolved_interfaces) + " component interfaces";
+                    if (na_interfaces)
+                        iface_summary += " (" + std::to_string(na_interfaces) + " N/A for this ABI)";
+                    std::cout << iface_summary << "." << std::endl;
  
                     // Resolve other global engine functions to SRE globals
                     struct DynamicFns {
@@ -4207,17 +4605,27 @@ void load_and_boot_arm64() {
                     };
 
                     int fn_resolved = 0;
+                    int fn_na = 0;  // libsre13 does not export this g_sre_* global
                     for (const auto& fn : dynamic_fns) {
                         uint64_t sre_var_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, fn.sre_var_name);
+                        // sre13 (lawncher port) keeps its function pointers in static
+                        // G_DL_SYMBOL slots resolved via srehost_get_symbol, not in
+                        // host-writable g_sre_* globals. Absent global == N/A, not error.
+                        if (!sre_var_addr) { fn_na++; continue; }
+
                         uint64_t engine_fn_addr = g_loader_64->get_symbol_vaddr(&g_main_mod_64, fn.engine_mangled);
-                        if (sre_var_addr && engine_fn_addr) {
+                        if (engine_fn_addr) {
                             *(uint64_t*)(g_guest_memory + sre_var_addr) = engine_fn_addr;
                             fn_resolved++;
                         } else {
                             std::cerr << "[SRE-Resolver] Failed to resolve fn: " << fn.sre_var_name << std::endl;
                         }
                     }
-                    std::cout << "[SRE-Resolver] Dynamically resolved " << fn_resolved << " global engine functions." << std::endl;
+                    std::string fn_summary = "[SRE-Resolver] Dynamically resolved "
+                                             + std::to_string(fn_resolved) + " global engine functions";
+                    if (fn_na)
+                        fn_summary += " (" + std::to_string(fn_na) + " N/A for this ABI)";
+                    std::cout << fn_summary << "." << std::endl;
 
                     // Resolve helper functions dynamically
                     struct HelperFn {
@@ -4232,8 +4640,9 @@ void load_and_boot_arm64() {
                     };
                     for (const auto& h : helpers) {
                         uint64_t sre_var_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, h.sre_var_name);
+                        if (!sre_var_addr) continue;  // global absent in this SRE module (N/A)
                         uint64_t engine_func_addr = g_loader_64->get_symbol_vaddr(&g_main_mod_64, h.mangled_name);
-                        if (sre_var_addr && engine_func_addr) {
+                        if (engine_func_addr) {
                             *(uint64_t*)(g_guest_memory + sre_var_addr) = engine_func_addr;
                         } else {
                             std::cerr << "[SRE-Resolver] WARNING: Could not resolve helper " << h.sre_var_name << std::endl;
@@ -4283,9 +4692,10 @@ void load_and_boot_arm64() {
 
                     // ─── libsre-extras.so component interfaces ───────────────────
                     // The optional addon exports its own <Class>_Interface globals
-                    // (same names as libsre.so). Fill them from the same engine
-                    // Interface() calls so Mini.GetComponentAddress works when the
-                    // extras module is loaded.
+                    // (same names as libsre12.so / libsre13.so). Fill them from the
+                    // same engine Interface() calls so Mini.GetComponentAddress
+                    // works when the extras module is loaded (both ABIs export the
+                    // 122 _ZN5Caver*9InterfaceEv weak symbols, verified via nm -D).
                     if (g_sre_extras_loaded && g_sre_extras_mod.dynstr && g_sre_extras_mod.dynsym) {
                         int extras_iface_resolved = 0;
                         for (const char* cls : component_classes) {
@@ -4377,6 +4787,17 @@ void load_and_boot_arm64() {
                         assets_dir_path);
                     std::cout << "[SRE] Scene Shifter initialized in GUI" << std::endl;
                 }
+
+                // Mirror the shifter VAs for the engine-pod "Run scene" command
+                // (ruby sends target+spawn over stdin; the same tick performs
+                // the GotoLevel, so the flow is identical to the GUI panel).
+                g_ss_ready = (ss_pend_va && ss_targ_va && ss_spwn_va);
+                g_ss_pend_va = ss_pend_va;
+                g_ss_targ_va = ss_targ_va;
+                g_ss_spwn_va = ss_spwn_va;
+                g_ss_err_va  = ss_err_va;
+                g_ss_act_va  = ss_act_va;
+                g_ss_cur_va  = ss_cur_va;
 
                 // Resolve lua_resume error monitoring symbols
                 g_sre_resume_err_count_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_resume_err_count");
@@ -5056,18 +5477,20 @@ void load_and_boot_arm64() {
                 
                 std::cout << "======== [SRE] Runtime Engine Ready ========\n" << std::endl;
             } else {
-                std::cerr << "[SRE] Failed to load libsre.so (error " << sre_ret << ")" << std::endl;
+                std::cerr << "[SRE] Failed to load SRE library (error " << sre_ret << ")" << std::endl;
             }
         } else {
+            const char* expected = (swordi_abi == 13) ? "bin/libs/libsre13.so"
+                                                      : "bin/libs/libsre12.so";
             std::cerr << "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
-            std::cerr << "  [SRE] WARNING: libsre.so NOT FOUND!" << std::endl;
-            std::cerr << "  libsre.so is REQUIRED for ARM64 instances." << std::endl;
+            std::cerr << "  [SRE] WARNING: SRE library NOT FOUND!" << std::endl;
+            std::cerr << "  SRE is REQUIRED for ARM64 instances." << std::endl;
+            std::cerr << "  (libsre12.so for 1.4.12, libsre13.so for 1.4.13)" << std::endl;
             std::cerr << "  Without it, atomic spin loops and threading" << std::endl;
             std::cerr << "  issues WILL cause hangs and crashes." << std::endl;
             std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
-            std::cerr << "[SRE] Expected at: bin/libs/libsre.so" << std::endl;
-            std::cerr << "[SRE] Also tried:  ./libsre.so (current dir)" << std::endl;
-            std::cerr << "[SRE] Fix: run './run_swordigo.sh' to build and install libsre.so" << std::endl;
+            std::cerr << "[SRE] Expected at: " << expected << std::endl;
+            std::cerr << "[SRE] Fix: run './run_swordigo.sh' to build and install the SRE library" << std::endl;
             std::cerr << "============================================\n" << std::endl;
         }
         } // else (sre_compatible)
@@ -5297,15 +5720,12 @@ void load_and_boot_arm64() {
             std::cout << "[Fix64] Patched AndroidShowInterstitialAd at 0x" << std::hex << showAd2
                       << " -> ret" << std::dec << std::endl;
         }
-        if (swordi_abi == 13) {
-            uint64_t showAdMaybe = g_loader_64->get_symbol_vaddr(&g_main_mod_64,
-                "_ZN5Caver22GameOverViewController11ShowAdMaybeEv");
-            if (showAdMaybe) {
-                *(uint32_t*)(memory + showAdMaybe) = 0xD65F03C0; // RET
-                std::cout << "[Fix64] Patched ShowAdMaybe at 0x" << std::hex << showAdMaybe
-                          << " -> ret" << std::dec << std::endl;
-            }
-        }
+        // NOTE (1.4.13): No raw RET on ShowAdMaybe here anymore. The SRE
+        // trampoline (installed earlier at the same address) must stay intact:
+        // sre13 hooks ShowAdMaybe AND GameOverViewController::Update to queue a
+        // deferred respawn that calls GameOverViewDidContinue directly, so the
+        // death screen advances without the ad SDK. A RET here clobbered the
+        // SRE hook branch and left the death screen frozen.
 
         // Coin limit patches (ARM64, 1.4.12 only)
         // Lua coin limit check 1 & 2: offsets 0x35e25c, 0x35e260
@@ -5358,6 +5778,7 @@ void load_and_boot_arm64() {
     uint64_t updateApp = g_loader_64->get_symbol_vaddr(&g_main_mod_64, "Java_com_touchfoo_swordigo_Native_updateApplication");
     uint64_t drawApp = g_loader_64->get_symbol_vaddr(&g_main_mod_64, "Java_com_touchfoo_swordigo_Native_drawApplication");
     uint64_t handleTouchEvent = g_loader_64->get_symbol_vaddr(&g_main_mod_64, "Java_com_touchfoo_swordigo_Native_handleTouchEvent");
+    g_touch_64_handle = handleTouchEvent;   // for pod_touch_direct()
     uint64_t snapshotLoaded = g_loader_64->get_symbol_vaddr(&g_main_mod_64, "Java_com_touchfoo_swordigo_Native_snapshotLoaded");
     uint64_t sre_scene_shifter_tick_addr = g_use_sre
         ? g_loader_64->get_symbol_vaddr(&g_sre_mod, "sre_scene_shifter_tick") : 0;
@@ -5462,6 +5883,20 @@ void load_and_boot_arm64() {
             if (dt_seconds < 0.001f) dt_seconds = 0.016666668f;
             last_ticks = now_ticks;
             accumulated_time += dt_seconds;
+
+            // ── Engine-pod control (Ruby GG dock) ──────────────────────
+            // Drain stdin commands, then freeze the whole guest while the
+            // ruby pause button is held (no update, no draw, no frame out).
+            if (g_pod_enabled) {
+                if (g_pod_ring && g_pod_ring->state() == pod::kStateBooting)
+                    g_pod_ring->set_state(pod::kStateRunning);
+                pod_process_commands(running);
+                if (!running) break;
+                if (g_pod_paused) {
+                    SDL_Delay(12);
+                    continue;
+                }
+            }
             
             if (completed_frames < 150) {
                 g_emulator_64->quiet_mode = false;
@@ -6915,7 +7350,7 @@ void load_and_boot_arm64() {
             }
             
             // Render mod tools overlay
-            if (g_display_active) {
+            if (g_display_active && !g_pod_enabled) {
                 glPushAttrib(GL_ALL_ATTRIB_BITS);
                 glViewport(0, 0, g_draw_w, g_draw_h);
                 glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
@@ -6946,7 +7381,7 @@ void load_and_boot_arm64() {
             g_gl_diag_frame++;
 
             // Render SRT overlay (inventory editor, etc.) — F11 toggle
-            if (g_display_active && g_srt_overlay.is_visible()) {
+            if (g_display_active && !g_pod_enabled && g_srt_overlay.is_visible()) {
                 // Convert sustained mouse_pressed to single-frame click
                 static bool overlay_prev_pressed = false;
                 bool overlay_click = mouse_pressed && !overlay_prev_pressed;
@@ -6967,7 +7402,7 @@ void load_and_boot_arm64() {
             }
             
             // Draw Swordfare GUI F3 Overlay if visible
-            if (g_display_active) {
+            if (g_display_active && !g_pod_enabled) {
                 g_swordfare_gui.begin_frame();
                 if (g_swordfare_gui.is_visible()) {
                     SwordfareDebugStats st;
@@ -7039,6 +7474,7 @@ void load_and_boot_arm64() {
 #endif
                 {
                     RedstellGC::instance().process_main_thread_deletions();
+                    if (g_pod_enabled) pod_publish_frame();
                     g_display_ptr->swap();
                 }
                 // Reclaim stale deferred guest frees every frame, on BOTH render paths
@@ -7134,10 +7570,13 @@ void load_and_boot_arm64() {
                     }
                     switch (event.type) {
                         case SDL_EVENT_QUIT:
-                            running = false;
+                            // A hidden pod window can receive a stray close/quit
+                            // event from the compositor (libdecor/Wayland); the
+                            // pod must only exit on an explicit kMsgQuit.
+                            if (!g_pod_enabled) running = false;
                             break;
                         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-                            running = false;
+                            if (!g_pod_enabled) running = false;
                             break;
                         case SDL_EVENT_WINDOW_RESIZED:
                             g_win_w = event.window.data1;
@@ -7220,11 +7659,30 @@ void load_and_boot_arm64() {
                             if (event.key.key == SDLK_M && !event.key.repeat) {
                                 if (g_cam_active) {
                                     g_cam_pov_mode = !g_cam_pov_mode;
+                                    if (!g_cam_pov_mode) {
+                                        // Leaving POV: clear free-look so the next
+                                        // entry returns to legacy ±45° facing.
+                                        g_cam_yaw = 0.0f;
+                                        g_cam_pitch = 0.0f;
+                                        g_cam_roll = 0.0f;
+                                    }
                                     char msg[64];
-                                    snprintf(msg, sizeof(msg), "Camera POV: %s", g_cam_pov_mode ? "ON" : "OFF");
+                                    snprintf(msg, sizeof(msg), "Camera POV: %s", g_cam_pov_mode ? "ON (drag to look)" : "OFF");
                                     mod_toast(msg, 1.5f);
                                     cam_write_to_guest();
                                 }
+                                break;
+                            }
+                            if (event.key.key == SDLK_F7 && !event.key.repeat) {
+                                extern void cam_set_fov(float fov_rad);
+                                float cur = g_cam_fov > 0.0f ? g_cam_fov : 0.78539816f;
+                                cam_set_fov(std::max(0.35f, cur - 0.05f));
+                                break;
+                            }
+                            if (event.key.key == SDLK_F8 && !event.key.repeat) {
+                                extern void cam_set_fov(float fov_rad);
+                                float cur = g_cam_fov > 0.0f ? g_cam_fov : 0.78539816f;
+                                cam_set_fov(std::min(1.4f, cur + 0.05f));
                                 break;
                             }
                             if (event.key.key == SDLK_F6 && !event.key.repeat) {
@@ -7567,6 +8025,12 @@ void load_and_boot_arm64() {
                                 float gx = event.motion.x * 960.0f / (float)g_win_w;
                                 float gy = 544.0f - (event.motion.y * 544.0f / (float)g_win_h);
                                 g_input_config.editor_mouse_move(gx, gy);
+                            } else if (g_cam_active && g_cam_pov_mode && mouse_pressed
+                                       && !click_swallowed_by_gui && !g_srt_overlay.is_visible()) {
+                                // POV free-look: dragging rotates yaw/pitch instead
+                                // of sending a swipe to the game.
+                                extern void cam_look(float dyaw, float dpitch);
+                                cam_look((float)event.motion.xrel, (float)event.motion.yrel);
                             } else if (mouse_pressed && !click_swallowed_by_gui && !g_srt_overlay.is_visible()) {
                                 float x = event.motion.x * 960.0f / (float)g_win_w;
                                 float y = 544.0f - (event.motion.y * 544.0f / (float)g_win_h);
@@ -7635,7 +8099,22 @@ void load_and_boot_arm64() {
                 {
                     extern bool g_sre_overlay_blocking;
                     bool input_blocked = g_sre_overlay_blocking || g_typing_mode || g_swordfare_gui.is_lua_console_open() || g_text_input_active;
-                    const bool* keys = input_blocked ? nullptr : SDL_GetKeyboardState(nullptr);
+                    // Merge real SDL keyboard state with pod-injected keys. A
+                    // hidden-window pod never feeds real keys into SDL, so the
+                    // loop must consult g_pod_key_state for control buttons.
+                    static bool merged_keys[512];
+                    const bool* keys = nullptr;
+                    if (!input_blocked) {
+                        const bool* sdl_keys = SDL_GetKeyboardState(nullptr);
+                        if (g_pod_enabled) {
+                            for (int kk = 0; kk < 512; ++kk)
+                                merged_keys[kk] = g_pod_key_state[kk] ||
+                                                  (sdl_keys && sdl_keys[kk]);
+                            keys = merged_keys;
+                        } else {
+                            keys = sdl_keys;
+                        }
+                    }
                     for (int bi = 0; bi < g_input_config.button_count(); bi++) {
                         TouchButton* btn = g_input_config.get_button(bi);
                         if (!btn) continue;
@@ -7845,10 +8324,16 @@ int g_saved_argc = 0;
 int main(int argc, char* argv[]) {
     g_saved_argc = argc;
     g_saved_argv = argv;
+    // Engine-pod preview (Ruby GG dock) must never pop its own crash UI —
+    // ruby owns the session lifecycle and shows the state itself.
+    bool pod_requested = false;
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--pod-preview", 13) == 0) pod_requested = true;
+    }
     // Install the sleek fatal-crash reporting window early: a SIGSEGV/SIGABRT
     // in the emulator or host bridges now surfaces a GUI crash box with a
     // backtrace instead of the process vanishing silently.
-    crashui::install_crash_handler();
+    if (!pod_requested) crashui::install_crash_handler();
     os_external::set_dev_working_dir(); // Windows: chdir to repo root so src/assets resolves
     // Check for --headless flag
     bool headless = false;
@@ -7859,6 +8344,28 @@ int main(int argc, char* argv[]) {
     headless = true;
 #endif
     for (int i = 1; i < argc; i++) {
+        // ---- Engine-pod preview (Ruby GG dock) ----------------------------
+        // --pod-preview <shm_name>:<W>x<H> — boot a hidden low-res session and
+        // publish frames over shared memory (see platform/pod_ipc.h).
+        const char* pod_arg = nullptr;
+        if (strncmp(argv[i], "--pod-preview=", 14) == 0) pod_arg = argv[i] + 14;
+        else if (strcmp(argv[i], "--pod-preview") == 0 && i + 1 < argc) pod_arg = argv[++i];
+        if (pod_arg) {
+            g_pod_enabled = true;
+            std::string s = pod_arg;
+            size_t colon = s.rfind(':');
+            if (colon != std::string::npos) {
+                g_pod_shm_name = s.substr(0, colon);
+                int w = 0, h = 0;
+                if (sscanf(s.c_str() + colon + 1, "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+                    g_pod_w = w; g_pod_h = h;
+                }
+            } else {
+                g_pod_shm_name = s;
+            }
+            std::cout << "[Pod] Preview mode: shm='" << g_pod_shm_name
+                      << "' res=" << g_pod_w << "x" << g_pod_h << std::endl;
+        }
         if (strcmp(argv[i], "--headless") == 0) headless = true;
         if (strcmp(argv[i], "--openswordigo") == 0) use_openswordigo = true;
         if (strcmp(argv[i], "--openswordigo-scene") == 0 && i + 1 < argc) {
@@ -7917,6 +8424,15 @@ int main(int argc, char* argv[]) {
             std::cerr.flush();
             std::quick_exit(0);
         }
+    }
+
+    // Pod mode always runs the ARM64 Dynarmic + SRE13 pipeline at low res.
+    if (g_pod_enabled) {
+        g_use_sre = true;
+        g_use_dynarmic = true;
+        g_graphics_api = GraphicsAPI::OPENGL;
+        headless = false;
+        std::cout << "[Pod] Forcing Dynarmic + SRE + OpenGL for preview session" << std::endl;
     }
     
     // Set up user-writable directory paths
@@ -8055,10 +8571,32 @@ int main(int argc, char* argv[]) {
 
     if (!headless) {
         int native_w = 1920, native_h = 1080;
+        int pod_win_logical_w = 0, pod_win_logical_h = 0;  // pod: logical window px
+        if (g_pod_enabled) {
+            // Ask for a logical window size that lands near the requested
+            // preview resolution after HiDPI content scaling, so the drawable
+            // (and hence the shm frames) stay close to e.g. 1280x720 instead
+            // of ballooning to 2x on retina-class displays.
+            float density = 1.0f;
+            SDL_DisplayID pid = SDL_GetPrimaryDisplay();
+            if (pid) {
+                float cs = SDL_GetDisplayContentScale(pid);
+                if (cs >= 1.0f) density = cs;
+            }
+            native_w = (int)(g_pod_w / density + 0.5f);
+            native_h = (int)(g_pod_h / density + 0.5f);
+            if (native_w < 320) native_w = 320;
+            if (native_h < 180) native_h = 180;
+            pod_win_logical_w = native_w;
+            pod_win_logical_h = native_h;
+            std::cout << "[Pod] Window logical " << native_w << "x" << native_h
+                      << " (display scale " << density << ") to hit ~"
+                      << g_pod_w << "x" << g_pod_h << std::endl;
+        }
         {
             SDL_DisplayID display_id = SDL_GetPrimaryDisplay();
             const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display_id);
-            if (mode) {
+            if (mode && !g_pod_enabled) {
                 native_w = mode->w;
                 native_h = mode->h;
                 std::cout << "[Main] Native display: " << native_w << "x" << native_h 
@@ -8086,7 +8624,7 @@ int main(int argc, char* argv[]) {
 #endif
 
         if (g_graphics_api == GraphicsAPI::OPENGL) {
-            if (display.init(native_w, native_h, "Swordigo")) {
+            if (display.init(native_w, native_h, "Swordigo", g_pod_enabled)) {
                 g_display_active = true;
                 g_display_ptr = &display;
                 display_initialized = true;
@@ -8100,6 +8638,27 @@ int main(int argc, char* argv[]) {
         if (display_initialized) {
             // Get physical drawable dimensions (HiDPI)
             SDL_GetWindowSizeInPixels(display.get_window(), &g_draw_w, &g_draw_h);
+
+            // Pod mode: SDL reports drawable = logical × pixel density, so
+            // resize the (hidden) window so the DRAWABLE size lands near the
+            // requested preview resolution. g_win_w/g_win_h then mirror the
+            // LOGICAL size, which is what ruby's normalized coordinates and
+            // SDL mouse events both operate in.
+            if (g_pod_enabled) {
+                float pd = SDL_GetWindowPixelDensity(display.get_window());
+                if (pd < 1.0f) pd = 1.0f;
+                int log_w = (int)(g_pod_w / pd + 0.5f);
+                int log_h = (int)(g_pod_h / pd + 0.5f);
+                if (log_w < 160) log_w = 160;
+                if (log_h < 90) log_h = 90;
+                SDL_SetWindowSize(display.get_window(), log_w, log_h);
+                SDL_GetWindowSizeInPixels(display.get_window(), &g_draw_w, &g_draw_h);
+                g_win_w = log_w;
+                g_win_h = log_h;
+                std::cout << "[Pod] pixel density " << pd << " -> logical "
+                          << log_w << "x" << log_h << ", drawable "
+                          << g_draw_w << "x" << g_draw_h << std::endl;
+            }
 
             // --- Dynamic render resolution: match drawable pixels & aspect ratio ---
             // Use the physical drawable size directly as the game render resolution.
@@ -8116,6 +8675,25 @@ int main(int argc, char* argv[]) {
             // Recompute touch coordinate scaling
             TOUCH_SCALE_X = (float)GAME_W / 960.0f;
             TOUCH_SCALE_Y = (float)GAME_H / 544.0f;
+
+            // Pod mode: open the shared-memory frame ring now that the real
+            // back-buffer dimensions are known, and arm the stdin control
+            // reader so ruby can pause/mute/quit/type from boot onwards.
+            if (g_pod_enabled) {
+                pod_start_reader();
+                g_pod_ring = pod::FrameRing::create(g_pod_shm_name,
+                                                    (uint32_t)g_draw_w,
+                                                    (uint32_t)g_draw_h);
+                if (g_pod_ring) {
+                    g_pod_ring->set_state(pod::kStateBooting);
+                    std::cout << "[Pod] Frame ring ready (" << g_draw_w << "x"
+                              << g_draw_h << ", 3 slots) for shm '"
+                              << g_pod_shm_name << "'" << std::endl;
+                } else {
+                    std::cerr << "[Pod] WARNING: cannot create frame shm '"
+                              << g_pod_shm_name << "' — preview disabled" << std::endl;
+                }
+            }
 
             std::cout << "[Main] Display initialized - native " << native_w << "x" << native_h
                       << " | drawable: " << g_draw_w << "x" << g_draw_h
@@ -8138,7 +8716,7 @@ int main(int argc, char* argv[]) {
                 // REUSES that context/backend (OpenGL path only) so it shows the
                 // logo + hiro animation + progress during the boot gap instead
                 // of a blank window — and tears down only its own resources.
-                if (!headless && g_graphics_api == GraphicsAPI::OPENGL &&
+                if (!headless && !g_pod_enabled && g_graphics_api == GraphicsAPI::OPENGL &&
                     g_swordfare_gui.is_initialized() && g_swordfare_gui.imgui_context()) {
                     g_loading_screen = new LoadingScreen();
                     if (!g_loading_screen->init(display.get_window(),
@@ -8237,6 +8815,15 @@ int main(int argc, char* argv[]) {
     VideoBackground::cleanup();
     io_thread_stop();
     RedstellGC::instance().shutdown();
+
+    // Pod mode: mark the session done and release the shared frame ring.
+    // (Process exits right after via quick_exit, so the stdin reader thread
+    // does not need explicit joining.)
+    if (g_pod_ring) {
+        g_pod_ring->set_state(pod::kStateExiting);
+        delete g_pod_ring;
+        g_pod_ring = nullptr;
+    }
     
     std::cout << "[Main] Swordigo — session complete." << std::endl;
 

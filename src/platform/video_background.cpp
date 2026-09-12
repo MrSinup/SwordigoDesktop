@@ -24,11 +24,20 @@ bool g_video_background_enabled = false; // Vanilla by default
 extern std::string g_instance_assets_dir;
 
 #if SWORDIGO_USE_FFMPEG
+#if __has_include(<libavformat/avformat.h>)
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 }
+#elif __has_include(<ffmpeg/libavformat/avformat.h>)
+extern "C" {
+#include <ffmpeg/libavformat/avformat.h>
+#include <ffmpeg/libavcodec/avcodec.h>
+#include <ffmpeg/libswscale/swscale.h>
+}
+#endif
+#include "platform/ffmpeg_dyn.h"
 
 namespace VideoBackground {
 
@@ -121,6 +130,12 @@ namespace VideoBackground {
         }
 
         bool init() {
+            if (!ffmpeg_dyn_available()) {
+                if (!ffmpeg_dyn_init()) {
+                    return false;
+                }
+            }
+
             int err = avformat_open_input(&format_ctx, mp4_path.c_str(), nullptr, nullptr);
             if (err != 0) {
                 char err_buf[256];

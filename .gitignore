@@ -168,3 +168,20 @@ cache/instx.sh
 # -------- DYNARMIC JIT BUILD OUTPUT --------
 # Source is included, build output is rebuilt from source
 deps/dynarmic/build/
+
+# -------- BULK / LOCAL ARTIFACTS FOLDER --------
+.ignore/
+.ignore
+
+# -------- PRECOMPILED BINARIES --------
+*.exe
+*.dll
+*.lib
+*.jar
+
+# -------- EMBEDDED ASSETS GENERATED SOURCE --------
+src/platform/embedded_assets.cpp
+
+# -------- FFMPEG VENDOR TREE (NOW LOADED VIA DLOPEN) --------
+src/tools/ffmpeg/
+
