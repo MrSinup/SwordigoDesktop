@@ -55,6 +55,8 @@ extern "C" void sre_guest_heap_drain_deferred(void);  // jni_bridge_arm64.cpp â€
 #include <sys/stat.h>
 
 #include "platform/video_background.h"
+#define FFMPEG_DYN_NO_MACROS
+#include "platform/ffmpeg_dyn.h"
 #include "platform/gui.h"
 #include "platform/vulkan_backend.h"
 #include "platform/fbo_scaler.h"
@@ -2452,8 +2454,6 @@ void load_and_boot() {
                             }
                             if (event.key.key == SDLK_F7 && !event.key.repeat) {
                                 if (!g_video_background_enabled) {
-                                    extern bool ffmpeg_dyn_available();
-                                    extern bool ffmpeg_dyn_init();
                                     if (!ffmpeg_dyn_available() && !ffmpeg_dyn_init()) {
                                         std::cout << "[VideoBackground] Cannot enable video background: FFmpeg runtime libraries not found on this system." << std::endl;
                                         break;

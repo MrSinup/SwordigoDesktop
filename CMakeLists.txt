@@ -110,7 +110,7 @@ if (BUILD_TESTING)
         ${VORBISFILE_INCLUDE_DIRS})
     target_link_libraries(scene_perf_driver PRIVATE
         Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network
-        OpenGL::GL ZLIB::ZLIB swcore swfmt swpod filerift git2_static
+        OpenGL::GL ZLIB::ZLIB swcore swfmt swpod filerift caver git2_static
         SDL3::SDL3 ${SDL3_IMAGE_LINK}
         ${MPG123_LIBRARIES} ${VORBISFILE_LIBRARIES}
         ${SWORDIGO_LIBM} ${SWORDIGO_SOCKLIB})
