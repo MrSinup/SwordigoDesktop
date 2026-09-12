@@ -34,7 +34,7 @@ Examples of unacceptable behavior include:
 
 ## 3. Enforcement Responsibilities
 
-Community leaders (OpenSwordigo Org and Lawncher Team) are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
+Community leaders (OpenSwordigo Org and Lawncher Team, see [Project Governance](./GOVERNANCE.md)) are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
 
 Community leaders have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, and will communicate reasons for moderation decisions when appropriate.
 
@@ -48,7 +48,7 @@ This Code of Conduct applies within all community spaces (including GitHub repos
 
 ## 5. Enforcement & Reporting
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the OpenSwordigo leadership team via project channels or directly to the project maintainers. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the OpenSwordigo leadership team via project channels or directly to the project maintainers. All complaints will be reviewed and investigated promptly and fairly. For contribution workflows, see [Contributing Guidelines](./CONTRIBUTING.md). For online service moderation, see [Terms of Use](./TERMS_OF_USE.md).
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 
@@ -57,3 +57,12 @@ All community leaders are obligated to respect the privacy and security of the r
 ## 6. Attribution
 
 This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1, available at [https://www.contributor-covenant.org/version/2/1/code_of_conduct.html](https://www.contributor-covenant.org/version/2/1/code_of_conduct.html).
+
+---
+
+## 7. Related Community Policies
+
+* **[Project Governance Model](./GOVERNANCE.md)**: Decision procedures and leadership structure.
+* **[Contributing Guidelines](./CONTRIBUTING.md)**: Pull request workflows and coding standards.
+* **[Contributor License Agreement (CLA)](./CLA.md)**: Intellectual property terms.
+* **[Terms of Use](./TERMS_OF_USE.md)**: Online Mod Store and infrastructure acceptable use.

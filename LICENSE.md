@@ -2,6 +2,8 @@
 
 **OpenSwordigo Project Licensing Framework**
 
+> **Translations**: [हिन्दी (Hindi)](LICENSE_hi.md) | [Français (French)](LICENSE_fr.md) | [简体中文 (Chinese)](LICENSE_cn.md)
+
 This repository is a composite project consisting of components licensed under three distinct terms:
 1. **GNU General Public License v3.0 (GPLv3)** — Swordigo-specific tools, game frontend, and editors.
 2. **MIT License** — Generic host infrastructure, Android emulation layers, and JNI bridges.
@@ -83,3 +85,13 @@ See [`src/sre/LICENSE.md`](src/sre/LICENSE.md) for full terms.
 | `src/jni/`, `src/android/` (JNI Bridges & Shims) | **MIT** | Exclusively **OpenSwordigo Org** |
 | `src/loader/`, `src/srehost/` (Host ELF Loader) | **MIT** | Exclusively **OpenSwordigo Org** |
 | Generic Platform Decoders (ASTC, PVRTC) | **MIT** | Upstream authors & **OpenSwordigo Org** |
+
+---
+
+## 4. Community Agreements & Governance Policies
+
+All contributions and usage of online project infrastructure are subject to the following companion agreements:
+- **Contributor License Agreement**: See [`.github/CLA.md`](.github/CLA.md) for contribution terms and 50/50 copyright retention rules.
+- **Project Governance**: See [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md) for project stewardship and decision-making authority.
+- **Terms of Use**: See [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md) for Online Mod Store and network infrastructure terms of use.
+- **Code of Conduct**: See [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) for community standards.

@@ -12,8 +12,8 @@ By downloading, installing, launching the software, or connecting to the Online 
 
 The software and its associated network infrastructure are provided collaboratively by two independent groups:
 
-1. **OpenSwordigo Org**: Stewards of the client applications, build toolchains, Ruby GG Studio IDE, and desktop launcher codebase.
-2. **Lawncher Team**: Sole operators, administrators, and hosts of the **online infrastructure**, including the Mod Store API, mod content delivery networks (CDN), remote asset indexing, and user profile management services.
+1. **OpenSwordigo Org**: Stewards of the client applications, build toolchains, Ruby GG Studio IDE, and desktop launcher codebase (see [Project Governance](./GOVERNANCE.md)).
+2. **Lawncher Team**: Sole operators, administrators, and hosts of the **online infrastructure**, including the Mod Store API, mod content delivery networks (CDN), remote asset indexing, and user profile management services (see [Project Governance](./GOVERNANCE.md)).
 
 ---
 
@@ -54,10 +54,10 @@ The Mod Store enables community members to share and download user-generated mod
 Any mod uploaded to the Mod Store must strictly adhere to clean, legal community standards. Prohibited content includes without limitation:
 * **Malware & Harmful Payloads**: Mods containing trojans, backdoors, spyware, cryptominers, ransomware, keyloggers, or arbitrary remote code execution exploits.
 * **Commercial Game Piracy**: Mods must **never** distribute Touch Foo’s original copyrighted commercial game binaries (`libswordigo.so`), full proprietary game packages, or unlicensed commercial assets. Mods must take the form of original code, delta patches, custom meshes, or procedural assets that require the user to own a legitimate copy of the base game.
-* **Harassment & Hate Speech**: Mods, descriptions, or titles containing hate speech, harassment, threats, or explicit adult content.
+* **Harassment & Hate Speech**: Mods, descriptions, or titles containing hate speech, harassment, threats, or explicit adult content (in violation of our [Code of Conduct](./CODE_OF_CONDUCT.md)).
 
 ### 4.2 Hosting License Granted by Mod Authors
-When you upload or submit a mod to the Mod Store, you retain your underlying copyright in your original creation. However, to enable the network to function:
+When you upload or submit a mod to the Mod Store, you retain your underlying copyright in your original creation (consistent with our [CLA](./CLA.md)):
 * You grant the **Lawncher Team** and **OpenSwordigo Org** a non-exclusive, worldwide, royalty-free, perpetual license to **host, cache, index, re-encode, display, and distribute** your mod and its metadata to end users through the launcher, game overlay, and API.
 * You warrant that you are the author of the mod or possess sufficient legal authorization to publish it.
 
@@ -101,4 +101,13 @@ We reserve the right to revise these Terms of Use at any time. Updated versions 
 
 ## 8. Contact & Reporting
 
-To report security vulnerabilities, abusive network behavior, or intellectual property concerns regarding content on the Mod Store, please contact the OpenSwordigo and Lawncher Team administrators via the official project channels.
+To report security vulnerabilities, abusive network behavior, or intellectual property concerns regarding content on the Mod Store, please contact the OpenSwordigo and Lawncher Team administrators via official project channels.
+
+---
+
+## 9. Related Community Policies
+
+* **[Contributor License Agreement (CLA)](./CLA.md)**: Author copyright and contribution terms.
+* **[Project Governance Model](./GOVERNANCE.md)**: Decision procedures and organization structure.
+* **[Contributing Guidelines](./CONTRIBUTING.md)**: Technical standards and pull request workflows.
+* **[Code of Conduct](./CODE_OF_CONDUCT.md)**: Community standards and harassment policy.

@@ -49,11 +49,11 @@ Contributions must strictly observe the multi-license directory structure of the
 
 | Repository Tier | Target Directories | Invariant License Rule | Permitted Changes |
 | :--- | :--- | :--- | :--- |
-| **Tier 1: SRE Core** | `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | Contributed code merges into the proprietary SRE framework. Authors retain dual ownership of their diffs; OpenSwordigo Org and Lawncher Team retain joint stewardship and distribution authority. |
-| **Tier 2: Studio & Tooling** | `src/ruby/`, `src/launcher/`, `src/platform/`, `src/tools/`, `tools/` | **GNU General Public License v3.0 (GPLv3)** | Strong copyleft. Any modifications or derivative works **must remain licensed under GNU GPLv3**. Down-licensing to permissive terms (e.g. MIT) is prohibited. |
-| **Tier 3: Host Infrastructure** | `src/jni/`, `src/android/`, `src/loader/`, `src/srehost/` | **MIT License** | Strictly permissive. Contributions remain under standard MIT terms to ensure platform shims and loaders can be ported to other operating systems and consoles without restriction. |
+| **Tier 1: SRE Core** | [`../src/sre/`](../src/sre/) (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | Contributed code merges into the proprietary SRE framework. Authors retain dual ownership of their diffs; OpenSwordigo Org and Lawncher Team retain joint stewardship and distribution authority. |
+| **Tier 2: Studio & Tooling** | [`../src/ruby/`](../src/ruby/), [`../src/launcher/`](../src/launcher/), [`../src/platform/`](../src/platform/), [`../src/tools/`](../src/tools/), [`../tools/`](../tools/) | **GNU General Public License v3.0 (GPLv3)** | Strong copyleft. Any modifications or derivative works **must remain licensed under GNU GPLv3**. Down-licensing to permissive terms (e.g. MIT) is prohibited. |
+| **Tier 3: Host Infrastructure** | [`../src/jni/`](../src/jni/), [`../src/android/`](../src/android/), [`../src/loader/`](../src/loader/), [`../src/srehost/`](../src/srehost/) | **MIT License** | Strictly permissive. Contributions remain under standard MIT terms to ensure platform shims and loaders can be ported to other operating systems and consoles without restriction. |
 
-*Any pull request that crosses tier boundaries must maintain clean commit separation between tiers.*
+*Any pull request that crosses tier boundaries must maintain clean commit separation between tiers. For complete repository license details, see the root [`../LICENSE.md`](../LICENSE.md).*
 
 ---
 
@@ -70,9 +70,9 @@ By submitting a Contribution, you represent and warrant that:
 
 ## 7. Governance, Stewardship & Decision-Making Authority
 
-1. **Project Direction**: OpenSwordigo Org and its members act as the decision-making body regarding project architecture, release schedules, build targets, community infrastructure, and repository management.
+1. **Project Direction**: OpenSwordigo Org and its members act as the decision-making body regarding project architecture, release schedules, build targets, community infrastructure, and repository management in accordance with the [Project Governance Model](./GOVERNANCE.md).
 2. **Relicensing Prerogatives for SRE**: Because SRE is held under All Rights Reserved terms, OpenSwordigo Org and Lawncher Team reserve the joint sole authority to adjust SRE distribution models, maintain closed components, or publish companion tools without requiring individual approval from historic patch submitters, provided original contributor authorship is honored.
-3. **Sole Decision-Making Body**: OpenSwordigo Org and Lawncher Team constitute the sole decision-making authority for the project.
+3. **Sole Decision-Making Body**: OpenSwordigo Org and Lawncher Team constitute the sole decision-making authority for the project (see [GOVERNANCE.md](./GOVERNANCE.md)).
 
 ---
 
@@ -82,3 +82,12 @@ You manifest acceptance of this Agreement by:
 - Submitting a Pull Request, patch, or issue containing code to any OpenSwordigo repository;
 - Signing or acknowledging this document via digital signature, Git commit sign-off (`Signed-off-by:`), or PR description; or
 - Merging contributions into the repository with the consent of the maintainers.
+
+---
+
+## 9. Related Community Policies
+
+* **[Contributing Guidelines](./CONTRIBUTING.md)**: Standards, workflows, and PR checklists.
+* **[Project Governance Model](./GOVERNANCE.md)**: Decision procedures and organizational hierarchy.
+* **[Code of Conduct](./CODE_OF_CONDUCT.md)**: Community standards and pledge.
+* **[Terms of Use](./TERMS_OF_USE.md)**: Mod Store terms and network acceptable use policy.

@@ -38,26 +38,26 @@ The project is stewarded jointly by two recognized teams:
 1. **OpenSwordigo Org & Its Members**:
    - The primary administrative and development body for the overall repository, architecture, and toolchain.
    - Holds sole authority over project repositories, release pipelines, official branding, and composite licensing.
-   - Responsible for the Ruby and Ruby GG Studio IDE (`src/ruby/`), Swordfare launcher and game overlay (`src/launcher/`, `src/platform/`), host loaders, bridges (`src/jni/`, `src/loader/`), and companion tools.
+   - Responsible for the Ruby and Ruby GG Studio IDE ([`../src/ruby/`](../src/ruby/)), Swordfare launcher and game overlay ([`../src/launcher/`](../src/launcher/), [`../src/platform/`](../src/platform/)), host loaders, bridges ([`../src/jni/`](../src/jni/), [`../src/loader/`](../src/loader/)), and companion tools.
 
 2. **Lawncher Team**:
    - The joint reverse-engineering and runtime development team.
-   - Holds joint intellectual property rights and custodial authority over the Swordigo Runtime Environment (`src/sre/` — `sre12`, `sre13`, `extras`, `base`).
+   - Holds joint intellectual property rights and custodial authority over the Swordigo Runtime Environment ([`../src/sre/`](../src/sre/) — `sre12`, `sre13`, `extras`, `base`).
    - Co-decides all architectural, ABI, memory layout, and runtime decisions relating to SRE.
 
 Together, **OpenSwordigo Org and Lawncher Team constitute the sole decision-making authority** for the project.
 
 ### 2.2 Contributors
-Any community member who submits issues, pull requests, patches, documentation, or tooling improvements. Contributors retain dual copyright over their individual contributions in accordance with the [Contributor License Agreement](CLA.md), while granting the project perpetual and irrevocable distribution rights.
+Any community member who submits issues, pull requests, patches, documentation, or tooling improvements. Contributors retain dual copyright over their individual contributions in accordance with the [Contributor License Agreement](./CLA.md), while granting the project perpetual and irrevocable distribution rights.
 
 ---
 
 ## 3. Decision-Making Procedures
 
 ### 3.1 Subsystem Ownership & Consensus
-* **Repository & Tools (`src/ruby/`, `src/launcher/`, `src/platform/`, `src/tools/`, `src/jni/`, `src/loader/`)**:
+* **Repository & Tools ([`../src/ruby/`](../src/ruby/), [`../src/launcher/`](../src/launcher/), [`../src/platform/`](../src/platform/), [`../src/tools/`](../src/tools/), [`../src/jni/`](../src/jni/), [`../src/loader/`](../src/loader/))**:
   - Maintained and decided directly by OpenSwordigo Org and its members.
-* **SRE Subsystem (`src/sre/`)**:
+* **SRE Subsystem ([`../src/sre/`](../src/sre/))**:
   - Managed jointly. Any architectural changes, ABI updates, hooking redesigns, or distribution modifications for SRE require mutual consensus between OpenSwordigo Org and Lawncher Team.
 
 ### 3.2 Review and Merges
@@ -70,7 +70,7 @@ Any community member who submits issues, pull requests, patches, documentation, 
 
 1. **Mutual Trust Model**: While our legal agreements establish strict, enforceable copyright boundaries, our day-to-day operations rely on mutual trust between the maintainers and our contributors.
 2. **Relicensing & Packaging Authority**: OpenSwordigo Org and Lawncher Team retain full authority over release packaging, binary builds, and distribution models for their respective subsystems without requiring individual approval from historic contributors.
-3. **No Project Hostage-Taking**: Because all contributions are granted perpetually and irrevocably under the [CLA](CLA.md), the repository can never be frozen, obstructed, or subjected to retroactive takedowns by departing contributors.
+3. **No Project Hostage-Taking**: Because all contributions are granted perpetually and irrevocably under the [CLA](./CLA.md), the repository can never be frozen, obstructed, or subjected to retroactive takedowns by departing contributors.
 4. **Contributor Recognition**: All contributors are permanently recorded in project commit history, documentation, and release credits.
 
 ---
@@ -78,3 +78,12 @@ Any community member who submits issues, pull requests, patches, documentation, 
 ## 5. Amendments to Governance
 
 Amendments to this governance model require the joint agreement of OpenSwordigo Org and the Lawncher Team.
+
+---
+
+## 6. Related Community Policies
+
+* **[Contributor License Agreement (CLA)](./CLA.md)**: Intellectual property terms and dual-ownership model.
+* **[Contributing Guidelines](./CONTRIBUTING.md)**: Code standards, review process, and checklist.
+* **[Code of Conduct](./CODE_OF_CONDUCT.md)**: Community standards and enforcement.
+* **[Terms of Use](./TERMS_OF_USE.md)**: Mod Store terms and online infrastructure acceptable use.

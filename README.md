@@ -188,10 +188,22 @@ This project is governed by a modular multi-license structure:
 | **Binary ELF Loader & SRE Host** | `src/loader/`, `src/srehost/` | **MIT License** | Exclusively **OpenSwordigo Org** |
 | **Third-Party Vendored Code** | `src/tools/ufbx/`, `src/sre/base/lua/`, etc. | Upstream (MIT / zlib / BSD) | Respective authors |
 
-See [`LICENSE.md`](LICENSE.md), [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), and [`src/platform/LICENSE.md`](src/platform/LICENSE.md) for full legal terms.
+See [`LICENSE.md`](LICENSE.md), [`.github/CLA.md`](.github/CLA.md), [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), and [`src/platform/LICENSE.md`](src/platform/LICENSE.md) for full legal terms.
 
 ---
 
-## 7. Disclaimer
+## 7. Community, Governance & Policies
+
+OpenSwordigo is developed collaboratively under clear legal, architectural, and community frameworks:
+
+* **[Contributor License Agreement (CLA)](.github/CLA.md)** — Defines the 50/50 dual-ownership copyright retention model and multi-license contribution rules.
+* **[Contributing Guidelines](.github/CONTRIBUTING.md)** — Toolchain requirements, C++17 / C99 / Python standards, clean-room rules, and PR checklist.
+* **[Project Governance Model](.github/GOVERNANCE.md)** — Administrative structure and sole decision-making authority of OpenSwordigo Org & Lawncher Team.
+* **[Code of Conduct](.github/CODE_OF_CONDUCT.md)** — Contributor Covenant v2.1 community pledge and enforcement procedures.
+* **[Terms of Use & Online Services](.github/TERMS_OF_USE.md)** — Acceptable use policy and conditions for the Lawncher Mod Store network and online infrastructure.
+
+---
+
+## 8. Disclaimer
 
 *Swordigo* is a registered trademark of Touch Foo / Ville Mäkynen. This project is an independent community software development kit and compatibility layer. Original game assets, levels, and proprietary binaries are not distributed with this repository and must be legally obtained from the official game package.
