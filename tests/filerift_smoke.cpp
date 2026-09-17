@@ -124,6 +124,60 @@ $end
     } catch (const std::exception&) {
     }
 
+    // Verify all supported filetypes detection, normalization, and roundtrips
+    for (const auto& ft : filerift::supported_filetypes()) {
+        if (!filerift::is_supported_filetype(ft)) {
+            std::cerr << "is_supported_filetype failed for " << ft << "\n";
+            return EXIT_FAILURE;
+        }
+        if (filerift::normalize_filetype(ft) != ft) {
+            std::cerr << "normalize_filetype failed for " << ft << "\n";
+            return EXIT_FAILURE;
+        }
+        if (filerift::detect_filetype("test." + ft) != ft) {
+            std::cerr << "detect_filetype extension failed for " << ft << "\n";
+            return EXIT_FAILURE;
+        }
+        std::string banner = "## FileRift decoded Swordigo file type: " + ft + "\n\n";
+        if (filerift::detect_filetype("dummy.txt", banner) != ft) {
+            std::cerr << "detect_filetype banner failed for " << ft << "\n";
+            return EXIT_FAILURE;
+        }
+    }
+
+    // Roundtrip tests for each format
+    struct TypeMarkup {
+        std::string type;
+        std::string markup;
+    };
+    const std::vector<TypeMarkup> samples = {
+        { "scl", "Name : 'prefabs'\n" },
+        { "gdata", "Item{\n    Name : 'sword'\n}\n" },
+        { "gopt", "MusicEnabled : 1\nMusicVolume : 0.75\n" },
+        { "gplayer", "Name : 'Hero'\nExperienceLevel : 5\n" },
+        { "gstate", "CurrentLevel : 'caves'\n" },
+        { "scmap", "Zone{\n    Name : 'World'\n}\n" },
+        { "sounds", "Effect{\n    Name : 'hit'\n}\n" },
+        { "fnt", "Glyph{\n    CharCode : 65\n}\n" },
+        { "atlas", "Subtexture{\n    Name : 'icon'\n}\n" },
+        { "fr", "Identifier : 'all_data'\n" }
+    };
+
+    for (const auto& sample : samples) {
+        const std::string bin = filerift::recode_markup(sample.markup, sample.type);
+        if (bin.empty()) {
+            std::cerr << "recode_markup produced empty binary for " << sample.type << "\n";
+            return EXIT_FAILURE;
+        }
+        const std::string dec = filerift::decode_protobuf(bin, sample.type);
+        require_contains(dec, "## FileRift decoded Swordigo file type: " + sample.type);
+        const std::string rebin = filerift::recode_markup(dec, sample.type);
+        if (rebin != bin) {
+            std::cerr << "round-trip binary mismatch for " << sample.type << "\n";
+            return EXIT_FAILURE;
+        }
+    }
+
     std::cout << "FileRift smoke checks passed\n";
     return EXIT_SUCCESS;
 }

@@ -12,8 +12,15 @@ function(swordigo_target target)
         target_compile_options(${target} PRIVATE ${SWORDIGO_COMPILE_OPTS})
     endif()
     if (NOT WIN32)
+        # $ORIGIN-relative lib path. Defaults to the app layout (<dist>/<exe> +
+        # <dist>/libs/); the test block in the root CMakeLists.txt temporarily
+        # rebinds this to $ORIGIN/../libs because test executables live one
+        # level deeper, in <dist>/tests/.
+        if (NOT DEFINED SWORDIGO_ORIGIN_LIBS_DIR)
+            set(SWORDIGO_ORIGIN_LIBS_DIR "$ORIGIN/libs")
+        endif()
         set_target_properties(${target} PROPERTIES
-            BUILD_RPATH "$ORIGIN/libs"
+            BUILD_RPATH "${SWORDIGO_ORIGIN_LIBS_DIR}"
             INSTALL_RPATH "${SWORDIGO_RPATH}")
     endif()
     if (WIN32 AND SWORDIGO_GLEW_TARGET)

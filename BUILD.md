@@ -11,69 +11,27 @@ A precise guide for developers to build SwordigoDesktop with the Dynarmic JIT ba
 - **Compiler**: GCC 12+ or Clang 15+ with C++20 support
 - **Cross-compiler**: `aarch64-linux-gnu-gcc` (for building libsre.so)
 - **CMake**: 3.12+ (for building Dynarmic)
-- **Make**: GNU Make
+
 ### Install Dependencies
 
-#### Fedora / RHEL
-
+**Fedora / RHEL:**
 ```bash
-sudo dnf install \
-    unicorn-devel \
-    SDL3-devel SDL3_image-devel \
-    openal-soft-devel \
-    mesa-libGL-devel \
-    zlib-devel \
-    libvorbis-devel \
-    vulkan-headers vulkan-loader-devel \
-    boost-devel \
-    mpg123-devel \
-    ffmpeg-free-devel \
-    gcc-aarch64-linux-gnu \
-    cmake gcc-c++
+sudo dnf install unicorn-devel SDL3-devel SDL3_image-devel openal-soft-devel \
+    mesa-libGL-devel zlib-devel libvorbis-devel gcc-aarch64-linux-gnu cmake gcc-c++
 ```
 
-### Ubuntu / Mint
-
+**Ubuntu / Debian (24.04+):**
 ```bash
-sudo apt update && sudo apt install -y \
-    libunicorn-dev \
-    libsdl3-dev libsdl3-image-dev \
-    libopenal-dev \
-    libgl-dev \
-    zlib1g-dev \
-    libvorbis-dev \
-    libvulkan-dev \
-    libboost-all-dev \
-    libmpg123-dev \
-    libavcodec-dev \
-    libavformat-dev \
-    libavutil-dev \
-    libavfilter-dev \
-    libavdevice-dev \
-    libswresample-dev \
-    libswscale-dev \
-    gcc-aarch64-linux-gnu \
-    cmake g++
+sudo apt install libunicorn-dev libsdl3-dev libsdl3-image-dev libopenal-dev \
+    libgl-dev zlib1g-dev libvorbis-dev gcc-aarch64-linux-gnu cmake g++
 ```
 
-### Arch Linux
-
+**Arch Linux:**
 ```bash
-sudo pacman -Syu --needed \
-    unicorn \
-    sdl3 sdl3_image \
-    openal \
-    libglvnd \
-    zlib \
-    libvorbis \
-    vulkan-headers vulkan-icd-loader \
-    boost \
-    mpg123 \
-    ffmpeg \
-    aarch64-linux-gnu-gcc \
-    cmake gcc
+sudo pacman -S unicorn sdl3 sdl3_image openal mesa zlib libvorbis cmake
+# Install aarch64-linux-gnu-gcc from AUR
+yay -S aarch64-linux-gnu-gcc
 ```
-
 
 ---
 
@@ -97,30 +55,19 @@ This script automatically:
 4. Installs `libsre.so` to all engine directories
 5. Launches the game
 
-### Alternative: Manual Build Steps
+### Alternative: Manual Build Steps (CMake-only; make is retired)
 
-#### Step 1: Build Dynarmic JIT (first time only)
-```bash
-make dynarmic-build
-```
-This runs CMake + Make on `deps/dynarmic/`, producing static libraries in `deps/dynarmic/build/`. Takes ~2 minutes on a modern CPU.
+The Makefile is retired (moved to `builder/oldmake`). All builds go through CMake:
 
-#### Step 2: Build SwordigoDesktop
+#### Step 1: Configure + build
 ```bash
-make -j$(nproc) DYNARMIC=1
+cmake -S . -B build-cmake -DSWORDIGO_USE_DYNARMIC=ON -DSWORDIGO_BUILD_SRE=ON
+cmake --build build-cmake -j$(nproc)
 ```
-This compiles the main binary `swordigo_boot` with Dynarmic JIT support.
-
-#### Step 3: Build libsre.so (SRE hooks)
-```bash
-make libsre.so
-```
-Cross-compiles the Swordigo Runtime Engine for ARM64 using `aarch64-linux-gnu-gcc`.
-
-#### Step 4: Build Asset Viewer (optional)
-```bash
-make asset_viewer
-```
+Builds `swordfare`, `ruby`, `ruby_cli` and all component libs **directly into the source tree** —
+executables land in `bin/`, shared libs (incl. the ARM64 `libsre.so`) in `bin/libs/`.
+No separate install step is needed; the scripts `run_swordigo.sh` / `run_openswordigo.sh`
+just build and run.
 
 ---
 
@@ -128,14 +75,12 @@ make asset_viewer
 
 | Target | Command | Description |
 |--------|---------|-------------|
-| `swordigo_boot` | `make -j$(nproc) DYNARMIC=1` | Main executable with Dynarmic JIT |
-| `swordigo_boot` | `make -j$(nproc)` | Main executable with Unicorn only |
-| `libsre.so` | `make libsre.so` | SRE hooks (ARM64 cross-compiled) |
-| `asset_viewer` | `make asset_viewer` | PVR/PNG/audio/scene browser |
-| `dynarmic-build` | `make dynarmic-build` | Build Dynarmic from source |
-| `dynarmic-clean` | `make dynarmic-clean` | Remove Dynarmic build artifacts |
-| `clean` | `make clean` | Remove all build artifacts |
-| `install-sre` | `make install-sre` | Install libsre.so to engine dirs |
+| `swordfare` | `cmake --build build-cmake -j$(nproc)` | Main launcher executable (Dynarmic or Unicorn per configure) |
+| `ruby` | `cmake --build build-cmake -j$(nproc)` | Asset viewer / scene editor SDK |
+| `ruby_cli` | `cmake --build build-cmake -j$(nproc)` | Headless FileRift-compatible CLI |
+| `sre` | `cmake --build build-cmake --target sre` | libsre.so SRE hooks (ARM64 cross-compiled, built into `bin/libs/`) |
+| `dynarmic-build` | `cmake --build build-cmake --target dynarmic-build` | Build Dynarmic from source |
+| `clean` | `rm -rf build-cmake` | Remove all build artifacts |
 
 ---
 

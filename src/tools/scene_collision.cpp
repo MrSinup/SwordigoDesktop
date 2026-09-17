@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
 
 namespace av {
 
@@ -292,9 +293,45 @@ static CollisionData::GroundPolygon parse_ground_polygon_payload(const std::stri
     return gp;
 }
 
+// Read a component's ParentComponentIdentifier (Component field 4).
+static int component_parent_identifier(const SceneComponent& comp) {
+    try {
+        proto::Reader reader(comp.raw_data);
+        proto::Field f;
+        while (reader.read_field(f))
+            if (f.field_number == 4 && f.wire_type == proto::WIRE_VARINT)
+                return static_cast<int>(f.varint_val);
+    } catch (...) {}
+    return 0;
+}
+
 CollisionData collision_parse(const SceneObject& obj) {
     CollisionData result;
     const auto& comps = obj.resolved_components.empty() ? obj.components : obj.resolved_components;
+
+    // Every ground object ships its walkable polygon TWICE: a GroundPolygon
+    // component, and a CollisionShape child whose ParentComponentIdentifier
+    // points back at it (obj9#7's CollisionShape 108 has `ParentComponentIdentifier
+    // : 100`). Both become collision shapes, so the character stands on two
+    // copies of the same surface and the pair loop resolves each of them — half
+    // of the jitter. The polygon is the authored one; skip the copy.
+    std::map<int, size_t> ground_polygon_vertex_counts;
+    for (const auto& comp : comps) {
+        if (!type_matches(comp.type_name, TYPE_GROUND_POLYGON)) continue;
+        const std::string payload = read_payload(comp, PAYLOAD_GROUND_POLYGON);
+        if (payload.empty()) continue;
+        int identifier = 0;
+        try {
+            proto::Reader reader(comp.raw_data);
+            proto::Field f;
+            while (reader.read_field(f))
+                if (f.field_number == 2 && f.wire_type == proto::WIRE_VARINT)
+                    identifier = static_cast<int>(f.varint_val);
+        } catch (...) {}
+        if (identifier != 0)
+            ground_polygon_vertex_counts[identifier] =
+                parse_ground_polygon_payload(payload).points.size() / 2;
+    }
 
     for (const auto& comp : comps) {
         const std::string& tn = comp.type_name;
@@ -313,22 +350,46 @@ CollisionData collision_parse(const SceneObject& obj) {
             }
         }
         else if (type_matches(tn, TYPE_COLLISION_SHAPE)) {
-            // CollisionShapeComponent: behavior flags for the shape.
-            // If a ShapeComponent was already parsed, apply flags to the last
-            // shape. If no ShapeComponent exists yet, create a placeholder
-            // (bounds from LocalAabb will be resolved by caller if needed).
-            std::string payload = read_payload(comp, PAYLOAD_COLLISION_SHAPE);
-            if (!payload.empty()) {
-                if (result.shapes.empty()) {
-                    // No geometry yet — create a default rect shape so flags
-                    // have somewhere to land; caller can update geometry from
-                    // the object's LocalAabb.
-                    CollisionShapeData shape;
-                    shape.type = COLL_RECT;
-                    result.shapes.push_back(shape);
-                }
-                parse_collision_shape_flags(payload, result.shapes.back());
+            // A CollisionShape component carries BOTH halves of the shape, in two
+            // sibling payload slots of the same Component message (Component
+            // field 120 = ShapeComponent geometry, field 121 =
+            // CollisionShapeComponent flags) — the engine links them by being the
+            // same component, so both must be read here. Reading only field 121
+            // (the old behaviour) left every shape a zero-size rectangle at the
+            // object origin, which is why walls never stopped anything.
+            std::string geometry = read_payload(comp, PAYLOAD_SHAPE_COMPONENT);
+            std::string flags    = read_payload(comp, PAYLOAD_COLLISION_SHAPE);
+            if (geometry.empty() && flags.empty()) continue;
+
+            CollisionShapeData shape;
+            if (!geometry.empty()) shape = parse_shape_payload(geometry);
+            // A shape with no geometry is not a shape (a bare CollisionShape
+            // component only ever carries flags for a shape authored elsewhere).
+            if (shape.type == COLL_NONE) {
+                // Fall back to the object's LocalAabb, which is what
+                // CollisionShapeComponent::SetDefaultShapeOfType (0x290658)
+                // builds a rectangle from when the component was authored
+                // without an explicit shape.
+                float aabb[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                if (!read_rectangle(obj.local_aabb, aabb)) continue;
+                if (aabb[2] <= 0.0f || aabb[3] <= 0.0f) continue;
+                shape.type = COLL_RECT;
+                shape.rect[0] = aabb[0];
+                shape.rect[1] = aabb[1];
+                shape.rect[2] = aabb[2];
+                shape.rect[3] = aabb[3];
             }
+            if (!flags.empty()) parse_collision_shape_flags(flags, shape);
+
+            // The duplicate-of-a-ground-polygon case described above: same
+            // parent, same vertex count, same shape.
+            const int parent = component_parent_identifier(comp);
+            auto it = ground_polygon_vertex_counts.find(parent);
+            if (it != ground_polygon_vertex_counts.end() &&
+                shape.type == COLL_POLYGON && shape.polygon_points.size() / 2 == it->second) {
+                continue;
+            }
+            result.shapes.push_back(std::move(shape));
         }
         else if (type_matches(tn, TYPE_BONE_CTRL_COLL)) {
             // BoneControlledCollisionShapeComponent: hitbox follows a bone.

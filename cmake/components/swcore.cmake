@@ -5,6 +5,8 @@
 
 swordigo_library(swcore
     ${SRC_DIR}/platform/data_path.cpp
+    ${SRC_DIR}/platform/font_fallback.cpp
+    ${SRC_DIR}/platform/gdb_compat.cpp
     ${SRC_DIR}/platform/io_thread.cpp
     ${SRC_DIR}/platform/embedded_assets.cpp
     ${SRC_DIR}/platform/os_external.cpp

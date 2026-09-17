@@ -8,6 +8,9 @@ project(SwordigoDesktop VERSION 4.5.0 LANGUAGES C CXX ASM)
 # The dist folder is `bin` for native (Linux) builds and `binw` for Windows
 # builds (incl. MinGW cross-compiles) so Windows .exe/.dll artifacts never land
 # in — or clobber — the Linux `bin/` tree. Override with -DSWORDIGO_DIST_DIR=...
+#
+# Test executables are NOT emitted here — they go to <dist>/tests/ and only in
+# CMAKE MODE DEV. See the banner below.
 if (NOT DEFINED SWORDIGO_DIST_DIR)
     if (WIN32)
         set(SWORDIGO_DIST_DIR "binw")
@@ -18,8 +21,6 @@ endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/${SWORDIGO_DIST_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/${SWORDIGO_DIST_DIR}/libs")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/${SWORDIGO_DIST_DIR}/libs")
-
-include(CTest)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +33,47 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # ---------------------------------------------------------------------------
 
 include(cmake/SwordigoOptions.cmake)     # options + cache paths
+
+# ===========================================================================
+#  CMAKE MODE DEV  —  ONE switch decides whether tests exist at all.          READ THIS.
+# ===========================================================================
+#
+#  Tests are a DEVELOPER-ONLY artifact. A normal build (plain `cmake`, or
+#  ./run_swordigo.sh / ./run_openswordigo.sh, both of which run an unqualified
+#  `cmake --build <dir>` with no target list) used to compile + link all ~30
+#  test executables into bin/ and leave them there next to the real app
+#  binaries. That polluted bin/ and made every ordinary build pay for code
+#  nobody was running.
+#
+#  From now on:
+#
+#    * DEFAULT (SWORDIGO_DEV_MODE=OFF)  ->  BUILD_TESTING is forced OFF, no
+#      test target is declared, nothing extra is compiled, and <dist>/tests/
+#      stays empty. This is what a normal build / release / packaging run gets.
+#
+#    * CMAKE MODE DEV (-DSWORDIGO_DEV_MODE=ON)  ->  BUILD_TESTING is forced ON,
+#      every test target is declared, and all test executables are written to
+#        <dist>/tests/          (Linux/macOS: bin/tests/, Windows: binw/tests/)
+#      — i.e. in the dist tree but one level below the app, so `ls bin/` shows
+#      applications only. Test binaries also get $ORIGIN/../libs as their
+#      BUILD_RPATH, which keeps them runnable straight out of tests/.
+#
+#    * Configure dev mode + run the suite:
+#        cmake -S . -B build-gg -DSWORDIGO_DEV_MODE=ON
+#        cmake --build build-gg -j"$(nproc)"
+#        ctest --test-dir build-gg --output-on-failure
+#
+#  NOTE ON CACHES: BUILD_TESTING is rewritten (FORCE) to mirror SWORDIGO_DEV_MODE
+#  on every configure. That is deliberate — pre-existing build dirs still carry
+#  a stale BUILD_TESTING=ON from the old `include(CTest)` default, and without
+#  the force those caches would keep rebuilding the whole test suite after this
+#  change. Do not pass -DBUILD_TESTING by hand; the dev-mode switch owns it.
+# ===========================================================================
+
+set(BUILD_TESTING "${SWORDIGO_DEV_MODE}" CACHE BOOL
+    "Build the developer test suite into <dist>/tests/ (mirrors SWORDIGO_DEV_MODE — use -DSWORDIGO_DEV_MODE=ON instead)" FORCE)
+include(CTest)                           # enable_testing() + add_test()/`test` target
+
 include(cmake/SwordigoPlatform.cmake)    # includes, defines, platform flags
 include(cmake/SwordigoDeps.cmake)        # external dependencies
 include(cmake/SwordigoHelpers.cmake)     # swordigo_target()/swordigo_library()
@@ -50,6 +92,7 @@ include(cmake/components/swordfare_boot.cmake)
 include(cmake/components/ruby.cmake)
 include(cmake/components/ruby_cli.cmake)
 include(cmake/components/ruby_gg.cmake)
+include(cmake/components/build_studio.cmake)
 
 # Guest + third-party build steps and install rules.
 include(cmake/components/sre.cmake)
@@ -57,6 +100,26 @@ include(cmake/components/sre13.cmake)
 include(cmake/components/misc.cmake)
 
 if (BUILD_TESTING)
+    # -----------------------------------------------------------------------
+    # Test binaries go to <dist>/tests/ — NEVER <dist>/ itself.
+    # -----------------------------------------------------------------------
+    # CMake captures CMAKE_RUNTIME_OUTPUT_DIRECTORY when each add_executable()
+    # runs, so overriding it here (and putting it back at the end of this
+    # block) rebinds every test target below into <dist>/tests/ while leaving
+    # the applications in <dist>/. Same scoping trick as the libs/ layout.
+    #
+    # Only active in CMAKE MODE DEV (see the banner near the top): when
+    # SWORDIGO_DEV_MODE is OFF this whole block is skipped, so a normal build
+    # never declares — let alone compiles — a test target, and <dist>/tests/
+    # is left to whatever is already in it.
+    #
+    # NOTE: cmake auto-adds absolute build RPATHs for linked project libs, so
+    # these stay runnable from any cwd; SWORDIGO_ORIGIN_LIBS_DIR additionally
+    # points $ORIGIN at ../libs for the targets built via swordigo_target().
+    set(_swordigo_app_runtime_out "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/${SWORDIGO_DIST_DIR}/tests")
+    set(SWORDIGO_ORIGIN_LIBS_DIR "$ORIGIN/../libs")
+
     add_executable(trampoline_mgr_test
         tests/trampoline_mgr_test.cpp
         ${SRC_DIR}/platform/arm64_reloc.cpp)
@@ -209,6 +272,112 @@ if (BUILD_TESTING)
     target_link_libraries(scl_studio_test PRIVATE swpod swcore)
     add_test(NAME scl_studio_test COMMAND scl_studio_test)
 
+    # POD -> GLB ANIMATION: the clip the GLB plays must reproduce the engine's
+    # poses, frame for frame. gltf_bridge_roundtrip_test deliberately excludes
+    # animation from its fingerprint, so before this nothing compared an
+    # exported clip against av::skin_mesh() — which is how an exported merged
+    # clip could carry the clip's first frame as the bind pose AND write POD
+    # quaternions without the file's documented xyz negation, while every
+    # static-model test stayed green. Links only tools/ sources; no Qt, no GL.
+    # Skips (loudly, exit 0) when the shipped assets are absent.
+    add_executable(glb_animation_skinning_test
+        tests/glb_animation_skinning_test.cpp
+        ${SRC_DIR}/tools/gltf_export.cpp
+        ${SRC_DIR}/tools/pod_loader.cpp
+        # pod_loader.cpp calls pod_warn_if_stale() at load time, so the stamp
+        # reader must be in every target that compiles the loader directly
+        # (these tests link no swpod library).
+        ${SRC_DIR}/tools/pod_stamp.cpp
+        ${SRC_DIR}/tools/tiny_gltf_v3.c
+        ${SRC_DIR}/tools/stb_impl_shim.cpp)
+    target_include_directories(glb_animation_skinning_test PRIVATE
+        ${SRC_DIR} ${SRC_DIR}/tools ${SRC_DIR}/stb)
+    target_link_libraries(glb_animation_skinning_test PRIVATE ZLIB::ZLIB)
+    add_test(NAME glb_animation_skinning_test COMMAND glb_animation_skinning_test)
+
+    # The other half of the same pipeline: glb_animation_skinning_test pins the
+    # EXPORT direction against the engine's own skinning, this pins the IMPORT
+    # direction against an evaluator written from the glTF 2.0 spec (T*R*S node
+    # locals, parent-chain worlds, STEP/LINEAR/CUBICSPLINE, shortest-path slerp).
+    # They are compared by pairwise inter-joint distance, which is invariant
+    # under any change of basis — so POD and glTF may disagree about axes and
+    # the two still compare exactly. Runs on third-party GLBs (assets our own
+    # exporter never touched, so a shared bug cannot hide behind itself).
+    # Skips (loudly, exit 0) when the machine has none.
+    add_executable(glb_import_spec_conformance_test
+        tests/glb_import_spec_conformance_test.cpp
+        ${SRC_DIR}/tools/gltf_import.cpp
+        ${SRC_DIR}/tools/pod_loader.cpp
+        ${SRC_DIR}/tools/pod_stamp.cpp
+        ${SRC_DIR}/tools/tiny_gltf_v3.c
+        ${SRC_DIR}/tools/stb_impl_shim.cpp)
+    target_include_directories(glb_import_spec_conformance_test PRIVATE
+        ${SRC_DIR} ${SRC_DIR}/tools ${SRC_DIR}/stb)
+    target_link_libraries(glb_import_spec_conformance_test PRIVATE ZLIB::ZLIB)
+    add_test(NAME glb_import_spec_conformance_test
+             COMMAND glb_import_spec_conformance_test)
+
+    # Skinned vertex-space coherence (GLB -> POD): convert a real GLB through the
+    # shipping pipeline (gltf_import -> pod_write -> pod_load) and assert the
+    # skinned mesh keeps the size it was baked at on every frame. Catches the
+    # class of bug where the bind pose looks perfect and the animation tears the
+    # model apart, because the vertices and the skeleton disagree about their
+    # unit (pilot.glb rendered at 62-130x). Also checks the bind pose skins to
+    # itself. Skips (loudly, exit 0) without real assets; SWORDIGO_GLB_ASSETS
+    # points it at a corpus directory.
+    add_executable(glb_import_skinning_coherence_test
+        tests/glb_import_skinning_coherence_test.cpp
+        ${SRC_DIR}/tools/gltf_import.cpp
+        ${SRC_DIR}/tools/pod_loader.cpp
+        ${SRC_DIR}/tools/pod_stamp.cpp
+        ${SRC_DIR}/tools/pod_writer.cpp
+        ${SRC_DIR}/tools/tiny_gltf_v3.c
+        ${SRC_DIR}/tools/stb_impl_shim.cpp)
+    target_include_directories(glb_import_skinning_coherence_test PRIVATE
+        ${SRC_DIR} ${SRC_DIR}/tools ${SRC_DIR}/stb)
+    target_link_libraries(glb_import_skinning_coherence_test PRIVATE ZLIB::ZLIB)
+    add_test(NAME glb_import_skinning_coherence_test
+             COMMAND glb_import_skinning_coherence_test)
+
+    # Which bone the 1-bone rigid bake picks. The engine reads ONE bone index
+    # per vertex and ignores weights, so the collapse is a modelling decision:
+    # it used to be argmax(weight) at the bind pose, i.e. chosen from one
+    # instant for a mesh that exists to be animated. refine_rigid_skin() scores
+    # each vertex's influences against every pose of every clip instead. This
+    # asserts it changes something on a real rig, never worsens the deviation
+    # from smooth skinning, never touches the geometry, and is a strict no-op
+    # when there are no clips. Skips (loudly, exit 0) without real assets.
+    add_executable(rigid_skin_refine_test
+        tests/rigid_skin_refine_test.cpp
+        ${SRC_DIR}/tools/gltf_import.cpp
+        ${SRC_DIR}/tools/pod_loader.cpp
+        ${SRC_DIR}/tools/pod_stamp.cpp
+        ${SRC_DIR}/tools/tiny_gltf_v3.c
+        ${SRC_DIR}/tools/stb_impl_shim.cpp)
+    target_include_directories(rigid_skin_refine_test PRIVATE
+        ${SRC_DIR} ${SRC_DIR}/tools ${SRC_DIR}/stb)
+    target_link_libraries(rigid_skin_refine_test PRIVATE ZLIB::ZLIB)
+    add_test(NAME rigid_skin_refine_test COMMAND rigid_skin_refine_test)
+
+    # The tags we write must be the tags the GAME reads, which is not the same
+    # set our own loader accepts. Tag 5010 (a node's raw 4x4) is a NO-OP in
+    # CPVRTModelPOD::ReadFromMemory — `case 0x1392u: goto LABEL_202;` skips the
+    # payload and stores nothing — so every matrix-only node (i.e. every
+    # Sketchfab GLB export) ended up with no transform at all and the node's
+    # world matrix was built from uninitialised storage. ruby_gg never noticed
+    # because it reads 5010 happily. This scans the bytes pod_write produced
+    # with a walker that shares no code with pod_loader, so a future edit can
+    # not reintroduce the tag without failing here. Also scans converter-stamped
+    # PODs on disk; skips (loudly, exit 0) when there are none.
+    add_executable(pod_game_reader_contract_test
+        tests/pod_game_reader_contract_test.cpp
+        ${SRC_DIR}/tools/pod_loader.cpp
+        ${SRC_DIR}/tools/pod_writer.cpp
+        ${SRC_DIR}/tools/pod_stamp.cpp)
+    target_include_directories(pod_game_reader_contract_test PRIVATE
+        ${SRC_DIR} ${SRC_DIR}/tools)
+    add_test(NAME pod_game_reader_contract_test COMMAND pod_game_reader_contract_test)
+
     # APK session import + registry (master TODO 4.1a): builds a tiny fake
     # APK with the shared zip writer, imports it, asserts byte-identical
     # extraction + session.json registry round trip + validation failures.
@@ -234,6 +403,14 @@ if (BUILD_TESTING)
     add_test(NAME ground_mesh_studio_test COMMAND ground_mesh_studio_test)
     set_tests_properties(ground_mesh_studio_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # Zenith Mesh (BoulderX): concave Ear-Clipping triangulation, 3D variable Z,
+    # and .rbc MeshPen container test.
+    add_executable(boulderx_test
+        tests/boulderx_test.cpp
+        ${SRC_DIR}/tools/boulderx.cpp)
+    target_include_directories(boulderx_test PRIVATE ${SRC_DIR})
+    add_test(NAME boulderx_test COMMAND boulderx_test)
 
     # Title-bar window controls must render visibly (painted icons). This
     # guards the frameless window's Close/Min/Max buttons against font-glyph
@@ -305,6 +482,12 @@ if (BUILD_TESTING)
         ${SRC_DIR}/ruby/render/water_renderer.cpp
         ${SRC_DIR}/ruby/render/portal_renderer.cpp
         ${SRC_DIR}/ruby/render/particle_engine.cpp
+        # glb_model.cpp owns GLBModel::update_animation()/set_active_animation()/
+        # current_animation_duration(), which viewport_3d_widget.cpp calls. It
+        # was missing from this list, so scene_edit_acceptance_test and
+        # scene_mesh_edit_test could never link (undefined GLBModel symbols)
+        # and silently showed up as "Not Run" in ctest.
+        ${SRC_DIR}/ruby/render/glb_model.cpp
         ${SRC_DIR}/ruby/core/project_context.cpp
         ${SRC_DIR}/tools/pod_loader.cpp
         ${SRC_DIR}/tools/pod_writer.cpp
@@ -326,6 +509,7 @@ if (BUILD_TESTING)
         ${SRC_DIR}/tools/scene_generator_v3.cpp
         ${SRC_DIR}/tools/scene_v3_db.cpp
         ${SRC_DIR}/tools/boulder.cpp
+        ${SRC_DIR}/tools/boulderx.cpp
         ${SRC_DIR}/tools/rubymesh.cpp
         ${SRC_DIR}/tools/obj_loader.cpp
         ${SRC_DIR}/tools/ani_loader.cpp
@@ -493,6 +677,52 @@ if (BUILD_TESTING)
         target_link_libraries(ruby_picking_test PRIVATE Qt6::Core Qt6::Gui)
         add_test(NAME ruby_picking_test COMMAND ruby_picking_test)
 
+        # Graphy node geometry: content-sized rects, reserved header bands,
+        # elided pills. Locks down the reported text-overlap/clipping bugs.
+        # rbsrc: the merged ObjectStudio + visual-scripter format. Headless, so
+        # it also serves ruby_cli and any future CI arc check.
+        add_executable(rbsrc_test
+            tests/rbsrc_test.cpp
+            ${SRC_DIR}/tools/rbsrc.cpp)
+        target_include_directories(rbsrc_test PRIVATE ${SRC_DIR} ${SRC_DIR}/tools)
+        swordigo_target(rbsrc_test)
+        add_test(NAME rbsrc_test COMMAND rbsrc_test)
+
+        add_executable(graphy_layout_test
+            tests/graphy_layout_test.cpp
+            ${SRC_DIR}/ruby/graph/graphy.cpp
+            ${SRC_DIR}/ruby/graph/graphy_canvas.cpp
+            ${SRC_DIR}/ruby/graph/graphy_layout.cpp)
+        set_target_properties(graphy_layout_test PROPERTIES AUTOMOC ON)
+        swordigo_target(graphy_layout_test)
+        target_link_libraries(graphy_layout_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+        add_test(NAME graphy_layout_test COMMAND graphy_layout_test)
+        set_tests_properties(graphy_layout_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+        # Graphy's document backend: .scene / .scl binary -> node graph. The
+        # fixtures are real Swordigo protobuf, so this covers the schema
+        # resolution, the loader and the builder together.
+        add_executable(graphy_scene_builder_test
+            tests/graphy_scene_builder_test.cpp
+            ${SRC_DIR}/ruby/graph/graphy.cpp
+            ${SRC_DIR}/ruby/graph/graphy_layout.cpp
+            ${SRC_DIR}/ruby/graph/graphy_scene_builder.cpp)
+        set_target_properties(graphy_scene_builder_test PROPERTIES AUTOMOC ON)
+        swordigo_target(graphy_scene_builder_test)
+        target_include_directories(graphy_scene_builder_test PRIVATE
+            ${SRC_DIR} ${SRC_DIR}/tools ${SRC_DIR}/platform ${SRC_DIR}/ruby/graph)
+        # swpod brings the scene loader; filerift brings the FileRift recoder and
+        # the host Lua chunk compiler. swcore/swfmt are not named directly: their
+        # weak `g_instance_assets_dir` definition cannot satisfy an executable's
+        # strong reference, so asking for them here would fail to link.
+        target_link_libraries(graphy_scene_builder_test PRIVATE
+            Qt6::Core Qt6::Gui Qt6::Widgets
+            swpod filerift ZLIB::ZLIB)
+        add_test(NAME graphy_scene_builder_test COMMAND graphy_scene_builder_test)
+        set_tests_properties(graphy_scene_builder_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
         # Asset browser panel test
         add_executable(asset_browser_test
             tests/asset_browser_test.cpp
@@ -504,4 +734,35 @@ if (BUILD_TESTING)
         set_tests_properties(asset_browser_test PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
+
+    # Restore the app-level output dir so anything added below this block still
+    # lands in <dist>/ next to the applications, and put $ORIGIN back to the
+    # app layout.
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${_swordigo_app_runtime_out}")
+    set(SWORDIGO_ORIGIN_LIBS_DIR "$ORIGIN/libs")
+    unset(_swordigo_app_runtime_out)
+else()
+    # -----------------------------------------------------------------------
+    # Normal build: declare no test target — AND make the build tree admit it.
+    # -----------------------------------------------------------------------
+    # `include(CTest)` above only calls enable_testing() when BUILD_TESTING is
+    # ON, so a normal configure writes no CTestTestfile.cmake — but it also
+    # never touches one already sitting there from an earlier dev-mode
+    # configure of the SAME directory. `ctest --test-dir <normal build>` would
+    # then list those stale entries, and happily RUN them, because the dev-mode
+    # binaries are still over in <dist>/tests/. That is the same bin/-pollution
+    # problem in a different disguise: the directory would be lying about what
+    # it built. Drop the generated test metadata so the tree tells the truth
+    # (a later -DSWORDIGO_DEV_MODE=ON reconfigure writes it back).
+    #
+    # Only ever removes a file CMake generated inside the build directory.
+    file(GLOB_RECURSE _swordigo_stale_ctest
+         "${CMAKE_BINARY_DIR}/CTestTestfile.cmake")
+    if (_swordigo_stale_ctest)
+        file(REMOVE ${_swordigo_stale_ctest})
+        message(STATUS
+            "CMAKE MODE DEV is OFF: removed ${_swordigo_stale_ctest} from a previous "
+            "dev configure (no test target is declared in a normal build)")
+    endif()
+    unset(_swordigo_stale_ctest)
 endif()

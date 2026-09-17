@@ -188,3 +188,6 @@ __pycache__/
 *.pyc
 *.pyo
 
+*.bak
+*.glb
+src/tools/King_Crown/

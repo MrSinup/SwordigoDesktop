@@ -208,4 +208,10 @@ void sre_button_lifecycle_on_skill_picker_destroy(void);
 void sre_button_lifecycle_on_game_over(void);
 void sre_button_lifecycle_on_scene_destruct(void);
 
+/* Host-triggered developer overlays & debug toggles (sre_scene_update.c) */
+extern volatile int g_sre_request_toggle_debug_info;
+extern volatile int g_sre_request_toggle_collision_shapes;
+extern volatile int g_sre_request_toggle_combat_wireframe;
+
 #endif /* SRE_H */
+

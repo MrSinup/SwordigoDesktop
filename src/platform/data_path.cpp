@@ -1,4 +1,5 @@
 #include "platform/data_path.h"
+#include "platform/font_fallback.h"
 #include "platform/os_external.h"
 #include <cstdlib>
 #include <cstring>
@@ -21,9 +22,14 @@ extern std::string g_instance_assets_dir;
 // the way an ELF .so can. The executables (main.cpp / asset_viewer.cpp /
 // ruby_cli.cpp) still define strong versions; these weak fallbacks only make
 // the DLL self-contained at link time and are overridden by those when present.
-#if defined(_WIN32) && defined(__GNUC__)
+#if defined(_WIN32)
+#if defined(_MSC_VER)
+__declspec(selectany) std::string g_assets_dir = "assets";
+__declspec(selectany) std::string g_instance_assets_dir = "assets";
+#elif defined(__GNUC__)
 __attribute__((weak)) std::string g_assets_dir = "assets";
 __attribute__((weak)) std::string g_instance_assets_dir = "assets";
+#endif
 #endif
 
 namespace fs = std::filesystem;
@@ -429,6 +435,16 @@ extern "C" bool resolve_vfs_path_impl(const char* original_path, char* out_resol
         return true;
     }
 
+    // Android system fonts fallback via FontConfig
+    if (path.rfind("/system/fonts/", 0) == 0) {
+        const char* fc_res = font_fallback_resolve(path.c_str());
+        if (fc_res && fc_res[0]) {
+            strncpy(out_resolved_path, fc_res, max_len - 1);
+            out_resolved_path[max_len - 1] = '\0';
+            return true;
+        }
+    }
+
     // Absolute paths are passed through as-is
     if (is_absolute && path[0] == '/') {
         strncpy(out_resolved_path, original_path, max_len - 1);
@@ -479,6 +495,16 @@ extern "C" bool resolve_vfs_path_impl(const char* original_path, char* out_resol
         std::string resolved;
         if (check_file_exists(candidate, resolved)) {
             strncpy(out_resolved_path, resolved.c_str(), max_len - 1);
+            out_resolved_path[max_len - 1] = '\0';
+            return true;
+        }
+    }
+
+    // Font fallback via FontConfig for missing font requests (.ttf/.otf)
+    if (path.find(".ttf") != std::string::npos || path.find(".otf") != std::string::npos) {
+        const char* fc_res = font_fallback_resolve(path.c_str());
+        if (fc_res && fc_res[0]) {
+            strncpy(out_resolved_path, fc_res, max_len - 1);
             out_resolved_path[max_len - 1] = '\0';
             return true;
         }

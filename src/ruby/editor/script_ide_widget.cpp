@@ -449,8 +449,12 @@ void ScriptIDEWidget::trigger_analysis() {
 }
 
 std::string ScriptIDEWidget::file_ext_or_type() const {
+    if (!m_filerift_type.isEmpty()) {
+        return ::filerift::normalize_filetype(m_filerift_type.toStdString());
+    }
+    const std::string detected = ::filerift::detect_filetype(m_file_path.toStdString());
+    if (!detected.empty()) return detected;
     QString ext = QFileInfo(m_file_path).suffix().toLower();
-    if (ext.isEmpty() && !m_filerift_type.isEmpty()) ext = m_filerift_type;
     if (ext.isEmpty()) ext = QStringLiteral("scene");
     return ext.toStdString();
 }
@@ -733,17 +737,23 @@ bool ScriptIDEWidget::load_file(const QString& file_path, const QString& filerif
         if (file.open(QIODevice::ReadOnly)) {
             const QByteArray bytes = file.readAll();
             const bool looks_binary = bytes.contains('\0');
-            if (!filerift_type.isEmpty() && looks_binary) {
+            if (type.isEmpty()) {
+                const std::string detected = ::filerift::detect_filetype(
+                    file_path.toStdString(),
+                    std::string(bytes.constData(), static_cast<size_t>(std::min<qsizetype>(bytes.size(), 2048))));
+                if (!detected.empty()) type = QString::fromStdString(detected);
+            }
+            if (!type.isEmpty() && looks_binary) {
                 try {
                     const std::string markup = ::filerift::decode_protobuf(
                         std::string(bytes.constData(), static_cast<size_t>(bytes.size())),
-                        filerift_type.toStdString());
+                        type.toStdString());
                     // The native decoder already emits the FileRift banner.
                     QString decoded = QString::fromUtf8(markup.c_str(),
                                                          static_cast<qsizetype>(markup.size()));
                     if (!decoded.startsWith(QLatin1String("## FileRift decoded"))) {
                         content = QStringLiteral("## FileRift decoded Swordigo file type: ") +
-                                  filerift_type + QStringLiteral("\n\n") + decoded;
+                                  type + QStringLiteral("\n\n") + decoded;
                     } else {
                         content = decoded;
                     }
@@ -758,7 +768,12 @@ bool ScriptIDEWidget::load_file(const QString& file_path, const QString& filerif
                 }
             } else {
                 content = QString::fromUtf8(bytes);
-                type = filerift_type;
+                if (type.isEmpty()) {
+                    const std::string detected = ::filerift::detect_filetype(
+                        file_path.toStdString(),
+                        content.left(2048).toStdString());
+                    if (!detected.empty()) type = QString::fromStdString(detected);
+                }
                 ok = true;
             }
         } else {
@@ -1173,13 +1188,17 @@ bool ScriptIDEWidget::save_file(const QString& file_path) {
     }
 
     try {
+        if (m_filerift_encode_on_save && m_filerift_type.isEmpty()) {
+            const std::string detected = ::filerift::detect_filetype(target.toStdString(), source_text.left(2048).toStdString());
+            if (!detected.empty()) m_filerift_type = QString::fromStdString(detected);
+        }
+
         if (m_filerift_encode_on_save && !m_filerift_type.isEmpty()) {
             QString markup = source_text;
-            const QString prefix = "## FileRift decoded Swordigo file type: " + m_filerift_type;
             // Strip EVERY leading FileRift banner line. A legacy double-banner
             // (or one the user pasted) must never reach the re-encoder as data.
             for (;;) {
-                if (!markup.startsWith(prefix)) break;
+                if (!markup.startsWith(QLatin1String("## FileRift decoded"))) break;
                 const int nl = markup.indexOf('\n');
                 if (nl < 0) { markup.clear(); break; }
                 markup = markup.mid(nl + 1).trimmed();
@@ -1201,8 +1220,8 @@ bool ScriptIDEWidget::save_file(const QString& file_path) {
             }
             output = QByteArray(binary.data(), static_cast<qint64>(binary.size()));
         } else if (!m_filerift_type.isEmpty()) {
-            // Binary-format file (scene/scl/swdm/gmesh) in Raw-Text mode: refuse.
-            // Writing the markup as plain UTF-8 turns a .scene into text the
+            // Binary-format file in Raw-Text mode: refuse.
+            // Writing the markup as plain UTF-8 turns a binary file into text the
             // engine and the 3D viewport cannot parse — the exact corruption
             // that destroyed user scenes. Raw-Text is only safe for plain
             // scripts (empty m_filerift_type).
@@ -1241,11 +1260,6 @@ bool ScriptIDEWidget::save_file(const QString& file_path) {
 
 bool ScriptIDEWidget::decode_current_binary(const QString& type) {
     if (m_busy_loading) return false;
-    QString schema = type.isEmpty() ? m_filerift_type : type;
-    if (schema.isEmpty()) {
-        QString ext = QFileInfo(m_file_path).suffix().toLower();
-        schema = (ext == "scl") ? "scl" : "scene";
-    }
 
     QByteArray bytes;
     if (!m_file_path.isEmpty()) {
@@ -1256,6 +1270,14 @@ bool ScriptIDEWidget::decode_current_binary(const QString& type) {
         bytes = toPlainText().toUtf8();
     }
     if (bytes.isEmpty()) return false;
+
+    QString schema = type.isEmpty() ? m_filerift_type : type;
+    if (schema.isEmpty()) {
+        const std::string detected = ::filerift::detect_filetype(
+            m_file_path.toStdString(),
+            std::string(bytes.constData(), static_cast<size_t>(std::min<qsizetype>(bytes.size(), 2048))));
+        schema = detected.empty() ? QStringLiteral("scene") : QString::fromStdString(detected);
+    }
 
     try {
         QString content;
@@ -1287,8 +1309,8 @@ bool ScriptIDEWidget::recode_current_markup(const QString& type) {
     if (m_busy_loading) return false;
     QString schema = type.isEmpty() ? m_filerift_type : type;
     if (schema.isEmpty()) {
-        QString ext = QFileInfo(m_file_path).suffix().toLower();
-        schema = (ext == "scl") ? "scl" : "scene";
+        const std::string detected = ::filerift::detect_filetype(m_file_path.toStdString());
+        schema = detected.empty() ? QStringLiteral("scene") : QString::fromStdString(detected);
     }
 
     try {
@@ -1300,10 +1322,9 @@ bool ScriptIDEWidget::recode_current_markup(const QString& type) {
             ensure_editable();
             markup = toPlainText();
         }
-        const QString prefix = "## FileRift decoded Swordigo file type: " + schema;
         // Strip EVERY leading banner line (see save_file).
         for (;;) {
-            if (!markup.startsWith(prefix)) break;
+            if (!markup.startsWith(QLatin1String("## FileRift decoded"))) break;
             const int nl = markup.indexOf('\n');
             if (nl < 0) { markup.clear(); break; }
             markup = markup.mid(nl + 1).trimmed();

@@ -14,6 +14,12 @@
 
 #include "sre.h"
 #include "sre_caver.h"
+#include "sre_host_abi.h"
+
+/* Host-triggered developer overlays & debug toggles */
+volatile int g_sre_request_toggle_debug_info = 0;
+volatile int g_sre_request_toggle_collision_shapes = 0;
+volatile int g_sre_request_toggle_combat_wireframe = 0;
 
 /* =========================================================================
  * Scene Loading State — guards coroutine execution during level transitions
@@ -457,6 +463,54 @@ static void sre_GameSceneView_ApplyOverrides(void* self) {
     }
 }
 
+static void sre_GameSceneView_HandleDevToggles(void* self) {
+    if (!sre_gsv_guest_object_valid((uint64_t)(uintptr_t)self)) return;
+
+    if (g_sre_request_toggle_debug_info) {
+        g_sre_request_toggle_debug_info = 0;
+        typedef void (*ToggleDebugInfo_fn)(void*);
+        static ToggleDebugInfo_fn s_toggle_fn = NULL;
+        if (!s_toggle_fn) {
+            s_toggle_fn = (ToggleDebugInfo_fn)(uintptr_t)srehost_get_symbol("_ZN5Caver13GameSceneView15ToggleDebugInfoEv");
+        }
+        if (s_toggle_fn) {
+            s_toggle_fn(self);
+        }
+    }
+
+    if (g_sre_request_toggle_collision_shapes) {
+        g_sre_request_toggle_collision_shapes = 0;
+        static uint8_t* s_draw_depth = NULL;
+        if (!s_draw_depth) {
+            s_draw_depth = (uint8_t*)(uintptr_t)srehost_get_symbol("_ZN5Caver23CollisionShapeComponent9drawDepthE");
+        }
+        if (s_draw_depth) {
+            *s_draw_depth ^= 1;
+        }
+        uint64_t ctrl = *(uint64_t*)((char*)self + 0x100);
+        if (sre_gsv_guest_object_valid(ctrl)) {
+            uint64_t scene = *(uint64_t*)(ctrl + 0x20);
+            if (sre_gsv_guest_object_valid(scene)) {
+                *(uint8_t*)(scene + 720) = s_draw_depth ? *s_draw_depth : 1;
+            }
+        }
+    }
+
+    if (g_sre_request_toggle_combat_wireframe) {
+        g_sre_request_toggle_combat_wireframe = 0;
+        uint8_t cur = *(uint8_t*)((char*)self + 434) ^ 1;
+        *(uint8_t*)((char*)self + 434) = cur;
+        uint64_t ctrl = *(uint64_t*)((char*)self + 0x100);
+        if (sre_gsv_guest_object_valid(ctrl)) {
+            uint64_t scene = *(uint64_t*)(ctrl + 0x20);
+            if (sre_gsv_guest_object_valid(scene)) {
+                *(uint8_t*)(scene + 892) = cur;
+            }
+        }
+    }
+}
+
+
 /* =========================================================================
  * sre_GameSceneView_Update — RELAY PASSTHROUGH WITH SCENE LOADING GUARD
  * =========================================================================
@@ -524,6 +578,7 @@ void sre_GameSceneView_Update(void* self, float deltaTime) {
         g_orig_GameSceneView_Update_fn(self, deltaTime);
         g_sre_guiview_relay_calls++;
         sre_GameSceneView_ApplyOverrides(self);
+        sre_GameSceneView_HandleDevToggles(self);
     } else {
         /* DIAGNOSTIC: relay not installed — original never called.
          * This means scene_name, health, coins etc. are never extracted. */

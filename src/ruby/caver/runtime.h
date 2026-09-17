@@ -44,6 +44,20 @@ struct RuntimeField {
     double          double_value = 0.0;
     float           float_value = 0.0f;
     std::string     bytes_value;
+    uint32_t        payload_field = 0;   // Component slot this field came from
+    std::string     payload_class;       // schema class of that slot ("ShapeComponent")
+};
+
+// One payload submessage of a Component. A component normally carries several:
+// a CollisionShape has a ShapeComponent slot and a CollisionShapeComponent slot,
+// a MonsterEntity has EntityComponent + MonsterEntityComponent, every monster
+// controller has MonsterControllerComponent + its own slot.
+struct RuntimePayload {
+    uint32_t          field = 0;              // Component field number (120, 121, …)
+    const ComponentType* type = nullptr;      // owning class, when known
+    std::string       class_name;             // schema class name
+    std::string       bytes;                  // raw submessage
+    bool              is_primary = false;     // the slot the ClassName names
 };
 
 struct RuntimeComponent {
@@ -53,9 +67,13 @@ struct RuntimeComponent {
     std::string label;
     int32_t     parent_identifier = 0;
     std::string raw;                       // the whole Component message, verbatim
-    std::string payload;                   // the payload submessage bytes
-    std::vector<RuntimeField> fields;      // decoded, schema-named
+    std::string payload;                   // primary payload bytes (== primary_payload().bytes)
+    std::vector<RuntimePayload> payloads;  // every payload submessage, in file order
+    std::vector<RuntimeField> fields;      // decoded across all payloads, schema-named
     std::vector<ComponentRef> refs;        // resolved id references
+
+    const RuntimePayload* payload_for(uint32_t field) const;
+    const RuntimePayload* primary_payload() const;
 
     bool is(const std::string& cls) const;             // class_name or long name match
     const RuntimeField* field(const std::string& name) const;

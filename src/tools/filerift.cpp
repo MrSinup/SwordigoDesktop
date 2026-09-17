@@ -1048,18 +1048,96 @@ static const FieldSchema* find_field_by_name(const std::string& parent_msg_type,
     return nullptr;
 }
 
+const std::vector<std::string>& supported_filetypes() {
+    static const std::vector<std::string> types = {
+        "scene", "scl", "gdata", "gopt", "gplayer",
+        "gstate", "scmap", "sounds", "fnt", "atlas", "fr"
+    };
+    return types;
+}
+
+std::string normalize_filetype(const std::string& filetype) {
+    std::string s = filetype;
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return (char)::tolower(c); });
+    // Strip leading dot if an extension was passed e.g. ".gdata"
+    if (!s.empty() && s.front() == '.') s.erase(s.begin());
+
+    if (s == "scene" || s == "scn" || s == "swdm" || s == "gmesh") return "scene";
+    if (s == "scl" || s == "objectlibrary") return "scl";
+    if (s == "gdata" || s == "gamedata") return "gdata";
+    if (s == "gopt" || s == "gameoptions") return "gopt";
+    if (s == "gplayer" || s == "playerprofile") return "gplayer";
+    if (s == "gstate" || s == "gamestate") return "gstate";
+    if (s == "scmap" || s == "map") return "scmap";
+    if (s == "sounds" || s == "soundlibrary") return "sounds";
+    if (s == "fnt" || s == "font") return "fnt";
+    if (s == "atlas" || s == "texture") return "atlas";
+    if (s == "fr" || s == "all") return "fr";
+    return s;
+}
+
+bool is_supported_filetype(const std::string& filetype) {
+    const std::string norm = normalize_filetype(filetype);
+    for (const auto& t : supported_filetypes()) {
+        if (norm == t) return true;
+    }
+    return false;
+}
+
+std::string detect_filetype(const std::string& path_or_ext, const std::string& header_or_bytes) {
+    // 1. Sniff from content header if present: "## FileRift decoded Swordigo file type: <type>"
+    if (!header_or_bytes.empty()) {
+        const std::string banner_prefix = "## FileRift decoded Swordigo file type:";
+        size_t bpos = header_or_bytes.find(banner_prefix);
+        if (bpos != std::string::npos) {
+            size_t start = bpos + banner_prefix.size();
+            while (start < header_or_bytes.size() && (header_or_bytes[start] == ' ' || header_or_bytes[start] == '\t')) ++start;
+            size_t end = start;
+            while (end < header_or_bytes.size() && header_or_bytes[end] != '\r' && header_or_bytes[end] != '\n') ++end;
+            std::string header_type = header_or_bytes.substr(start, end - start);
+            while (!header_type.empty() && (header_type.back() == ' ' || header_type.back() == '\t')) header_type.pop_back();
+            std::string norm = normalize_filetype(header_type);
+            if (is_supported_filetype(norm)) return norm;
+        }
+    }
+
+    // 2. Sniff from path/extension
+    if (!path_or_ext.empty()) {
+        std::string lower = path_or_ext;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return (char)::tolower(c); });
+        size_t dot = lower.find_last_of('.');
+        std::string ext = (dot != std::string::npos && dot + 1 < lower.size()) ? lower.substr(dot + 1) : lower;
+        std::string norm = normalize_filetype(ext);
+        if (is_supported_filetype(norm)) return norm;
+
+        // Also check filename stem if extension didn't match (e.g. path is "assets/gamedata" or "sounds")
+        size_t slash = lower.find_last_of("/\\");
+        std::string filename = (slash != std::string::npos && slash + 1 < lower.size()) ? lower.substr(slash + 1) : lower;
+        if (dot != std::string::npos && dot > slash) {
+            filename = lower.substr(slash == std::string::npos ? 0 : slash + 1, dot - (slash == std::string::npos ? 0 : slash + 1));
+        }
+        norm = normalize_filetype(filename);
+        if (is_supported_filetype(norm)) return norm;
+    }
+
+    return "";
+}
+
 static std::string root_class_for_filetype(const std::string& filetype) {
-    if (filetype == "fr") return "All";
-    if (filetype == "scene") return "Scene";
-    if (filetype == "scl") return "ObjectLibrary";
-    if (filetype == "gdata") return "GameData";
-    if (filetype == "gopt") return "GameOptions";
-    if (filetype == "gplayer") return "PlayerProfile";
-    if (filetype == "gstate") return "GameState";
-    if (filetype == "scmap") return "Map";
-    if (filetype == "sounds") return "SoundLibrary";
-    if (filetype == "fnt") return "Font";
-    if (filetype == "atlas") return "Texture";
+    const std::string norm = normalize_filetype(filetype);
+    if (norm == "fr") return "All";
+    if (norm == "scene") return "Scene";
+    if (norm == "scl") return "ObjectLibrary";
+    if (norm == "gdata") return "GameData";
+    if (norm == "gopt") return "GameOptions";
+    if (norm == "gplayer") return "PlayerProfile";
+    if (norm == "gstate") return "GameState";
+    if (norm == "scmap") return "Map";
+    if (norm == "sounds") return "SoundLibrary";
+    if (norm == "fnt") return "Font";
+    if (norm == "atlas") return "Texture";
     throw std::invalid_argument("unsupported FileRift file type: " + filetype);
 }
 
@@ -1184,10 +1262,11 @@ static void decode_message(const std::string& bytes, const std::string& classnam
 }
 
 std::string decode_protobuf(const std::string& bytes, const std::string& filetype) {
-    const std::string root_class = root_class_for_filetype(filetype);
+    const std::string norm = normalize_filetype(filetype);
+    const std::string root_class = root_class_for_filetype(norm);
 
     std::stringstream out;
-    out << "## FileRift decoded Swordigo file type: " << filetype << "\n\n";
+    out << "## FileRift decoded Swordigo file type: " << norm << "\n\n";
     decode_message(bytes, root_class, 0, out);
     return out.str();
 }
@@ -1486,7 +1565,12 @@ static std::string recode_message(const std::vector<MarkupToken>& tokens, size_t
 }
 
 std::string recode_markup(const std::string& text, const std::string& filetype) {
-    const std::string root_class = root_class_for_filetype(filetype);
+    std::string actual_filetype = filetype;
+    if (actual_filetype.empty()) {
+        actual_filetype = detect_filetype("", text);
+        if (actual_filetype.empty()) actual_filetype = "scene";
+    }
+    const std::string root_class = root_class_for_filetype(actual_filetype);
     const std::vector<MarkupToken> tokens = lex(text);
     size_t idx = 0;
     std::string last_chunk;

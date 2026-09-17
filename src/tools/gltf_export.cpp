@@ -77,7 +77,16 @@ bool mat_inverse(const float in[16], float out[16]) {
         int pivot = col;
         for (int row = col + 1; row < 4; ++row)
             if (std::fabs(a[col * 4 + row]) > std::fabs(a[col * 4 + pivot])) pivot = row;
-        if (std::fabs(a[col * 4 + pivot]) < 1e-9f) return false;
+        // Singularity threshold MUST match pod_loader's local_mat4_inverse
+        // (1e-8), because that is the inverse the engine skips: when it fails,
+        // skin_mesh substitutes identity for that joint's inverse bind matrix.
+        // With a looser 1e-9 here, a bone whose pivot sits between the two
+        // thresholds got an inverseBindMatrix divided by ~1e-9 — an exploded
+        // matrix — where the engine used identity, so the vertices bound to
+        // that bone flew far outside the model while every other joint looked
+        // right. POD bones with a near-zero axis are common (a collapsed IK
+        // control, a weapon socket), so this band is not hypothetical.
+        if (std::fabs(a[col * 4 + pivot]) < 1e-8f) return false;
         if (pivot != col)
             for (int c = 0; c < 4; ++c) { std::swap(a[c * 4 + col], a[c * 4 + pivot]); std::swap(out[c * 4 + col], out[c * 4 + pivot]); }
         float s = a[col * 4 + col];
@@ -119,6 +128,88 @@ void mat_decompose(const float m[16], float t[3], float q[4], float s[3]) {
     if (n == 0.0f) { q[3] = 1.0f; }
 }
 
+// ─── POD quaternion convention -> glTF ─────────────────────────────────
+// POD stores rotation quaternions with xyz NEGATED relative to the editor/glTF
+// coordinate system. pod_loader's local_mat4_from_quat() is the authority:
+//
+//     "libswordigo_arm32.c::$c converts POD quaternions into the editor
+//      coordinate system by negating xyz while preserving w."
+//
+// The importer is symmetric about it — gltf_import.cpp negates xyz when it
+// writes a node's static rotation and again for every animation key — so the
+// convention is bilateral and deliberate, not a quirk of one side.
+//
+// The exporter was the missing half: it wrote POD quaternions straight into
+// glTF, making every rotation it emitted the INVERSE of the rotation the game
+// applies. That is invisible in the bind pose (where the palettes cancel —
+// see pod_bind_world) and catastrophic the moment bones actually rotate: each
+// joint turns the wrong way, the error compounds down the chain so the rig
+// reads as one rigid body tumbling, and because a child's local translation is
+// rotated by its wrongly-oriented parent, limb offsets swing outward and the
+// model leaves the screen. Measured on hiro.POD + hiro_die.POD: the exported
+// skeleton diverged from get_node_matrix() by 2.0 in the rotation basis and 90
+// units in translation by frame 5.
+void pod_quat_to_gltf(const float in[4], float out[4]) {
+    out[0] = -in[0];
+    out[1] = -in[1];
+    out[2] = -in[2];
+    out[3] =  in[3];
+}
+
+// ─── Channel liveness (must mirror pod_loader's stream_has_animation) ───
+// A POD node carries four transform streams (translation/rotation/scale/
+// matrix) plus `anim_flags`, a bitmask (1=T 2=R 4=S 8=M) saying which of them
+// the current clip actually animates. A stream can be present but NOT
+// animated: the game stores even a static transform as a 1-frame stream, and
+// an animation merge copies the clip's streams onto every node it names.
+//
+// pod_loader::get_node_matrix_internal() is the engine's authority here — it
+// honours the stream only when the flag is set, and otherwise falls back to
+// the node's own static field. `anim_flags == 0` means "no flag information",
+// in which case every present stream counts as animated.
+//
+// The exporter must use the SAME predicate. If it emitted a channel the engine
+// ignores (or dropped one the engine plays), the GLB would animate differently
+// from the game even once the bind pose is right.
+bool pod_channel_is_animated(const PODNode& n, uint32_t flag, size_t values, int components) {
+    return values >= static_cast<size_t>(components) &&
+           ((n.anim_flags & flag) != 0 || n.anim_flags == 0);
+}
+
+// ─── True bind (rest) pose for a node ─────────────────────────────────
+// av::skin_mesh() — the engine's authoritative skinning, reproduced below —
+// resolves each node's bind world matrix as:
+//
+//     node.bind_matrix            when has_bind_matrix
+//     get_node_matrix(i, 0.0f)    otherwise
+//
+// and `bind_matrix` is NOT an optimisation: pod_load() captures it from the
+// *base* model's rest frame BEFORE it overwrites the base nodes' anim streams
+// with the clip's, so for a merged animation POD frame 0 is the clip's first
+// pose, not the pose the mesh vertices were modelled in. Evaluated against
+// hiro.POD + hiro_die.POD, 43 of 61 nodes have a frame-0 world matrix that
+// differs from their captured bind matrix (worst: 20.65 units).
+//
+// glTF's inverseBindMatrices must be built from THIS matrix, because the
+// exported vertex positions are the bind-pose ones. Deriving them from frame 0
+// instead left every joint's skin palette post-multiplied by a constant wrong
+// delta (that joint's bind -> frame-0 move), which shears the limbs apart from
+// the torso and, on ill-conditioned bone matrices, flings the skinned mesh far
+// outside the model — the reported "torn torso, whole rig swinging away" look.
+void pod_bind_world(const PODModel& model, int node_index, float out[16]) {
+    if (node_index < 0 || node_index >= static_cast<int>(model.nodes.size())) {
+        const float id[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        std::memcpy(out, id, sizeof(float) * 16);
+        return;
+    }
+    const PODNode& n = model.nodes[node_index];
+    if (n.has_bind_matrix) {
+        std::memcpy(out, n.bind_matrix, sizeof(float) * 16);
+        return;
+    }
+    get_node_matrix(model, node_index, 0.0f, out);
+}
+
 // ─── Static node transform from POD (frame-0 animation streams) ─────────
 void pod_static_transform(const PODNode& n, bool& has_trs, float t[3], float q[4], float s[3],
                           bool& has_mat, float m[16]) {
@@ -129,13 +220,30 @@ void pod_static_transform(const PODNode& n, bool& has_trs, float t[3], float q[4
         std::memcpy(m, n.matrix, sizeof(float) * 16);
         return;
     }
-    // POD stores even static transforms as 1-frame animation streams.
-    if (!n.anim_translation.empty()) { t[0]=n.anim_translation[0]; t[1]=n.anim_translation[1]; t[2]=n.anim_translation[2]; has_trs = true; }
-    else if (n.has_translation)      { t[0]=n.translation[0]; t[1]=n.translation[1]; t[2]=n.translation[2]; has_trs = true; }
-    if (!n.anim_rotation.empty()) { q[0]=n.anim_rotation[0]; q[1]=n.anim_rotation[1]; q[2]=n.anim_rotation[2]; q[3]=n.anim_rotation[3]; has_trs = true; }
-    else if (n.has_rotation)      { q[0]=n.rotation[0]; q[1]=n.rotation[1]; q[2]=n.rotation[2]; q[3]=n.rotation[3]; has_trs = true; }
-    if (!n.anim_scale.empty()) { s[0]=n.anim_scale[0]; s[1]=n.anim_scale[1]; s[2]=n.anim_scale[2]; has_trs = true; }
-    else if (n.has_scale)      { s[0]=n.scale[0]; s[1]=n.scale[1]; s[2]=n.scale[2]; has_trs = true; }
+    // POD stores even static transforms as 1-frame animation streams, and the
+    // engine prefers the stream's FIRST key over the node's own static field
+    // whenever a stream exists at all — the anim_flags gate decides only
+    // whether the value varies per frame, not which source wins. (See
+    // get_node_matrix_internal: the memcpy from the stream is unconditional.)
+    // This mirrors that precedence so the node's rest transform agrees with the
+    // channels the animation block emits.
+    if (!n.anim_translation.empty()) {
+        t[0]=n.anim_translation[0]; t[1]=n.anim_translation[1]; t[2]=n.anim_translation[2]; has_trs = true;
+    } else if (n.has_translation) {
+        t[0]=n.translation[0]; t[1]=n.translation[1]; t[2]=n.translation[2]; has_trs = true;
+    }
+    if (!n.anim_rotation.empty()) {
+        pod_quat_to_gltf(&n.anim_rotation[0], q);
+        has_trs = true;
+    } else if (n.has_rotation) {
+        pod_quat_to_gltf(n.rotation, q);
+        has_trs = true;
+    }
+    if (n.anim_scale.size() >= 3) {
+        s[0]=n.anim_scale[0]; s[1]=n.anim_scale[1]; s[2]=n.anim_scale[2]; has_trs = true;
+    } else if (n.has_scale) {
+        s[0]=n.scale[0]; s[1]=n.scale[1]; s[2]=n.scale[2]; has_trs = true;
+    }
 }
 
 // ─── Binary assembly ───────────────────────────────────────────────────
@@ -199,8 +307,37 @@ bool gltf_export_glb(const PODModel& model,
     for (size_t i = 0; i < model.nodes.size(); ++i) {
         const auto& n = model.nodes[i];
         bool has_trs = false, has_mat = false;
-        float t[3], q[4], s[3], m[16];
+        // Zero-initialised: pod_static_transform() only fills the channels that
+        // have a source, and a node with none of them must not emit garbage.
+        float t[3] = {0, 0, 0}, q[4] = {0, 0, 0, 1}, s[3] = {1, 1, 1}, m[16];
         pod_static_transform(n, has_trs, t, q, s, has_mat, m);
+        // A captured bind pose overrides the node's REST transform, because the
+        // inverseBindMatrices emitted below are expressed in that pose. Leaving
+        // the rest transform at the clip's frame 0 makes the GLB internally
+        // inconsistent: a player that samples the animation at t=0 right away
+        // (Ruby GG does) hides it, while every other consumer — Blender,
+        // three.js, a thumbnail renderer — gets vertices skinned against a
+        // skeleton that is not in the pose they were baked in. The local bind
+        // matrix is derived by stepping down one level of the world-space bind
+        // hierarchy, the inverse of how pod_bind_world() walks up it.
+        if (n.has_bind_matrix && !n.has_matrix) {
+            float world_bind[16], local_bind[16];
+            pod_bind_world(model, static_cast<int>(i), world_bind);
+            bool have_local = true;
+            if (n.parent_index >= 0 && n.parent_index < static_cast<int>(model.nodes.size())) {
+                float parent_bind[16], parent_inv[16];
+                pod_bind_world(model, n.parent_index, parent_bind);
+                if (mat_inverse(parent_bind, parent_inv)) mat_mul(parent_inv, world_bind, local_bind);
+                else have_local = false;
+            } else {
+                std::memcpy(local_bind, world_bind, sizeof(local_bind));
+            }
+            if (have_local) {
+                mat_decompose(local_bind, t, q, s);
+                has_trs = true;
+                has_mat = false;
+            }
+        }
         if (has_trs) {
             node_transform[i] = 1;
             std::memcpy(&node_t[i * 3], t, sizeof(t));
@@ -241,8 +378,14 @@ bool gltf_export_glb(const PODModel& model,
             for (int k = 0; k <= max_bone; ++k) skin.joints.push_back(k);
         }
         // inverseBindMatrix[bone] = invBindWorld[bone] * bindWorld[meshNode]
+        //
+        // BOTH bind matrices come from pod_bind_world(), i.e. node.bind_matrix
+        // when the model carries a captured bind pose. Do NOT "simplify" these
+        // back to get_node_matrix(..., 0.0f): for a merged animation clip that
+        // is the clip's first frame, not the pose the vertices are baked in,
+        // and every joint ends up offset by its own bind->frame-0 delta.
         float mesh_bind[16], mesh_bind_inv[16];
-        get_node_matrix(model, static_cast<int>(ni), 0.0f, mesh_bind);
+        pod_bind_world(model, static_cast<int>(ni), mesh_bind);
         if (!mat_inverse(mesh_bind, mesh_bind_inv)) {
             float id[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
             std::memcpy(mesh_bind_inv, id, sizeof(id));
@@ -251,7 +394,7 @@ bool gltf_export_glb(const PODModel& model,
         ibm.reserve(skin.joints.size() * 16);
         for (int b : skin.joints) {
             float bind_world[16];
-            get_node_matrix(model, b, 0.0f, bind_world);
+            pod_bind_world(model, b, bind_world);
             float bind_inv[16];
             if (!mat_inverse(bind_world, bind_inv)) {
                 float id[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
@@ -389,28 +532,84 @@ bool gltf_export_glb(const PODModel& model,
             const auto& node = model.nodes[ni];
             std::vector<float> posv, rotv, sclv;
             bool hp = false, hr = false, hs = false;
-            if (!node.anim_translation.empty()) {
-                posv = expand_stream(node.anim_translation, node.anim_translation_idx, 3, anim_frames);
-                hp = posv.size() >= (size_t)anim_frames * 3;
-            }
-            if (!node.anim_rotation.empty()) {
-                rotv = expand_stream(node.anim_rotation, node.anim_rotation_idx, 4, anim_frames);
-                hr = rotv.size() >= (size_t)anim_frames * 4;
-            }
-            if (!node.anim_scale.empty()) {
-                int stride = (node.anim_scale.size() % 7 == 0) ? 7 : 3;
-                std::vector<float> full = expand_stream(node.anim_scale, node.anim_scale_idx, stride, anim_frames);
-                if (full.size() >= (size_t)anim_frames * stride) {
-                    sclv.resize((size_t)anim_frames * 3);
-                    for (int f = 0; f < anim_frames; ++f) {
-                        sclv[f * 3 + 0] = full[f * stride + 0];
-                        sclv[f * 3 + 1] = full[f * stride + 1];
-                        sclv[f * 3 + 2] = full[f * stride + 2];
-                    }
-                    hs = true;
+            // Each channel is emitted only if the clip actually animates it —
+            // the engine gates on node.anim_flags, so anything else would make
+            // the GLB play a different animation than the game does.
+            // Every channel the ENGINE drives becomes an explicit glTF channel:
+            // animated ones keyframe by keyframe, the rest as a constant.
+            //
+            // Emitting nothing for a non-animated channel is what the engine
+            // does NOT do — for one it still uses the stream's first key, and
+            // only falls back to the node's static field when no stream exists.
+            // Leaving those channels out made the GLB play the node's rest
+            // pose where the game plays the stream's key 0 (measured on
+            // hiro_stand's RightFootControl: a 4.8-unit foot offset). Constant
+            // channels also make the pose a pure function of the channels, which
+            // is what lets the node REST transform be the bind pose (see
+            // pod_bind_world) without the two disagreeing.
+            auto constant_channel = [&](const float* v, int comps) {
+                std::vector<float> out((size_t)anim_frames * comps, 0.0f);
+                for (int f = 0; f < anim_frames; ++f)
+                    for (int c = 0; c < comps; ++c) out[(size_t)f * comps + c] = v[c];
+                return out;
+            };
+
+            {   // translation
+                float tv[3] = {0.0f, 0.0f, 0.0f};
+                bool have = false;
+                if (!node.anim_translation.empty()) { std::memcpy(tv, node.anim_translation.data(), sizeof(tv)); have = true; }
+                else if (node.has_translation)      { std::memcpy(tv, node.translation, sizeof(tv)); have = true; }
+                if (have) {
+                    posv = pod_channel_is_animated(node, 1u, node.anim_translation.size(), 3)
+                         ? expand_stream(node.anim_translation, node.anim_translation_idx, 3, anim_frames)
+                         : constant_channel(tv, 3);
+                    hp = posv.size() >= (size_t)anim_frames * 3;
                 }
             }
-            if (!node.anim_matrix.empty()) {
+            {   // rotation (POD stores xyz negated — see pod_quat_to_gltf)
+                float rq[4];
+                bool have = false;
+                if (!node.anim_rotation.empty()) { pod_quat_to_gltf(&node.anim_rotation[0], rq); have = true; }
+                else if (node.has_rotation)      { pod_quat_to_gltf(node.rotation, rq); have = true; }
+                if (have) {
+                    if (pod_channel_is_animated(node, 2u, node.anim_rotation.size(), 4)) {
+                        rotv = expand_stream(node.anim_rotation, node.anim_rotation_idx, 4, anim_frames);
+                        for (size_t k = 0; k + 3 < rotv.size(); k += 4) {
+                            rotv[k + 0] = -rotv[k + 0];
+                            rotv[k + 1] = -rotv[k + 1];
+                            rotv[k + 2] = -rotv[k + 2];
+                        }
+                    } else {
+                        rotv = constant_channel(rq, 4);
+                    }
+                    hr = rotv.size() >= (size_t)anim_frames * 4;
+                }
+            }
+            {   // scale — the SDK stores 7 floats per key; only xyz are scale
+                float sv[3] = {1.0f, 1.0f, 1.0f};
+                bool have = false;
+                if (node.anim_scale.size() >= 3) { std::memcpy(sv, node.anim_scale.data(), sizeof(sv)); have = true; }
+                else if (node.has_scale)         { std::memcpy(sv, node.scale, sizeof(sv)); have = true; }
+                if (have) {
+                    if (pod_channel_is_animated(node, 4u, node.anim_scale.size(), 3)) {
+                        const int stride = (node.anim_scale.size() % 7 == 0) ? 7 : 3;
+                        std::vector<float> full = expand_stream(node.anim_scale, node.anim_scale_idx, stride, anim_frames);
+                        if (full.size() >= (size_t)anim_frames * stride) {
+                            sclv.resize((size_t)anim_frames * 3);
+                            for (int f = 0; f < anim_frames; ++f) {
+                                sclv[f * 3 + 0] = full[f * stride + 0];
+                                sclv[f * 3 + 1] = full[f * stride + 1];
+                                sclv[f * 3 + 2] = full[f * stride + 2];
+                            }
+                            hs = true;
+                        }
+                    } else {
+                        sclv = constant_channel(sv, 3);
+                        hs = true;
+                    }
+                }
+            }
+            if (pod_channel_is_animated(node, 8u, node.anim_matrix.size(), 16)) {
                 std::vector<float> full = expand_stream(node.anim_matrix, node.anim_matrix_idx, 16, anim_frames);
                 if (full.size() >= (size_t)anim_frames * 16) {
                     posv.resize((size_t)anim_frames * 3);
@@ -437,7 +636,16 @@ bool gltf_export_glb(const PODModel& model,
             int time_acc = add_accessor(std::move(ta));
 
             auto add_channel = [&](const std::vector<float>& vals, const std::string& path, const char* type, int comps) {
-                Accessor a; a.component_type = 5126; a.type = type; a.count = model.num_frames;
+                // Count comes from the payload we are about to write, NOT from
+                // model.num_frames. The two disagree whenever a BASE POD leaves
+                // num_frames at 0 while still carrying real per-node channels
+                // (which is the norm — see the frame-count note above): the
+                // accessor then declared count=0 over a non-empty bufferView, so
+                // every conformant reader dropped the channel and the GLB
+                // carried dead animation data. Deriving the count makes an
+                // accessor/payload disagreement structurally impossible.
+                Accessor a; a.component_type = 5126; a.type = type;
+                a.count = comps > 0 ? static_cast<int>(vals.size()) / comps : 0;
                 a.payload.assign((const uint8_t*)vals.data(), (const uint8_t*)vals.data() + vals.size() * 4);
                 int out_acc = add_accessor(std::move(a));
                 Sampler s; s.input = time_acc; s.output = out_acc; s.interp = "LINEAR";

@@ -1,5 +1,5 @@
 // ============================================================================
-// new_file_dialog.cpp — File Creator Wizard Implementation
+// new_file_dialog.cpp — Unified New File Dialog for Ruby GG
 // ============================================================================
 
 #include "new_file_dialog.h"

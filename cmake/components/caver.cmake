@@ -4,8 +4,10 @@
 # src/ruby/caver/ contains the engine as recovered from the decompilation
 # (OpenSwordigo/arm64_12/functions/Caver/…), in caver:: :
 #
-#   component_registry.cpp — all 80 recovered component classes + payload tags,
-#                            with per-class recovery stages (coverage report).
+#   component_registry.cpp — all 89 recovered component classes (81 serialised
+#                            + 8 runtime-only) with their exact payload slots,
+#                            taken from the binary's own kExtensionFieldNumber
+#                            globals, plus per-class recovery stages.
 #   runtime.cpp            — live object/component graph: identifiers, resolved
 #                            *Id references, activation, spawning through the
 #                            ObjectLibrary registry, the two-pass update
@@ -31,6 +33,7 @@
 swordigo_library(caver
     ${SRC_DIR}/ruby/caver/component_registry.cpp
     ${SRC_DIR}/ruby/caver/runtime.cpp
+    ${SRC_DIR}/ruby/caver/collision.cpp
     ${SRC_DIR}/ruby/caver/behaviour.cpp
     ${SRC_DIR}/ruby/caver/visual.cpp
     ${SRC_DIR}/ruby/caver/program_host.cpp

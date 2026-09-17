@@ -9,11 +9,18 @@
 # define GIT_ARCH_32 1
 #endif
 
-#define GIT_USE_NSEC 1
-#define GIT_USE_STAT_MTIM 1
-#define GIT_USE_FUTIMENS 1
-
-#define GIT_REGEX_REGCOMP 1
+#if defined(_WIN32) || defined(__MINGW32__)
+# define GIT_WIN32 1
+# define GIT_IO_WSAPOLL 1
+# define GIT_REGEX_PCRE2 1
+#else
+# define GIT_USE_NSEC 1
+# define GIT_USE_STAT_MTIM 1
+# define GIT_USE_FUTIMENS 1
+# define GIT_RAND_GETENTROPY 1
+# define GIT_IO_POLL 1
+# define GIT_REGEX_REGCOMP 1
+#endif
 
 #if defined(__GLIBC__)
 # define GIT_QSORT_GNU 1
@@ -25,8 +32,5 @@
 #define GIT_SHA256_BUILTIN 1
 
 #define GIT_COMPRESSION_ZLIB 1
-
-#define GIT_RAND_GETENTROPY 1
-#define GIT_IO_POLL 1
 
 #endif

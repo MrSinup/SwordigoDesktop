@@ -140,6 +140,30 @@ python3 src/tools/pod_dump.py \
 ```
 A correct clip shows `AnimScale` length `= NumFrame × 7 × 4` bytes, batch-local bone indices, and a `NumBoneIndicesPerBatch` with one entry per batch whose value = number of bones in that batch.
 
+### 7.1 Automated import check (permanent)
+
+The manual `pod_dump.py` checks above prove a clip's *shape*. `tests/glb_import_spec_conformance_test.cpp`
+proves its *values*: it evaluates a GLB with an independent evaluator written
+from the glTF 2.0 spec (node local `T*R*S`, parent-chain worlds, STEP / LINEAR /
+CUBICSPLINE, shortest-path slerp) and compares that against what
+`av::gltf_import_all_clips()` + `av::get_node_matrix()` produce, by pairwise
+inter-joint distance — an invariant of the rig that any change of basis leaves
+alone, so POD and glTF may disagree about axes and still compare exactly.
+
+```bash
+./bin/tests/glb_import_spec_conformance_test
+```
+
+It asserts the two cases separately, for a reason worth knowing when triaging a
+future failure: **at** a frame our importer read the source curve, so it must
+match to float precision; **between** frames POD can only lerp across its own
+interval, so a source whose keys sit off our grid is bounded by its own motion
+there rather than exact. Only the first is a correctness assertion.
+
+> Cross-reference: the reverse direction (POD → GLB export, the four defects that
+> made animated exports shear, invert and fly off) is in §8 of
+> `formats_and_schemas/pod_fbx_gltf_interconversion_report.md`.
+
 ## 8. Case study: `statue.glb` — "one animation" that produced 7 broken clips
 
 ### 8.1 Symptom (as reported)

@@ -178,4 +178,10 @@ void sre13_scene_shifter_tick(void);
 struct lua_State;
 void sre13_console_tick(struct lua_State* L);
 
+/* Host-triggered developer overlays & debug toggles (hooks/GameViewController.c) */
+extern volatile int g_sre_request_toggle_debug_info;
+extern volatile int g_sre_request_toggle_collision_shapes;
+extern volatile int g_sre_request_toggle_combat_wireframe;
+
 #endif /* SRE13_H */
+

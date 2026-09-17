@@ -95,11 +95,75 @@ real recovered primitives.
 6. **Hero archetype instantiation** from the shipped assets, and rbsrc — the
    ObjectStudio milestones, unchanged.
 
-## 6. Build
+## 6. The component table is now measured, not transcribed
+
+`tools/extract_component_schema.py` reads the schema straight out of any
+`libswordigo.so`. Every component extension is a `static const int` global —
+`Caver::Proto::<Class>::kExtensionFieldNumber` — and every payload field is
+`…::k<Field>FieldNumber`, so `nm -D` plus a VA→file-offset map yields the whole
+`Scene.proto` without reverse engineering a descriptor. Run against v1.4.13
+(armeabi-v7a) it reports **81 extension slots and 624 named fields**.
+
+What that settled, against the previous hand-carried table:
+
+* the 78 rows we had were **right** (101 Model … 558 Spell), and the three
+  classes we were missing are `ParticleFieldComponent` (257),
+  `DimensionObjectComponent` (559) and `DimensionSpellComponent` (560) — the
+  last two are distinct from `SpellComponent` (558), which is the shared base.
+* `Caver::DefaultComponents::RegisterAll` (arm32_13, 0x2A2C38) registers **86**
+  concrete classes. The 8 that have no extension symbol at all are
+  **runtime-only** — `Transform`, `TransformController`, `ShatterComponent`,
+  `TextBubbleComponent`, `RotatingBackgroundComponent`,
+  `MagicParticleEmitterComponent`, `ProjectileMonsterControllerComponent` and
+  `UtilityShape`. They appear in `.scl` files as nothing but ClassName +
+  Identifier (verified in `dragonkin.scl`, `collectibles.scl`,
+  `game_common.scl`). `ShapeComponent`, `MonsterControllerComponent` and
+  `SpellComponent` are the inverse: they own an extension but are never
+  registered directly — they are the bases the concrete classes share.
+
+## 7. The decoder bug this exposed: a component has many payloads
+
+A `Component` message does **not** carry one payload submessage. It carries the
+base class's slot *and* the derived class's, and shipping data proves it:
+
+| ClassName | slots written | seen in 98 shipping files |
+|---|---|---|
+| `CollisionShape` | 120 Shape + 121 Collision | 947 |
+| `MonsterEntity` | 152 Entity + 158 MonsterEntity | 178 |
+| every `*MonsterController` | 302 MonsterController + its own 303–314 | 60 |
+| `HeroEntity` | 152 Entity + 165 HeroEntity | 2 |
+| `CharAnimController` | 149 AnimationController + 150 CharAnim | 6 |
+| `BoneControlledCollisionShape` | 120 + 121 + 124 | 26 |
+| `MagicBolt` / `MagicBomb` / `MagicHookshot` / `FireBreath` | own slot + 558 Spell | 56 |
+
+`RuntimeScene::decode_component` used to keep only the slot the ClassName named,
+so **every extra slot was silently dropped**: `FacingDirection` from the base
+Entity slot on all 178 monsters, `Friction`/`IsGround`/`OnCollide` from the Shape
+slot on 947 collision shapes, the entire `SpellComponent.OnCast` base on every
+cast spell. It now splits the message into `RuntimeComponent::payloads` (each
+with its own schema class), decodes each against **its own** schema, tags every
+`RuntimeField` with the slot it came from, and collects Lua handlers from all of
+them.
+
+`tests/caver_runtime_test.cpp` is the guard: it spawns all 136 templates of six
+shipping `.scl` files and asserts the multi-slot reads. Today: 243 components
+with ≥2 slots, 140 shape+collision pairs, 54 entity+monster pairs, 6 552 named
+fields, zero unidentified classes.
+
+## 8. Build
 
 ```
 cmake --build build-cmake --target caver     # libcaver.so
 cmake --build build-cmake --target ruby_gg   # links libcaver + the pod adapter
+ctest -R "caver_runtime_test|library_manager_test"
+```
+
+Regenerating the component table for a new engine version:
+
+```
+tools/extract_component_schema.py <libswordigo.so> --components   # slots
+tools/extract_component_schema.py <libswordigo.so> --fields       # per-class fields
+tools/scan_scl_components.py <assets-dir>                         # what shipping data uses
 ```
 
 `caver` links `filerift` for the host Lua 5.1 runtime. If a 32-bit host ever

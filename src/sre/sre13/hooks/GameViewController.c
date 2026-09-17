@@ -28,6 +28,58 @@ GameState *gameState_get(void) {
 
 extern void sre13_scene_shifter_tick(void);
 
+/* Host-triggered developer overlays & debug toggles */
+volatile int g_sre_request_toggle_debug_info = 0;
+volatile int g_sre_request_toggle_collision_shapes = 0;
+volatile int g_sre_request_toggle_combat_wireframe = 0;
+
+static void sre13_handle_dev_toggles(GameViewController *gvc) {
+	if (!gvc) return;
+
+	if (g_sre_request_toggle_debug_info) {
+		g_sre_request_toggle_debug_info = 0;
+		typedef void (*ToggleDebugInfo_fn)(void*);
+		static ToggleDebugInfo_fn s_toggle_fn = NULL;
+		if (!s_toggle_fn) {
+			s_toggle_fn = (ToggleDebugInfo_fn)swordigo_dlsym("_ZN5Caver13GameSceneView15ToggleDebugInfoEv");
+		}
+		if (s_toggle_fn && gvc->GameSceneView) {
+			s_toggle_fn(gvc->GameSceneView);
+		}
+	}
+
+	if (g_sre_request_toggle_collision_shapes) {
+		g_sre_request_toggle_collision_shapes = 0;
+		static uint8_t* s_draw_depth = NULL;
+		if (!s_draw_depth) {
+			s_draw_depth = (uint8_t*)swordigo_dlsym("_ZN5Caver23CollisionShapeComponent9drawDepthE");
+		}
+		if (s_draw_depth) {
+			*s_draw_depth ^= 1;
+		}
+		if (gvc->GameSceneController) {
+			void* scene = *(void**)((char*)gvc->GameSceneController + 0x20);
+			if (scene) {
+				*(uint8_t*)((char*)scene + 720) = s_draw_depth ? *s_draw_depth : 1;
+			}
+		}
+	}
+
+	if (g_sre_request_toggle_combat_wireframe) {
+		g_sre_request_toggle_combat_wireframe = 0;
+		if (gvc->GameSceneView) {
+			uint8_t cur = *(uint8_t*)((char*)gvc->GameSceneView + 434) ^ 1;
+			*(uint8_t*)((char*)gvc->GameSceneView + 434) = cur;
+			if (gvc->GameSceneController) {
+				void* scene = *(void**)((char*)gvc->GameSceneController + 0x20);
+				if (scene) {
+					*(uint8_t*)((char*)scene + 892) = cur;
+				}
+			}
+		}
+	}
+}
+
 HOOK_SYMBOL(
 	GVC_Update_Hook,
 	"_ZN5Caver18GameViewController6UpdateEf",
@@ -40,6 +92,7 @@ HOOK_SYMBOL(
 	if (orig_GVC_Update_Hook) {
 		orig_GVC_Update_Hook(gvc, dt);
 	}
+	sre13_handle_dev_toggles(gvc);
 	sre13_scene_shifter_tick();
 }
 

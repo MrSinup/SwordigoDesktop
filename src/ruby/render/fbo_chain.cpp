@@ -1,5 +1,5 @@
 // ============================================================================
-// fbo_chain.cpp — FBO chain implementation
+// fbo_chain.cpp — FBO chain implementation (Ruby GG render pipeline)
 // ============================================================================
 #include "fbo_chain.h"
 #include <cstdio>

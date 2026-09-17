@@ -15,6 +15,7 @@ set(CMAKE_RC_COMPILER  x86_64-w64-mingw32-windres)
 # installed prefix for the x64-mingw-dynamic triplet.
 set(CMAKE_FIND_ROOT_PATH
     /usr/x86_64-w64-mingw32
+    /usr/x86_64-w64-mingw32/sys-root/mingw
     /run/media/quantumcreeper/TVPG/vcpkg/installed/x64-mingw-dynamic)
 
 # Find host programs on the host; find libraries/headers/packages in the

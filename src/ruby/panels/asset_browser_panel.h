@@ -30,11 +30,20 @@ public:
     // files appear immediately without waiting for the OS watcher.
     void refresh_now();
 
+    // Full file browser navigation API
+    void navigate_to(const QString& path, bool record_history = true);
+    void navigate_back();
+    void navigate_forward();
+    void navigate_up();
+    void navigate_home();
+    void select_and_reveal_file(const QString& file_path);
+
 signals:
     void fileSelected(const QString& file_path);
     void newFileRequested(const QString& target_folder);
     void convertModelRequested(const QString& file_path);
     void addModelToSceneRequested(const QString& file_path);
+    void directoryNavigated(const QString& new_dir);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -47,15 +56,28 @@ private slots:
     void onDirectoryChanged(const QString& path);
     void onDebouncedRefresh();
     void onRootPoll();
+    void onPathBarReturnPressed();
 
 private:
     void update_column_widths();
     void rewatch_root();      // (re)point the QFileSystemWatcher at the root
     void schedule_refresh(const QString& path);
+    void update_nav_buttons_state();
 
     QFileSystemModel* m_file_model = nullptr;
     QTreeView* m_tree_view = nullptr;
     QLineEdit* m_search_box = nullptr;
+
+    // Navigation UI
+    class QToolButton* m_btn_back = nullptr;
+    class QToolButton* m_btn_fwd = nullptr;
+    class QToolButton* m_btn_up = nullptr;
+    class QToolButton* m_btn_home = nullptr;
+    QLineEdit* m_path_bar = nullptr;
+
+    QStringList m_history_back;
+    QStringList m_history_forward;
+    QString m_home_path;
 
     // Quick-sync machinery: an explicit watcher + debounced refresh guarantee
     // files created outside the model (other tools, file managers, the engine)

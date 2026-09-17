@@ -62,6 +62,10 @@ enum GuiAction {
     GUI_MOD_REFILL_MANA,
     GUI_OPEN_SAVE_EDITOR,
     GUI_SAVE_EDITOR_SAVE,
+    // Touch Foo Caver developer overlays & HUD
+    GUI_TOGGLE_TOUCHFOO_DEBUG_INFO,
+    GUI_TOGGLE_COLLISION_SHAPES,
+    GUI_TOGGLE_COMBAT_WIREFRAME,
 };
 
 struct MenuItem {

@@ -3,6 +3,7 @@
 #include <zlib.h>
 #include <cstring>
 #include <cstdio>
+#include <fstream>
 #include <filesystem>
 #include <algorithm>
 #include <cmath>
@@ -14,11 +15,26 @@
 #include "tools/gltf_glb.h"
 #include "tools/pod_writer.h"
 #include "tools/obj_loader.h" // E17: --obj2pod reuses the viewer's OBJ parser
+#include "tools/image_decode.h"   // WebP, which stb_image cannot read
+#include "tools/pod_stamp.h"       // provenance sidecar for converted PODs
 #include "stb/stb_image.h"
 
 namespace fs = std::filesystem;
 
 namespace av {
+
+// ─── Image decode: PNG/JPEG/TGA/BMP/GIF (stb) + WebP (libwebp) ──────────────
+// Defined further down alongside their implementations; declared here so every
+// texture path in this file can route through one decoder instead of four
+// copies of stbi_load / stbi_load_from_memory. Both return memory that
+// stbi_image_free() may release (STBI_FREE == free), so call sites are unchanged.
+// Rationale: glTF's EXT_texture_webp REPLACES the core texture rather than
+// falling back to it, so a conforming file can require WebP and ship no PNG at
+// all (pilot.glb is exactly that) — those payloads used to be dropped silently.
+static uint8_t* decode_image_bytes(const uint8_t* data, size_t size,
+                                   int* w, int* h, int* comp);
+static uint8_t* decode_image_file(const std::string& path,
+                                  int* w, int* h, int* comp);
 
 // ─── Game-compatible PVR header ─────────────────────────────────────────────
 // The game's runtime texture uploader (PVRTTextureLoadFromPointer in
@@ -689,20 +705,23 @@ static void bake_and_center_model(PODModel& model, bool center) {
         if (m.bones_per_vertex > 0) { has_bones = true; break; }
 
     if (!has_bones) {
-        std::vector<PODNode> kept;
-        kept.reserve(model.nodes.size());
+        std::vector<PODNode> mesh_nodes;
+        std::vector<PODNode> helper_nodes;
         for (auto& n : model.nodes) {
-            bool is_mesh = n.object_index >= 0 &&
-                           n.object_index < (int)model.meshes.size() &&
-                           n.object_index < model.num_mesh_nodes;
-            bool is_center = (n.name == "CenterPoint");
-            if (is_mesh || is_center) {
+            bool is_mesh = (n.object_index >= 0 && n.object_index < (int)model.meshes.size());
+            if (is_mesh) {
                 n.parent_index = -1;   // flat hierarchy after the strip
-                kept.push_back(std::move(n));
+                mesh_nodes.push_back(std::move(n));
+            } else if (n.name == "CenterPoint") {
+                n.parent_index = -1;   // flat hierarchy after the strip
+                helper_nodes.push_back(std::move(n));
             }
         }
-        model.nodes = std::move(kept);
-        model.num_mesh_nodes = (int)model.nodes.size();
+        model.num_mesh_nodes = (int)mesh_nodes.size();
+        mesh_nodes.insert(mesh_nodes.end(),
+                          std::make_move_iterator(helper_nodes.begin()),
+                          std::make_move_iterator(helper_nodes.end()));
+        model.nodes = std::move(mesh_nodes);
     }
 
     // 3) Center the bounding box at the origin (predictable scene placement).
@@ -809,7 +828,7 @@ bool fbx_to_pod(const std::string& fbx_path, const std::string& pod_path,
                 continue;
             }
             int w = 0, h = 0, comp = 0;
-            uint8_t* rgba = stbi_load(src.c_str(), &w, &h, &comp, 4);
+            uint8_t* rgba = decode_image_file(src, &w, &h, &comp);
             if (!rgba) {
                 fprintf(stderr, "  ! texture '%s' failed to decode — skipped\n", src.c_str());
                 tex_name.clear();
@@ -887,12 +906,56 @@ bool fbx_to_pod(const std::string& fbx_path, const std::string& pod_path,
     // Bake FBX node transforms into vertices and center the model. The FBX
     // importer already bakes geometry_to_world, so the bake is usually a no-op,
     // but centering gives predictable scene placement.
-    bake_and_center_model(model, /*center=*/true);
+    bake_and_center_model(model, opts.center);
     if (!pod_write(model, pod_path, err)) {
         if (err && err->empty()) *err = "POD serialization failed";
         return false;
     }
     return true;
+}
+
+// ─── Image decode with WebP ─────────────────────────────────────────────────
+// stb_image covers PNG/JPEG/TGA/BMP/GIF and nothing else. glTF's
+// EXT_texture_webp *replaces* the core texture instead of falling back to it,
+// so a conforming file can require WebP and ship no PNG at all — pilot.glb is
+// exactly that (one image, mimeType image/webp, no core `source`), which is why
+// it converts with "0 textures". libwebp supplies the missing half.
+//
+// The buffer is malloc'd rather than new[]'d so the call sites can keep freeing
+// it with stbi_image_free(), which is STBI_FREE == free.
+static uint8_t* decode_image_bytes(const uint8_t* data, size_t size,
+                                   int* w, int* h, int* comp) {
+    if (!data || size == 0) return nullptr;
+    uint8_t* rgba = stbi_load_from_memory(data, (int)size, w, h, comp, 4);
+    if (rgba) return rgba;
+
+    std::vector<uint8_t> webp;
+    int ww = 0, hh = 0;
+    if (!av::webp_decode_rgba(data, size, webp, ww, hh) || webp.empty()) return nullptr;
+    uint8_t* out = static_cast<uint8_t*>(std::malloc(webp.size()));
+    if (!out) return nullptr;
+    std::memcpy(out, webp.data(), webp.size());
+    *w = ww;
+    *h = hh;
+    if (comp) *comp = 4;
+    return out;
+}
+
+static uint8_t* decode_image_file(const std::string& path, int* w, int* h, int* comp) {
+    uint8_t* rgba = stbi_load(path.c_str(), w, h, comp, 4);
+    if (rgba) return rgba;
+
+    // libwebp has no path-based API at all; read the bytes and share the buffer
+    // path above so a WebP on disk behaves like an embedded one.
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return nullptr;
+    const std::streamsize n = f.tellg();
+    if (n <= 0) return nullptr;
+    f.seekg(0);
+    std::vector<uint8_t> bytes((size_t)n);
+    f.read(reinterpret_cast<char*>(bytes.data()), n);
+    if (!f) return nullptr;
+    return decode_image_bytes(bytes.data(), bytes.size(), w, h, comp);
 }
 
 bool glb_to_pod(const std::string& glb_path,
@@ -905,8 +968,14 @@ bool glb_to_pod(const std::string& glb_path,
     std::vector<GLTFImageBuffer> embedded_images;
     GLTFPBRInfo pbr;
     bool is_glb = (glb_path.size() >= 4 && glb_path.compare(glb_path.size() - 4, 4, ".glb") == 0);
-    bool ok = is_glb ? gltf_import_glb(glb_path, model, embedded_images, err, &pbr, opts.scale, opts.rigid_skin)
-                     : gltf_import_gltf(glb_path, model, embedded_images, err, &pbr, opts.scale, opts.rigid_skin);
+    // Import with FULL skin weights even when the rigid bake is requested.
+    // The collapse to one bone per vertex is a decision that wants to know how
+    // the model moves (refine_rigid_skin below, scored against the clips), and
+    // the influences it chooses between are exactly the ones this keeps. With
+    // rigid_skin = true and no clips available the refinement falls back to
+    // max-weight, so this changes nothing for the simpler callers.
+    bool ok = is_glb ? gltf_import_glb(glb_path, model, embedded_images, err, &pbr, opts.scale, false)
+                     : gltf_import_gltf(glb_path, model, embedded_images, err, &pbr, opts.scale, false);
     if (!ok) return false;
 
     if (opts.flip_v) {
@@ -956,21 +1025,21 @@ bool glb_to_pod(const std::string& glb_path,
             // Check if we have an embedded image payload for this texture slot via tex_to_img
             int img_idx = (i < tex_to_img.size()) ? tex_to_img[i] : -1;
             if (img_idx >= 0 && img_idx < (int)embedded_images.size() && !embedded_images[img_idx].data.empty()) {
-                rgba = stbi_load_from_memory(embedded_images[img_idx].data.data(),
-                                             (int)embedded_images[img_idx].data.size(),
-                                             &w, &h, &comp, 4);
+                rgba = decode_image_bytes(embedded_images[img_idx].data.data(),
+                                          embedded_images[img_idx].data.size(),
+                                          &w, &h, &comp);
             } else if (i < embedded_images.size() && !embedded_images[i].data.empty()) {
                 // Fallback to slot i if tex_to_img wasn't resolved
-                rgba = stbi_load_from_memory(embedded_images[i].data.data(),
-                                             (int)embedded_images[i].data.size(),
-                                             &w, &h, &comp, 4);
+                rgba = decode_image_bytes(embedded_images[i].data.data(),
+                                          embedded_images[i].data.size(),
+                                          &w, &h, &comp);
             }
 
             // Fallback: look on disk
             if (!rgba) {
                 std::string src = find_source_image(glb_dir, tex_name, ec);
                 if (!src.empty()) {
-                    rgba = stbi_load(src.c_str(), &w, &h, &comp, 4);
+                    rgba = decode_image_file(src, &w, &h, &comp);
                 }
             }
 
@@ -1055,15 +1124,72 @@ bool glb_to_pod(const std::string& glb_path,
     // in-game sizes. Baking here + collapsing to identity makes the POD
     // self-contained: what you see in the converter output IS what the game
     // renders, and the bbox/center/feet computations are all correct.
-    bake_and_center_model(model, /*center=*/true);
+    bake_and_center_model(model, opts.center);
+
+    // Animation clips are built BEFORE the base is written, because the rigid
+    // bone selection below is scored against them. Writing the base first (as
+    // this used to) would mean choosing every vertex's bone from a bind pose
+    // with no idea which way the model moves.
+    std::vector<std::pair<std::string, PODModel>> clips;
+    if (opts.anim_source != PodConvertOptions::AnimationSource::None) {
+        std::string json_path = opts.companion_motions_path;
+        if (json_path.empty()) {
+            json_path = gltf_find_companion_motions(glb_path);
+        }
+
+        bool try_in_glb = (opts.anim_source == PodConvertOptions::AnimationSource::InGlb ||
+                           opts.anim_source == PodConvertOptions::AnimationSource::Auto);
+        bool try_json   = (opts.anim_source == PodConvertOptions::AnimationSource::CompanionJson ||
+                           opts.anim_source == PodConvertOptions::AnimationSource::Auto);
+
+        if (try_in_glb) {
+            gltf_import_all_clips(glb_path, clips, nullptr, opts.scale, opts.anim_fps, opts.rigid_skin);
+        }
+
+        if (clips.empty() && try_json && !json_path.empty()) {
+            std::string motion_err;
+            gltf_import_companion_motions(glb_path, json_path, clips, &motion_err, opts.scale, opts.anim_fps, opts.rigid_skin);
+        }
+    }
+
+    // S2: collapse the smooth rig onto one bone per vertex, choosing each
+    // vertex's bone by which of its own influences tracks it best across the
+    // clips — not by which one happened to weigh most at the bind pose.
+    {
+        av::RigidSkinRefineStats skin_stats;
+        if (!av::refine_rigid_skin(model, opts.rigid_skin ? clips
+                                                          : std::vector<std::pair<std::string, PODModel>>{},
+                                   &skin_stats, nullptr)) {
+            fprintf(stderr, "  ! rigid-bone refinement failed; keeping the max-weight bake\n");
+        } else if (opts.rigid_skin && skin_stats.pose_samples > 0 && skin_stats.vertices > 0) {
+            fprintf(stderr,
+                    "  · rigid skin: %d vertices scored over %d poses — %d re-bound, "
+                    "worst deviation %.4g -> %.4g, mean %.4g -> %.4g (model units)\n",
+                    skin_stats.vertices, skin_stats.pose_samples, skin_stats.moved,
+                    skin_stats.worst_before, skin_stats.worst_after,
+                    skin_stats.mean_before, skin_stats.mean_after);
+        }
+    }
+
     if (!pod_write(model, pod_path, err)) {
         if (err && err->empty()) *err = "POD serialization failed";
         return false;
     }
+    {
+        av::PodStamp stamp;
+        stamp.revision   = av::pod_pipeline_revision();
+        stamp.source     = glb_path;
+        stamp.converter  = is_glb ? "glb2pod" : "gltf2pod";
+        stamp.rigid_skin = opts.rigid_skin;
+        stamp.mesh_vertices = 0;
+        for (const auto& m : model.meshes) stamp.mesh_vertices += m.num_vertices;
+        std::string stamp_err;
+        if (!av::pod_stamp_write(pod_path, stamp, &stamp_err))
+            fprintf(stderr, "  ! could not write POD stamp: %s\n", stamp_err.c_str());
+    }
 
-    // Extract separate animation clip POD files (<pod_stem>_<clip_name>.pod)
-    std::vector<std::pair<std::string, PODModel>> clips;
-    if (gltf_import_all_clips(glb_path, clips, nullptr, opts.scale, opts.anim_fps, opts.rigid_skin)) {
+    // Write the animation clip PODs (<pod_stem>_<clip_name>.POD).
+    {
         for (const auto& kv : clips) {
             std::string clip_pod_name = pod_stem + "_" + kv.first + ".POD";
             std::string clip_pod_path = (pod_dir / clip_pod_name).string();
@@ -1073,7 +1199,44 @@ bool glb_to_pod(const std::string& glb_path,
                     fprintf(stderr, "  ✓ clip POD: %s (%d frames @ %.0f fps)\n",
                             clip_pod_name.c_str(), kv.second.num_frames, kv.second.fps);
                     if (written_clips) written_clips->push_back(clip_pod_name);
+                    av::PodStamp clip_stamp;
+                    clip_stamp.revision   = av::pod_pipeline_revision();
+                    clip_stamp.source     = glb_path;
+                    clip_stamp.converter  = is_glb ? "glb2pod/clip" : "gltf2pod/clip";
+                    clip_stamp.rigid_skin = opts.rigid_skin;
+                    std::string stamp_err;
+                    av::pod_stamp_write(clip_pod_path, clip_stamp, &stamp_err);
+                } else if (!clip_err.empty()) {
+                    fprintf(stderr, "  ! clip %s failed: %s\n", clip_pod_name.c_str(), clip_err.c_str());
                 }
+            }
+        }
+
+        // Playback rate is the one timing decision the engine does not read back
+        // out of the file: Caver::PODLoader::CreateAnimationFromFile divides the
+        // frame index by a hardcoded 24.0, so a clip stored at any other rate
+        // plays at 24/stored speed — a 30 fps bake runs 25% slow, a 12 fps one
+        // twice as fast. Silence here is how that ships.
+        {
+            double worst_ratio = 1.0;
+            float  worst_fps   = 24.0f;
+            std::string worst_clip;
+            for (const auto& kv : clips) {
+                if (kv.second.fps <= 0.0f || kv.second.num_frames <= 0) continue;
+                const double ratio = kv.second.fps / 24.0;
+                if (std::fabs(ratio - 1.0) > std::fabs(worst_ratio - 1.0)) {
+                    worst_ratio = ratio;
+                    worst_fps   = kv.second.fps;
+                    worst_clip  = kv.first;
+                }
+            }
+            if (!worst_clip.empty() && std::fabs(worst_ratio - 1.0) > 0.001) {
+                fprintf(stderr,
+                        "  ! TIMING: clip '%s' is stored at %.0f fps but the engine plays every "
+                        "POD at a hardcoded 24 fps,\n"
+                        "    so it will run at %.2fx the authored speed. Pass --anim-fps 24 for "
+                        "game-accurate timing.\n",
+                        worst_clip.c_str(), (double)worst_fps, worst_ratio);
             }
         }
     }
@@ -1147,7 +1310,7 @@ bool obj_to_pod(const std::string& obj_path,
                 continue;
             }
             int w = 0, h = 0, comp = 0;
-            uint8_t* rgba = stbi_load(src.c_str(), &w, &h, &comp, 4);
+            uint8_t* rgba = decode_image_file(src, &w, &h, &comp);
             if (!rgba) {
                 fprintf(stderr, "  ! texture '%s' failed to decode — skipped\n", src.c_str());
                 tex_name.clear();
@@ -1224,7 +1387,7 @@ bool obj_to_pod(const std::string& obj_path,
     }
     // OBJ vertices are already baked (no node transforms in the format);
     // centering gives predictable scene placement, matching FBX/GLB.
-    bake_and_center_model(model, /*center=*/true);
+    bake_and_center_model(model, opts.center);
     if (!pod_write(model, pod_path, err)) {
         if (err && err->empty()) *err = "POD serialization failed";
         return false;
@@ -1253,6 +1416,25 @@ int pod_convert_cli(int argc, char** argv) {
             opts.anim_fps = std::stof(argv[++i]);
             if (opts.anim_fps < 0.0f) opts.anim_fps = 0.0f;
         }
+        else if (a == "--motions" && i + 1 < argc) {
+            opts.companion_motions_path = argv[++i];
+            opts.anim_source = PodConvertOptions::AnimationSource::CompanionJson;
+        }
+        else if (a == "--no-anims") {
+            opts.anim_source = PodConvertOptions::AnimationSource::None;
+        }
+        else if (a == "--anim-source" && i + 1 < argc) {
+            std::string src_mode = argv[++i];
+            if (src_mode == "glb" || src_mode == "in-glb" || src_mode == "inglb")
+                opts.anim_source = PodConvertOptions::AnimationSource::InGlb;
+            else if (src_mode == "json" || src_mode == "motions")
+                opts.anim_source = PodConvertOptions::AnimationSource::CompanionJson;
+            else if (src_mode == "none")
+                opts.anim_source = PodConvertOptions::AnimationSource::None;
+            else
+                opts.anim_source = PodConvertOptions::AnimationSource::Auto;
+        }
+        else if (a == "--center") opts.center = true;
         else if (a == "--force" || a == "-f") opts.overwrite = true;
         else if ((a == "--scale" || a == "-s") && i + 1 < argc) {
             opts.scale = std::stof(argv[++i]);
@@ -1269,6 +1451,7 @@ int pod_convert_cli(int argc, char** argv) {
                    "  out.pod        defaults to <in>.POD next to the source model\n"
                    "  --scale, -s    uniform scale factor applied to model (e.g. 80.0)\n"
                    "  --unit, -u     FBX unit multiplier (e.g. 100.0 for cm sources, 39.37 for m→inches)\n"
+                   "  --center       re-center model bounding box at origin (default keeps authored pivot)\n"
                    "  --no-flip      keep source V coordinates (skip bottom-origin flip)\n"
                    "  --no-textures  do not convert referenced textures\n"
                    "  --tex-png      emit gzipped native .tex.png (backgrounds)\n"

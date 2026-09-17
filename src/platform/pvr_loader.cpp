@@ -30,6 +30,7 @@
 
 // Enable GL extension prototypes BEFORE any GL includes (glGenerateMipmap).
 #define GL_GLEXT_PROTOTYPES 1
+#include "platform/gl_inc.h"
 #include "pvr_loader.h"
 #include "pvrtc_decoder.h"
 #include <cstdio>
@@ -37,6 +38,9 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
+#ifdef _WIN32
+#include <io.h>
+#endif
 #include <zlib.h>
 
 bool g_pvr_software_decode = true;

@@ -131,7 +131,81 @@ void tick_physics_object(RuntimeScene& scene, RuntimeObject& object, RuntimeComp
 }
 
 // ── animation ───────────────────────────────────────────────────────────────
+const BehaviourState::AnimClip* clip_named(const BehaviourState& b, const std::string& name) {
+    for (const auto& clip : b.anim_clips)
+        if (clip.name == name) return &clip;
+    return nullptr;
+}
+
+// CharAnimControllerComponent + CharControllerComponent.
+//
+// The controller does not pick a clip by name — it hands an AnimNode to the
+// animation controller, and the node it hands over is chosen by the character's
+// physical state. CharControllerComponent::Update (0x2AB9E0) makes exactly three
+// calls into it:
+//
+//   CanJump + jump input   → StartJumping(air) → the jump / air-jump node
+//   leaving the ground     → StartFalling      → the fall node
+//   move input / stop      → StartMoving/StopMoving → the walk / stand node
+//
+// and CharAnimControllerComponent::Update walks the active node back to the move
+// node once the node's own clock passes 95% of its duration (the transition the
+// engine uses to land a jump / finish a swing). Playback rate is the node's own
+// speed, with one twist: SetCurrentRunSpeed writes `speed / 100` into the walk
+// node, so the run cycle scales with how fast the character is actually moving.
+void tick_char_animation(RuntimeScene& scene, RuntimeObject& object, BehaviourState& b, float dt) {
+    (void)scene;
+    BehaviourState::CharAnimState& c = b.char_anim;
+    if (!c.active) return;
+
+    const bool airborne = !b.physics.on_ground && !object.grounded;
+    if (airborne) c.air_time += dt; else c.air_time = 0.0f;
+
+    std::string want;
+    if (b.action == EntityAction::Hurt && !c.hurt.empty())       want = c.hurt;
+    else if (b.action == EntityAction::Death && !c.die.empty())  want = c.die;
+    else if (b.action == EntityAction::Cast && !c.cast.empty())  want = c.cast;
+    else if (airborne)          want = object.vel[1] > 0.0f ? c.jump : c.fall;
+    else if (std::fabs(object.vel[0]) > 1.0f) want = c.walk;
+    else                        want = c.stand;
+    if (want.empty()) want = c.stand;
+    if (want.empty()) return;
+
+    if (want != c.current) {
+        c.current = want;
+        // StartMoving drops the walk node in at a quarter of its cycle (the
+        // engine's own mid-stride entry point); every other node starts at 0.
+        c.time = (want == c.walk) ? 0.25f : 0.0f;
+        const BehaviourState::AnimClip* clip = clip_named(b, want);
+        c.rate = clip ? clip->speed : 1.0f;
+        c.repeating = clip ? clip->repeating : true;
+    }
+
+    float rate = c.rate > 0.0f ? c.rate : 1.0f;
+    if (want == c.walk && c.run_speed > 0.0f) {
+        // SetCurrentRunSpeed: the walk node's rate is current speed / 100.
+        const float moving = std::max(std::fabs(object.vel[0]), 1.0f);
+        rate *= moving / 100.0f;
+    }
+    c.time += dt * rate;
+    c.in_action = want != c.stand && want != c.walk;
+
+    // Publish to the render stream: the clip's pod name and its own clock.
+    b.anim.current = c.current;
+    b.anim.time = c.time;
+    b.anim.speed = 1.0f;      // the clock is already rate-scaled
+    b.anim.repeating = c.repeating;
+    b.anim.running = true;
+}
+
 void tick_animation(RuntimeObject& object, RuntimeComponent& c, BehaviourState& b, float dt) {
+    // A character's clips are played by its own controller (tick_char_animation),
+    // not by the per-component KeyframeAnimation clock: otherwise every clip on
+    // the archetype would advance the one clock and overwrite the current name.
+    if (b.char_anim.active &&
+        (c.is("KeyframeAnimationComponent") || c.is("AnimationControllerComponent") ||
+         c.is("BlendAnimationComponent") || c.is("CharAnimControllerComponent")))
+        return;
     if (c.is("KeyframeAnimationComponent")) {
         b.anim.current = c.field("Name") ? c.field("Name")->bytes_value : b.anim.current;
         b.anim.speed = c.number("SpeedMultiplier", 1.0f);
@@ -827,6 +901,8 @@ bool behaviour_has_tick(const std::string& class_name) {
     return false;
 }
 
+void char_anim_init(RuntimeObject& object, BehaviourState& b);
+
 void behaviour_init(const RuntimeScene& scene, RuntimeObject& object) {
     BehaviourState& b = object.behaviour;
     b.health.health = 0.0f;
@@ -863,8 +939,63 @@ void behaviour_init(const RuntimeScene& scene, RuntimeObject& object) {
             if (b.stand_animation.empty()) b.stand_animation = b.anim.current;
         }        else if (c.is("CharAnimControllerComponent")) tick_animation(object, c, b, 0.0f);
     }
+    char_anim_init(object, b);
     if (b.move_speed <= 0.0f) b.move_speed = b.default_move_speed;
     (void)scene;
+}
+
+// Collect the archetype's clips and the character controller's own wiring. Run
+// after every component has been seen, because the CharAnimController addresses
+// its clips by component identifier and those live on KeyframeAnimation
+// components that may appear anywhere in the object.
+void char_anim_init(RuntimeObject& object, BehaviourState& b) {
+    for (auto& c : object.components) {
+        if (c.is("KeyframeAnimationComponent")) {
+            const RuntimeField* name = c.field("Name");
+            if (!name || name->bytes_value.empty()) continue;
+            BehaviourState::AnimClip clip;
+            clip.name    = name->bytes_value;
+            clip.speed   = c.number("SpeedMultiplier", 1.0f);
+            clip.repeating = flag(c, "Repeating", true);
+            clip.running   = flag(c, "Running", true);
+            b.anim_clips.push_back(std::move(clip));
+        }
+    }
+
+    const RuntimeComponent* controller = nullptr;
+    for (auto& c : object.components)
+        if (c.is("CharAnimControllerComponent")) { controller = &c; break; }
+    if (!controller) return;
+
+    BehaviourState::CharAnimState& c = b.char_anim;
+    c.active = true;
+    auto clip_name = [&](const char* field_name) {
+        const RuntimeField* f = controller->field(field_name);
+        if (!f) return std::string();
+        return animation_name_for(object, static_cast<int32_t>(f->varint_value));
+    };
+    c.stand    = clip_name("StandAnimationId");
+    c.walk     = clip_name("WalkAnimationId");
+    c.jump     = clip_name("JumpAnimationId");
+    c.fall     = clip_name("FallAnimationId");
+    c.air_jump = clip_name("AirJumpAnimationId");
+    c.cast     = clip_name("CastAnimationId");
+
+    if (const RuntimeComponent* cc = object.find_class("CharControllerComponent")) {
+        c.hurt  = animation_name_for(object, static_cast<int32_t>(cc->number("HurtAnimationId", 0.0f)));
+        c.die   = animation_name_for(object, static_cast<int32_t>(cc->number("DieAnimationId", 0.0f)));
+        c.push  = animation_name_for(object, static_cast<int32_t>(cc->number("PushAnimationId", 0.0f)));
+        c.run_speed  = cc->number("NormalRunSpeed", 0.0f);
+        c.jump_speed = cc->number("JumpSpeed", 0.0f);
+    }
+
+    c.current = c.stand;
+    c.time = 0.0f;
+    if (const BehaviourState::AnimClip* clip = clip_named(b, c.current))
+        c.rate = clip->speed;
+    b.anim.current = c.current;
+    b.anim.time = 0.0f;
+    b.anim.running = !c.current.empty();
 }
 
 void behaviour_tick(RuntimeScene& scene, RuntimeObject& object, float dt) {
@@ -944,6 +1075,10 @@ void behaviour_tick(RuntimeScene& scene, RuntimeObject& object, float dt) {
     }
     object.facing = b.facing;
     object.on_ground = b.physics.on_ground;
+
+    // The character's clip selection runs last: it reads the state every other
+    // component (entity, physics, collision, actions) has just written.
+    tick_char_animation(scene, object, b, dt);
 }
 
 } // namespace caver

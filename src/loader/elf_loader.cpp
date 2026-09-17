@@ -1,4 +1,5 @@
 #include "elf_loader.h"
+#include "platform/gdb_compat.h"
 #include "../jni/jni_bridge.h"
 #include <fstream>
 #include <iostream>
@@ -146,6 +147,9 @@ int ElfLoader::load(so_module* mod, const std::string& filename, uint32_t load_a
             mod->text_size = size;
         }
     }
+
+    // Register ELF with GDB/LLDB for symbol resolution and stack unwinding
+    gdb_register_elf(filename.c_str(), (uintptr_t)(guest_base + load_addr), mod->dynamic);
 
     return 0;
 }

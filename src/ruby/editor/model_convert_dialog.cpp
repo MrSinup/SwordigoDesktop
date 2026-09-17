@@ -240,7 +240,73 @@ void ModelConvertDialog::setup_ui() {
 
     layout->addWidget(grp_tex);
 
-    // ── Group 4: Compatibility & Advanced ────────────────────────────────────
+    // ── Group 4: Animation Routing & Clips ────────────────────────────────────
+    m_grp_anims = new QGroupBox(QStringLiteral("Animation Routing & Clips"), content_widget);
+    m_grp_anims->setStyleSheet(QStringLiteral("QGroupBox { font-weight: bold; color: #e5e9f0; }"));
+    auto* anims_layout = new QVBoxLayout(m_grp_anims);
+    anims_layout->setSpacing(8);
+
+    // Warning Banner for Dual-Detection Conflict
+    m_anim_warning_frame = new QFrame(m_grp_anims);
+    m_anim_warning_frame->setStyleSheet(QStringLiteral(
+        "QFrame { background-color: #2b2505; border: 1px solid #d19a66; border-radius: 6px; padding: 6px; }"));
+    auto* warn_layout = new QHBoxLayout(m_anim_warning_frame);
+    warn_layout->setContentsMargins(6, 4, 6, 4);
+    warn_layout->setSpacing(8);
+
+    auto* warn_icon = new QLabel(QStringLiteral("<span style='font-size: 16px;'>⚠️</span>"), m_anim_warning_frame);
+    warn_icon->setFixedWidth(24);
+    warn_layout->addWidget(warn_icon);
+
+    m_anim_warning_label = new QLabel(m_anim_warning_frame);
+    m_anim_warning_label->setStyleSheet(QStringLiteral("color: #e5c07b; font-size: 11px; font-weight: bold;"));
+    m_anim_warning_label->setWordWrap(true);
+    warn_layout->addWidget(m_anim_warning_label, 1);
+    m_anim_warning_frame->setVisible(false);
+    anims_layout->addWidget(m_anim_warning_frame);
+
+    // Source Selection Combo Row
+    auto* source_row = new QHBoxLayout();
+    auto* source_lbl = new QLabel(QStringLiteral("Animation Source:"), m_grp_anims);
+    source_lbl->setStyleSheet(QStringLiteral("font-weight: 600; color: #abb2bf; font-size: 12px;"));
+    m_anim_source_combo = new QComboBox(m_grp_anims);
+    m_anim_source_combo->setStyleSheet(QStringLiteral(
+        "QComboBox { background: #21252b; border: 1px solid #3e4451; border-radius: 4px; padding: 4px 10px; color: #ffffff; min-width: 280px; } "
+        "QComboBox::drop-down { border: none; } QComboBox QAbstractItemView { background: #21252b; color: #ffffff; selection-background-color: #2962ff; }"));
+    m_anim_source_combo->addItem(QStringLiteral("Auto-route (Smart Selection)"), 0);
+    m_anim_source_combo->addItem(QStringLiteral("Embedded In-GLB Animations"), 1);
+    m_anim_source_combo->addItem(QStringLiteral("Companion motions.json Animations"), 2);
+    m_anim_source_combo->addItem(QStringLiteral("Do Not Export Animations (Base Model Only)"), 3);
+    source_row->addWidget(source_lbl);
+    source_row->addWidget(m_anim_source_combo);
+    source_row->addStretch(1);
+    anims_layout->addLayout(source_row);
+
+    // Routing explanation / status label
+    m_anim_route_info_label = new QLabel(m_grp_anims);
+    m_anim_route_info_label->setStyleSheet(QStringLiteral("color: #98c379; font-size: 11px; font-style: italic;"));
+    m_anim_route_info_label->setWordWrap(true);
+    anims_layout->addWidget(m_anim_route_info_label);
+
+    // Scrollable box listing all animations irrespective of origin
+    m_anim_scroll_area = new QScrollArea(m_grp_anims);
+    m_anim_scroll_area->setFixedHeight(120);
+    m_anim_scroll_area->setWidgetResizable(true);
+    m_anim_scroll_area->setStyleSheet(QStringLiteral(
+        "QScrollArea { background-color: #1e2227; border: 1px solid #3e4451; border-radius: 4px; } "
+        "QScrollBar:vertical { width: 8px; background: #1e2227; }"));
+
+    m_anim_list_label = new QLabel(m_anim_scroll_area);
+    m_anim_list_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_anim_list_label->setStyleSheet(QStringLiteral("color: #abb2bf; font-size: 11px; padding: 6px;"));
+    m_anim_list_label->setWordWrap(true);
+    m_anim_list_label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    m_anim_scroll_area->setWidget(m_anim_list_label);
+    anims_layout->addWidget(m_anim_scroll_area);
+
+    layout->addWidget(m_grp_anims);
+
+    // ── Group 5: Compatibility & Advanced ────────────────────────────────────
     auto* grp_compat = new QGroupBox(QStringLiteral("Swordigo Engine Compatibility"), content_widget);
     grp_compat->setStyleSheet(QStringLiteral("QGroupBox { font-weight: bold; color: #e5e9f0; }"));
     auto* compat_layout = new QVBoxLayout(grp_compat);
@@ -357,6 +423,10 @@ void ModelConvertDialog::setup_ui() {
     });
     connect(m_pvr_res_combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ModelConvertDialog::onPvrResChanged);
+    connect(m_anim_source_combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ModelConvertDialog::onAnimSourceChanged);
+    connect(m_anim_fps_spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &ModelConvertDialog::onAnimFpsChanged);
 
     connect(m_convert_btn, &QPushButton::clicked, this, &ModelConvertDialog::onConvertClicked);
     connect(m_cancel_btn, &QPushButton::clicked, this, &QDialog::reject);
@@ -414,7 +484,11 @@ void ModelConvertDialog::onSourcePathEdited(const QString& text) {
         m_btn_prop->setEnabled(false);
         m_btn_decor->setEnabled(false);
         m_btn_large->setEnabled(false);
+        m_in_glb_clips.clear();
+        m_json_clips.clear();
+        m_companion_motions_path.clear();
         update_resulting_bounds();
+        update_anim_ui_and_list();
         return;
     }
 
@@ -557,7 +631,128 @@ void ModelConvertDialog::analyze_source_model(const QString& file_path) {
         }
     }
 
+    // Inspect available animation clips (embedded In-GLB and companion motions.json)
+    m_in_glb_clips.clear();
+    m_json_clips.clear();
+    m_companion_motions_path.clear();
+
+    if (ext == "glb" || ext == "gltf") {
+        float cur_fps = static_cast<float>(m_anim_fps_spin ? m_anim_fps_spin->value() : 24.0);
+        av::gltf_inspect_animations(path_std, m_in_glb_clips, m_json_clips, &m_companion_motions_path, cur_fps);
+    }
+    update_anim_ui_and_list();
+
     update_resulting_bounds();
+}
+
+void ModelConvertDialog::onAnimSourceChanged(int index) {
+    if (!m_anim_source_combo || !m_anim_route_info_label) return;
+    int mode = m_anim_source_combo->itemData(index).toInt();
+    if (mode == 0) {
+        if (!m_in_glb_clips.empty()) {
+            m_anim_route_info_label->setText(QString("✓ Auto-route will export embedded In-GLB animations (%1 clips).").arg(m_in_glb_clips.size()));
+        } else if (!m_json_clips.empty()) {
+            m_anim_route_info_label->setText(QString("✓ Auto-route will export companion motions.json animations (%1 clips).").arg(m_json_clips.size()));
+        } else {
+            m_anim_route_info_label->setText(QStringLiteral("No animations to export."));
+        }
+    } else if (mode == 1) {
+        m_anim_route_info_label->setText(QString("Exporting embedded In-GLB animations (%1 clips).").arg(m_in_glb_clips.size()));
+    } else if (mode == 2) {
+        m_anim_route_info_label->setText(QString("Exporting companion motions.json animations (%1 clips).").arg(m_json_clips.size()));
+    } else {
+        m_anim_route_info_label->setText(QStringLiteral("<span style='color:#7d8492;'>Animation export disabled. Only base model POD will be generated.</span>"));
+    }
+}
+
+void ModelConvertDialog::onAnimFpsChanged(double) {
+    const QString src = m_source_edit ? m_source_edit->text().trimmed() : QString();
+    if (!src.isEmpty() && QFile::exists(src)) {
+        float cur_fps = static_cast<float>(m_anim_fps_spin ? m_anim_fps_spin->value() : 24.0);
+        av::gltf_inspect_animations(src.toStdString(), m_in_glb_clips, m_json_clips, &m_companion_motions_path, cur_fps);
+        update_anim_ui_and_list();
+    }
+}
+
+void ModelConvertDialog::update_anim_ui_and_list() {
+    if (!m_grp_anims) return;
+
+    size_t in_glb_count = m_in_glb_clips.size();
+    size_t json_count = m_json_clips.size();
+    size_t total_count = in_glb_count + json_count;
+
+    if (total_count == 0) {
+        m_anim_list_label->setText(QStringLiteral("<i>No animation clips detected in model or companion JSON.</i>"));
+        m_anim_warning_frame->setVisible(false);
+        m_anim_route_info_label->setText(QStringLiteral("Base model will be converted without animation clips."));
+        m_anim_source_combo->setEnabled(false);
+        m_anim_source_combo->blockSignals(true);
+        m_anim_source_combo->setCurrentIndex(0);
+        m_anim_source_combo->blockSignals(false);
+        return;
+    }
+
+    m_anim_source_combo->setEnabled(true);
+
+    m_anim_source_combo->blockSignals(true);
+    m_anim_source_combo->setItemText(0, QString("Auto-route (%1 clips detected)").arg(total_count));
+    m_anim_source_combo->setItemText(1, QString("Embedded In-GLB Animations (%1 clips)").arg(in_glb_count));
+    m_anim_source_combo->setItemText(2, QString("Companion motions.json Animations (%1 clips)").arg(json_count));
+    m_anim_source_combo->setItemText(3, QStringLiteral("Do Not Export Animations (Base Model Only)"));
+
+    bool both_detected = (in_glb_count > 0 && json_count > 0);
+    if (both_detected) {
+        m_anim_warning_frame->setVisible(true);
+        m_anim_warning_label->setText(QString(
+            "<b>Multiple Animation Sources Detected!</b><br/>"
+            "This model contains both embedded In-GLB animations (<b>%1 clips</b>) "
+            "and companion motions.json animations (<b>%2 clips</b>). "
+            "Please choose which animation source to convert into game PODs below:")
+            .arg(in_glb_count).arg(json_count));
+        m_anim_source_combo->setCurrentIndex(1); // Default to In-GLB when both exist
+        m_anim_route_info_label->setText(QString(
+            "<span style='color:#e5c07b;'>⚠️ Conflict: Select between In-GLB (%1 clips), Companion JSON (%2 clips), or None below.</span>")
+            .arg(in_glb_count).arg(json_count));
+    } else {
+        m_anim_warning_frame->setVisible(false);
+        m_anim_source_combo->setCurrentIndex(0); // Auto-route
+        if (in_glb_count > 0) {
+            m_anim_route_info_label->setText(QString(
+                "✓ Auto-routed to embedded In-GLB animations (<b>%1 clips</b>). Separate &lt;model&gt;_&lt;clip&gt;.POD will be generated.")
+                .arg(in_glb_count));
+        } else if (json_count > 0) {
+            m_anim_route_info_label->setText(QString(
+                "✓ Auto-routed to companion motions.json (<b>%1 clips</b>). Separate &lt;model&gt;_&lt;clip&gt;.POD will be generated.")
+                .arg(json_count));
+        }
+    }
+    m_anim_source_combo->blockSignals(false);
+
+    // List all animations formatted with origin badges
+    QStringList html_lines;
+    html_lines.append(QString("<b>All Detected Animations (%1 total):</b>").arg(total_count));
+
+    for (const auto& c : m_in_glb_clips) {
+        html_lines.append(QString(
+            "• <span style='background:#1e3a5f; color:#61afef; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:bold;'>[In-GLB]</span> "
+            "<b>%1</b> &nbsp;—&nbsp; %2s <span style='color:#7d8492;'>(%3 frames @ %4 fps)</span>")
+            .arg(QString::fromStdString(c.name))
+            .arg(QString::number(c.duration, 'f', 2))
+            .arg(c.num_frames)
+            .arg(QString::number(c.fps, 'f', 0)));
+    }
+
+    for (const auto& c : m_json_clips) {
+        html_lines.append(QString(
+            "• <span style='background:#1b382b; color:#98c379; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:bold;'>[motions.json]</span> "
+            "<b>%1</b> &nbsp;—&nbsp; %2s <span style='color:#7d8492;'>(%3 frames @ %4 fps)</span>")
+            .arg(QString::fromStdString(c.name))
+            .arg(QString::number(c.duration, 'f', 2))
+            .arg(c.num_frames)
+            .arg(QString::number(c.fps, 'f', 0)));
+    }
+
+    m_anim_list_label->setText(html_lines.join(QStringLiteral("<br/>")));
 }
 
 void ModelConvertDialog::onScaleChanged(double) {
@@ -600,6 +795,8 @@ void ModelConvertDialog::set_working(bool working) {
     m_convert_btn->setEnabled(!working);
     m_source_browse_btn->setEnabled(!working);
     m_output_browse_btn->setEnabled(!working);
+    if (m_anim_source_combo) m_anim_source_combo->setEnabled(!working && (m_in_glb_clips.size() + m_json_clips.size() > 0));
+    if (m_anim_fps_spin) m_anim_fps_spin->setEnabled(!working);
     m_progress_bar->setVisible(working);
 }
 
@@ -627,6 +824,14 @@ void ModelConvertDialog::onConvertClicked() {
     opts.output_pvr           = true;
     opts.rigid_skin           = m_rigid_skin_check->isChecked();
     opts.anim_fps             = static_cast<float>(m_anim_fps_spin->value());
+
+    int anim_choice = m_anim_source_combo ? m_anim_source_combo->currentIndex() : 0;
+    if (anim_choice == 0) opts.anim_source = av::PodConvertOptions::AnimationSource::Auto;
+    else if (anim_choice == 1) opts.anim_source = av::PodConvertOptions::AnimationSource::InGlb;
+    else if (anim_choice == 2) opts.anim_source = av::PodConvertOptions::AnimationSource::CompanionJson;
+    else opts.anim_source = av::PodConvertOptions::AnimationSource::None;
+
+    opts.companion_motions_path = m_companion_motions_path;
 
     const std::string ext = QFileInfo(src).suffix().toLower().toStdString();
     const std::string src_std = src.toStdString();

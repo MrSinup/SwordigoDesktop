@@ -31,13 +31,24 @@
 #include <cctype>
 #include <ctime>
 #include <thread>
-#include <unistd.h>
 #ifndef _WIN32
+#include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <poll.h>
 #include <cerrno>
+#else
+#include <io.h>
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
+#ifndef STDERR_FILENO
+#define STDERR_FILENO 2
+#endif
+#define dup _dup
+#define dup2 _dup2
+#define close _close
 #endif
 #include <cmath>
 #include <ctime>

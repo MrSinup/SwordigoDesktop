@@ -2,6 +2,63 @@
 
 All notable changes to Swordigo Desktop.
 
+## [Unreleased] — Converter: the POD block grammar now matches the reference writer
+
+> Report §8f. The two earlier fixes (§8d tags, §8e bone batches) put the right
+> *values* in the file; this one puts the right *framing* around them.
+
+### Fixed
+- **Every block now carries its `<tag|0x80000000> <0>` close pair.** We were
+  closing containers but not leaves. `PVRShamanGUI` ships the reference writer,
+  and headless IDA extraction recovered it: `CPVRTModelPOD::SavePOD` @ 0x753370
+  brackets every block with `sub_74BA40(f, tag, len)` (`<tag:u16><0:u16>` then
+  `<len:u32>`) and `sub_74BAB0(f, tag)` (`<tag:u16><0x8000:u16>` then `<0:u32>`).
+  `sub_74BAB0` runs after *every* `sub_74BA40`, with no exceptions, in every
+  stock file — vanilla Swordigo assets, PVRShaman's examples and PVRGeoPOD
+  output alike. libswordigo's reader tolerates the omission (an unknown tag just
+  has its length skipped) which is exactly why this hid: our loader was
+  length-driven too, so files round-tripped through `ruby_gg` perfectly. See
+  `OpenSwordigo/PVRToolsDecomp/POD_WRITER_GRAMMAR.md`.
+- **A stream with `n == 0` no longer carries a `9003 data` tag.** `sub_74BB90`
+  returns immediately when its source pointer is NULL, so the block is only
+  `9000 eType` / `9001 n = 0` / `9002 nStride = 0` — `rock1.POD`'s `6008 TANGENT`
+  block is three tags long. We emitted a meaningless 4-byte placeholder.
+- **Materials gained the full stock tag set (3000–3026).** The nine auxiliary
+  texture slots `3009..3017` are the part that mattered: stock writes the `-1`
+  sentinel for "no map of this kind", we left them at the `calloc`'d 0 — a
+  perfectly valid texture index, so the runtime would bind the file's first
+  texture as every map the material has a slot for. Flag values (`3018 = 3019 = 1`,
+  `3022 = 3023 = 0x8006`) copied verbatim from `rock1.POD`.
+- **Scene children reordered** to materials (`2015`), meshes (`2012`), nodes
+  (`2013`), textures (`2014`), and the `1002` exporter-options / `1003` provenance
+  blocks are back between the version block and the scene block — both purely
+  informational to the engine but present in every stock file.
+
+### Added
+- **`OpenSwordigo/PVRToolsDecomp/`** — 684 POD-relevant functions from the
+  PowerVR toolchain, extracted headlessly with IDA Pro (assembly + Hex-Rays
+  pseudocode, indexed by string references and POD tag immediates).
+  `PVRShamanGUI/` (284 fns) contains the reference POD reader *and* writer;
+  `PVRGeoPODCLI/` (400 fns) contains the FBX/DAE importers and the exporter
+  entry points. Distilled in `PVRToolsDecomp/POD_WRITER_GRAMMAR.md`, indexed in
+  `PVRToolsDecomp/INDEX.md`.
+- **`.scratch/pod_canon.py`** — a canonicalising POD dumper that prints one line
+  per block with an explicit `MISSING close` marker, so a freshly converted file
+  can be diffed tag-by-tag against `resources/rock1.POD`. Ours now diffs clean
+  on mesh, node and material blocks: identical tags, order and nesting.
+
+### Changed
+- `tests/pod_game_reader_contract_test.cpp` grew a strict recursive walker
+  (`grammar_scan`) requiring the close pair on every block, a byte-for-byte check
+  that the file opens with the stock 27-byte `1000 / AB.POD.2.0` block, and
+  checks that `1002`/`1003` exist, that no empty attribute stream carries a
+  `9003`, and that every material declares all nine `-1` texture slots. 57 →
+  **126 checks**, 0 failures.
+- `SWORDIGO_POD_PIPELINE_REVISION` 5 → 6, so loading a stale bake now warns.
+- All 21 converter-stamped PODs under the user's asset root, plus every `.POD`
+  with a `.glb` sibling, were rebuilt. The vanilla originals in
+  `assets/resources/soldier/hiro/` were left untouched.
+
 ## [Unreleased] — Converter: rigid-skin bake, OBJ→POD converter
 
 > Two more open items from `docs/formats_and_schemas/TODO.md` (S1, E17).

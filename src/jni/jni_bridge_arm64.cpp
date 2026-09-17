@@ -3560,10 +3560,53 @@ static void bridge_getpid(void* emu_ptr) {
 
 static void bridge___system_property_get(void* emu_ptr) {
     IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint32_t name_ptr = guest_u32(emu->get_reg(0));
     uint32_t val_ptr = guest_u32(emu->get_reg(1));
-    if (val_ptr && bridge_range_ok(emu, val_ptr, 1)) {
-        emu->get_memory_base()[val_ptr] = 0;
+
+    if (!val_ptr || !bridge_range_ok(emu, val_ptr, 1)) {
+        emu->set_reg(0, 0);
+        return;
     }
+
+    size_t name_len = 0;
+    if (!bridge_cstr_ok(emu, name_ptr, &name_len)) {
+        emu->get_memory_base()[val_ptr] = 0;
+        emu->set_reg(0, 0);
+        return;
+    }
+
+    const char* name = (const char*)(emu->get_memory_base() + name_ptr);
+    const char* value = nullptr;
+
+    if (strcmp(name, "ro.build.version.sdk") == 0) {
+        value = "28";
+    } else if (strcmp(name, "ro.build.version.release") == 0) {
+        value = "9";
+    } else if (strcmp(name, "ro.product.model") == 0) {
+        value = "SwordigoPC";
+    } else if (strcmp(name, "ro.product.manufacturer") == 0) {
+        value = "TouchFoo";
+    } else if (strcmp(name, "ro.product.cpu.abi") == 0) {
+        value = "arm64-v8a";
+    } else if (strcmp(name, "ro.product.cpu.abilist") == 0) {
+        value = "arm64-v8a,armeabi-v7a,armeabi";
+    } else if (strcmp(name, "ro.arch") == 0) {
+        value = "arm64";
+    }
+
+    if (value) {
+        size_t vlen = strlen(value);
+        if (bridge_range_ok(emu, val_ptr, (uint32_t)(vlen + 1))) {
+            memcpy(emu->get_memory_base() + val_ptr, value, vlen + 1);
+            if (!emu->quiet_mode) {
+                std::cout << "[SystemProperty] get: '" << name << "' -> '" << value << "'" << std::endl;
+            }
+            emu->set_reg(0, (uint64_t)vlen);
+            return;
+        }
+    }
+
+    emu->get_memory_base()[val_ptr] = 0;
     emu->set_reg(0, 0);
 }
 

@@ -26,7 +26,13 @@
 #include "ruby/editor/doc_viewer_dialog.h"
 #include "ruby/editor/new_file_dialog.h"
 #include "ruby/editor/model_convert_dialog.h"
+#include "ruby/editor/desktop_integration_dialog.h"
 #include "ruby/editor/studio_idle_widget.h"
+#include "ruby/theme/ruby_theme.h"
+#include <QActionGroup>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include "ruby/editor/apk_session_panel.h"
 #include "tools/scene_loader.h"      // av::scene_serialize / scene_save (structured edits)
 #include "tools/scene_workspace.h"   // swk::recompute_ground_mesh_geometry
@@ -35,6 +41,7 @@
 #include "ruby/emulator/engine_pod.h"
 #include "ruby/emulator/workspace_detect.h"
 #include "ruby/graph/graphy_canvas.h"
+#include "ruby/graph/graphy_scene_builder.h"   // .scene/.scl binary -> Graph (no Python)
 #include <fstream>
 #include <QDir>
 #include <QFile>
@@ -63,6 +70,10 @@
 #include <QPolygonF>
 
 namespace ruby {
+
+static QString filerift_type_for_path(const QString& path) {
+    return QString::fromStdString(::filerift::detect_filetype(path.toStdString()));
+}
 
 RubyMainWindow::RubyMainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
@@ -211,9 +222,9 @@ RubyMainWindow::RubyMainWindow(QWidget* parent) : QMainWindow(parent) {
                 // Binary-format types can never be saved as raw text — warn
                 // immediately so the user doesn't discover it at save time.
                 if (!checked) {
-                    const QString ext = QFileInfo(doc.path).suffix().toLower();
-                    const bool binary_format = doc.kind == "scene" || ext == "scl" ||
-                                               ext == "swdm" || ext == "gmesh";
+                    const QString fr_type = filerift_type_for_path(doc.path);
+                    const bool binary_format = doc.kind == "scene" || !fr_type.isEmpty() ||
+                                               !m_script_types.value(doc.path).isEmpty();
                     if (binary_format) {
                         ruby::core::ProjectContext::instance().set_status(
                             "Warning: Raw Text saves are blocked for " +
@@ -278,9 +289,25 @@ RubyMainWindow::RubyMainWindow(QWidget* parent) : QMainWindow(parent) {
                 ruby::core::ProjectContext::instance().set_status(msg);
             });
 
-    // Node Graph Editor (Graphy Unreal-style visual node editor)
+    // Node Graph Editor (Graphy Unreal-style visual node editor). The canvas
+    // shows the graph of the ACTIVE document: a .scene becomes a Scene → Entity
+    // → Component tree, a .scl becomes a Library → Template → Component tree.
+    // Documents with no graph get a notice page instead of a stale demo graph.
     m_graph_canvas = new ruby::graph::GraphyCanvas(m_central);
-    m_mode_tabs->addTab(m_graph_canvas, "Node Graph");
+    auto* page_graph = new QWidget(m_central);
+    {
+        auto* layout = new QVBoxLayout(page_graph);
+        layout->setContentsMargins(0, 0, 0, 0);
+        m_graph_stack = new QStackedWidget(page_graph);
+        m_graph_notice = new QLabel(page_graph);
+        m_graph_notice->setAlignment(Qt::AlignCenter);
+        m_graph_notice->setWordWrap(true);
+        m_graph_notice->setStyleSheet("QLabel { color:#9aa3b2; font-size:14px; padding:24px; }");
+        m_graph_stack->addWidget(m_graph_canvas); // StackView
+        m_graph_stack->addWidget(m_graph_notice); // StackNotice
+        layout->addWidget(m_graph_stack);
+    }
+    m_mode_tabs->addTab(page_graph, "Node Graph");
 
     // Central stack: displays m_idle_widget when no documents are open, or m_mode_tabs when files are active
     m_central_stack = new QStackedWidget(m_central);
@@ -354,6 +381,9 @@ RubyMainWindow::RubyMainWindow(QWidget* parent) : QMainWindow(parent) {
                 if (m_loading_doc) return;
                 const QString path = m_script_ide->current_file_path();
                 if (path.isEmpty()) return;
+                // Typing can change a document's shape (an added Component, a moved
+                // object), so the cached Node Graph is no longer trustworthy.
+                invalidate_graph_view();
                 if (m_script_ide->document()->isModified()) {
                     if (!m_dirty_scripts.contains(path)) {
                         m_dirty_scripts.insert(path);
@@ -366,6 +396,11 @@ RubyMainWindow::RubyMainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_script_ide, &ruby::editor::ScriptIDEWidget::documentLoaded,
             this, [this](const QString& path) {
                 if (path.isEmpty()) return;
+                if (!m_script_ide->current_filerift_type().isEmpty() &&
+                    m_script_types.value(path).isEmpty()) {
+                    m_script_types[path] = m_script_ide->current_filerift_type();
+                    update_filerift_toggle_ui();
+                }
                 if (m_script_buffers.contains(path)) return;  // already cached
                 m_script_buffers[path] = m_script_ide->full_text();
             });
@@ -447,6 +482,8 @@ RubyMainWindow::RubyMainWindow(QWidget* parent) : QMainWindow(parent) {
     restoreGeometry(settings.value("ruby_gg/windowGeometry").toByteArray());
     restoreState(settings.value("ruby_gg/dockState").toByteArray());
 
+    setAcceptDrops(true);
+
     // Connect model loading to inspector
     connect(m_viewport_3d, &ruby::viewport::Viewport3DWidget::modelLoaded,
             this, &RubyMainWindow::onModelLoaded);
@@ -497,6 +534,8 @@ void RubyMainWindow::setup_menus(QMenuBar* menu_bar) {
         "Repack the active APK session back into an .apk "
         "(available after File ▸ Import APK…)");
     file_menu->addSeparator();
+    file_menu->addAction("&Preferences / Desktop Integration...", this, &RubyMainWindow::onOpenDesktopIntegration);
+    file_menu->addSeparator();
     file_menu->addAction("&Exit", QKeySequence::Quit, this, &QWidget::close);
 
     auto* view_menu = menu_bar->addMenu("&View");
@@ -507,6 +546,34 @@ void RubyMainWindow::setup_menus(QMenuBar* menu_bar) {
     act_effects->setCheckable(true);
     act_effects->setChecked(m_viewport_3d->render_effects());
     view_menu->addAction("Authoring & Production Tools", this, &RubyMainWindow::onOpenTools);
+    view_menu->addSeparator();
+
+    auto* theme_menu = view_menu->addMenu("&Theme");
+    auto* theme_group = new QActionGroup(theme_menu);
+    theme_group->setExclusive(true);
+
+    auto* act_dark = theme_menu->addAction("Dark Studio (Default)");
+    act_dark->setCheckable(true);
+    theme_group->addAction(act_dark);
+
+    auto* act_light = theme_menu->addAction("Universal White (Light Studio)");
+    act_light->setCheckable(true);
+    theme_group->addAction(act_light);
+
+    ruby::theme::ThemeId cur_theme = ruby::theme::get_current_theme();
+    if (cur_theme == ruby::theme::ThemeId::LightStudio) {
+        act_light->setChecked(true);
+    } else {
+        act_dark->setChecked(true);
+    }
+
+    connect(act_dark, &QAction::triggered, this, []() {
+        ruby::theme::apply_theme(ruby::theme::ThemeId::DarkStudio);
+    });
+    connect(act_light, &QAction::triggered, this, []() {
+        ruby::theme::apply_theme(ruby::theme::ThemeId::LightStudio);
+    });
+
     view_menu->addSeparator();
     if (m_console_dock) view_menu->addAction(m_console_dock->toggleViewAction());
 
@@ -539,6 +606,8 @@ void RubyMainWindow::setup_menus(QMenuBar* menu_bar) {
         onConvertModel(src_path);
     });
     tools_menu->addAction("Authoring & Production Tools...", this, &RubyMainWindow::onOpenTools);
+    tools_menu->addSeparator();
+    tools_menu->addAction("&Desktop Integration & File Associations...", this, &RubyMainWindow::onOpenDesktopIntegration);
 
     auto* help_menu = menu_bar->addMenu("&Help");
     help_menu->addAction("&Engine & FileRift Documentation...", QKeySequence::HelpContents, this, &RubyMainWindow::onOpenDocumentation);
@@ -667,6 +736,15 @@ void RubyMainWindow::setup_dock_panels() {
     m_animation_dock->setVisible(false);
     connect(m_animation_controls, &ruby::panels::AnimationControlBar::frameChanged,
             m_viewport_3d, &ruby::viewport::Viewport3DWidget::set_frame);
+    connect(m_animation_controls, &ruby::panels::AnimationControlBar::clipChanged,
+            this, [this](int clip_idx) {
+                if (m_viewport_3d) {
+                    m_viewport_3d->set_animation_clip(clip_idx);
+                    if (m_animation_controls) {
+                        m_animation_controls->set_frame_count(m_viewport_3d->frame_count());
+                    }
+                }
+            });
 
     m_scene_dock = new QDockWidget("Scene Outliner", this);
     m_scene_dock->setObjectName("SceneOutlinerDock");
@@ -1535,6 +1613,11 @@ void RubyMainWindow::onOpenTools() {
     if (m_tools) m_mode_tabs->setCurrentWidget(m_tools);
 }
 
+void RubyMainWindow::onOpenDesktopIntegration() {
+    ruby::editor::DesktopIntegrationDialog dlg(this);
+    dlg.exec();
+}
+
 void RubyMainWindow::onOpenProject() {
     QString dir = QFileDialog::getExistingDirectory(this, "Open Swordigo Asset Directory");
     if (!dir.isEmpty()) {
@@ -1554,7 +1637,7 @@ void RubyMainWindow::onOpenProject() {
 
 void RubyMainWindow::onOpenFile() {
     QString file = QFileDialog::getOpenFileName(this, "Open Swordigo Asset", QString(),
-        "Swordigo Assets (*.pod *.POD *.glb *.GLB *.gltf *.GLTF *.obj *.OBJ *.pvr *.PVR *.tex *.TEX *.png *.PNG *.jpg *.JPG *.scl *.SCL *.scene *.SCENE *.scn *.SCN *.lua *.LUA *.swdm *.SWDM *.gmesh);;All Files (*)");
+        "Swordigo Assets (*.pod *.POD *.glb *.GLB *.gltf *.GLTF *.obj *.OBJ *.pvr *.PVR *.tex *.TEX *.png *.PNG *.jpg *.JPG *.scl *.SCL *.scene *.SCENE *.scn *.SCN *.lua *.LUA *.swdm *.SWDM *.gmesh *.gdata *.GDATA *.gopt *.GOPT *.gplayer *.GPLAYER *.gstate *.GSTATE *.scmap *.SCMAP *.sounds *.SOUNDS *.fnt *.FNT *.atlas *.ATLAS *.fr *.FR);;All Files (*)");
     if (!file.isEmpty()) {
         onFileSelectedInBrowser(file);
     }
@@ -1630,8 +1713,11 @@ void RubyMainWindow::onSaveFile() {
     }
 
     // Binary-format docs must never be written as raw text — that turns the
-    // .scene into FileRift markup the engine and viewport cannot load.
-    if (is_scene && !doc.encode_filerift) {
+    // binary protobuf into FileRift markup the engine cannot load.
+    const QString fr_type = filerift_type_for_path(doc.path);
+    const bool is_binary_format = is_scene || !fr_type.isEmpty() ||
+                                  !m_script_types.value(doc.path).isEmpty();
+    if (is_binary_format && !doc.encode_filerift) {
         ruby::core::ProjectContext::instance().set_status(
             "Save blocked: FileRift 'Save as Raw Text' is on for " +
             QFileInfo(doc.path).fileName() +
@@ -1714,6 +1800,9 @@ void RubyMainWindow::onSaveFile() {
             }).detach();
         }
         ruby::core::ProjectContext::instance().set_status("Saved: " + path);
+        if (m_asset_browser) {
+            m_asset_browser->refresh_now();
+        }
     } else {
         const QString err = m_script_ide->last_save_error();
         ruby::core::ProjectContext::instance().set_status(
@@ -2272,6 +2361,8 @@ void RubyMainWindow::apply_scene_text_sync_result(uint64_t seq, const QString& p
         if (ide_visible)
             m_script_ide->document()->setModified(false);
     }
+    // Viewport structured edits arrive here as rewritten markup.
+    invalidate_graph_view();
     refresh_tab_labels();
 }
 
@@ -2348,6 +2439,9 @@ void RubyMainWindow::save_scene_doc_structured(int index) {
     if (m_console) {
         m_console->append_line("Saved (3D scene): " + path);
     }
+    if (m_asset_browser) {
+        m_asset_browser->refresh_now();
+    }
 }
 
 void RubyMainWindow::onNewFile(const QString& target_dir) {
@@ -2389,6 +2483,84 @@ int RubyMainWindow::find_document(const QString& path) const {
     return -1;
 }
 
+bool RubyMainWindow::check_and_handle_filename_collision(const QString& clean_path) {
+    const QString new_filename = QFileInfo(clean_path).fileName();
+    int collided_idx = -1;
+    for (int i = 0; i < m_docs.size(); ++i) {
+        if (QFileInfo(m_docs[i].path).fileName().compare(new_filename, Qt::CaseInsensitive) == 0 &&
+            QDir::cleanPath(m_docs[i].path) != clean_path) {
+            collided_idx = i;
+            break;
+        }
+    }
+
+    if (collided_idx < 0) return true; // No collision
+
+    const QString old_path = m_docs[collided_idx].path;
+    const auto choice = QMessageBox::warning(
+        this,
+        "File Name Collision",
+        QString("A file with the same name is already open:\n\n"
+                "  Currently Open: %1\n"
+                "  New File:       %2\n\n"
+                "To prevent state conflicts and memory corruption, the existing file must be closed before opening the new one.\n\n"
+                "Do you want to save & close the old file and open the new one?")
+            .arg(old_path, clean_path),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::Yes);
+
+    if (choice != QMessageBox::Yes) {
+        return false; // Cancel opening new file
+    }
+
+    // Fully close old document (handles save prompt if dirty, evicts viewport cache, purges RAM buffers)
+    close_document(collided_idx);
+    return true;
+}
+
+void RubyMainWindow::open_external_file(const QString& raw_path) {
+    if (raw_path.isEmpty()) return;
+    const QString clean = QDir::cleanPath(raw_path);
+    const QFileInfo fi(clean);
+    if (!fi.exists() || fi.isDir()) return;
+
+    // Determine smart asset root
+    QDir dir = fi.absoluteDir();
+    QString root = dir.absolutePath();
+    if (dir.dirName().compare("resources", Qt::CaseInsensitive) == 0) {
+        dir.cdUp();
+        root = dir.absolutePath();
+    }
+    if (m_asset_browser) {
+        m_asset_browser->navigate_to(root, true);
+        m_asset_browser->select_and_reveal_file(clean);
+    }
+
+    open_document(clean);
+}
+
+void RubyMainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData() && event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    } else {
+        QMainWindow::dragEnterEvent(event);
+    }
+}
+
+void RubyMainWindow::dropEvent(QDropEvent* event) {
+    if (event->mimeData() && event->mimeData()->hasUrls()) {
+        const QList<QUrl> urls = event->mimeData()->urls();
+        for (const QUrl& url : urls) {
+            if (url.isLocalFile()) {
+                open_external_file(url.toLocalFile());
+            }
+        }
+        event->acceptProposedAction();
+    } else {
+        QMainWindow::dropEvent(event);
+    }
+}
+
 void RubyMainWindow::open_document(const QString& raw_path) {
     if (raw_path.isEmpty()) return;
     const QString path = QDir::cleanPath(raw_path);
@@ -2399,6 +2571,11 @@ void RubyMainWindow::open_document(const QString& raw_path) {
         } else {
             activate_document(existing);
         }
+        return;
+    }
+
+    // Check for same-filename collision from a different path
+    if (!check_and_handle_filename_collision(path)) {
         return;
     }
     if (m_active_doc >= 0 && m_active_doc < m_docs.size()) {
@@ -2418,8 +2595,8 @@ void RubyMainWindow::open_document(const QString& raw_path) {
     entry.kind = kind_of_file(path);
     const ViewerCaps caps = caps_for(entry.kind);
     entry.active_mode_tab = caps.default_tab;
-    const QString ext = QFileInfo(path).suffix().toLower();
-    entry.encode_filerift = (entry.kind == "scene" || ext == "scene" || ext == "scn" || ext == "scl" || ext == "swdm" || ext == "gmesh");
+    const QString fr_type = filerift_type_for_path(path);
+    entry.encode_filerift = (entry.kind == "scene" || !fr_type.isEmpty());
     m_docs.append(entry);
     const int index = m_docs.size() - 1;
     m_doc_tabs->addTab(QFileInfo(path).fileName());
@@ -2475,10 +2652,10 @@ void RubyMainWindow::load_doc_into_ide(int index) {
                                   m_script_types.value(doc.path));
     } else {
         QString schema;
-        if (is_scene) schema = "scene";
-        else {
-            const QString ext = QFileInfo(doc.path).suffix().toLower();
-            schema = ext == "scl" ? "scl" : (ext == "swdm" || ext == "gmesh" ? "scene" : QString());
+        if (is_scene) {
+            schema = "scene";
+        } else {
+            schema = filerift_type_for_path(doc.path);
         }
         if (m_script_ide->load_file(doc.path, schema)) {
             // Buffer caching happens on documentLoaded (load_file is async);
@@ -2524,12 +2701,15 @@ RubyMainWindow::ViewerCaps RubyMainWindow::caps_for(const QString& kind) const {
 }
 
 QString RubyMainWindow::notice_for(const QString& kind, int mode_tab) const {
-    const QString ext = m_active_doc >= 0 && m_active_doc < m_docs.size()
-        ? QFileInfo(m_docs[m_active_doc].path).suffix().toLower() : QString();
+    const QString path = m_active_doc >= 0 && m_active_doc < m_docs.size()
+        ? m_docs[m_active_doc].path : QString();
+    const QString ext = QFileInfo(path).suffix().toLower();
+    const QString fr_type = filerift_type_for_path(path);
     if (mode_tab == 0) { // 3D Viewport
-        if (kind == "script" && ext == "scl")
-            return "SCL object libraries are FileRift blueprints, not 3D geometry —\n"
-                   "switch to the Script IDE to decode and edit them.";
+        if (kind == "script" && !fr_type.isEmpty())
+            return QString("%1 files are FileRift data/blueprints, not 3D geometry —\n"
+                           "switch to the Script IDE to decode and edit them.")
+                           .arg(fr_type.toUpper());
         if (kind == "script")
             return "This is a text file — it has no 3D representation.\nSwitch to the Script IDE to edit it.";
         if (kind == "texture")
@@ -2543,6 +2723,15 @@ QString RubyMainWindow::notice_for(const QString& kind, int mode_tab) const {
         if (kind == "texture")
             return "Binary image data can't be edited as text.\nUse the Texture Viewer (or the 3D poster view).";
         return "Nothing to show in the editor for this file.";
+    }
+    if (mode_tab == 5) { // Node Graph
+        if (path.isEmpty())
+            return "Open a Swordigo scene (.scene) or object library (.scl) to see its\n"
+                   "objects, components and cross-references as a node graph.";
+        const std::string reason = ruby::graph::graph_unsupported_reason(path.toStdString());
+        if (!reason.empty()) return QString::fromStdString(reason);
+        return "This document has no objects to graph.\n"
+               "A scene with an empty object list draws nothing.";
     }
     if (mode_tab == 4) { // Audio Viewer
         if (kind == "audio")
@@ -2561,8 +2750,9 @@ QString RubyMainWindow::notice_for(const QString& kind, int mode_tab) const {
                "FileRift markup in the Script IDE.";
     if (kind == "model")
         return "Models contain textures, but view them through the 3D Viewport — or open a .pvr/.png directly.";
-    if (kind == "script" && ext == "scl")
-        return "SCL libraries aren't textures — decode them in the Script IDE.";
+    if (kind == "script" && !fr_type.isEmpty())
+        return QString("%1 files aren't textures — decode them in the Script IDE.")
+                       .arg(fr_type.toUpper());
     if (kind == "audio")
         return "Audio is played in the Audio Viewer tab (default).";
     return "This file isn't an image.\nUse the Texture Viewer only for PVR/TEX/PNG/JPEG assets.";
@@ -2594,14 +2784,25 @@ void RubyMainWindow::sync_views() {
     // Tab 3 (Scene Tools) is only visible for scene files
     // Tab 4 (Audio Viewer) is only visible for audio files
     const bool is_scene = (active_kind == "scene");
+    const QString active_path = (m_active_doc >= 0 && m_active_doc < m_docs.size())
+        ? m_docs[m_active_doc].path : QString();
+    const bool graphable = !active_path.isEmpty() &&
+        ruby::graph::is_graphable_document(active_path.toStdString());
     m_mode_tabs->setTabVisible(2, !is_scene && caps.texture);
     m_mode_tabs->setTabVisible(3, is_scene);
     m_mode_tabs->setTabVisible(4, !is_scene && caps.audio);
+    m_mode_tabs->setTabVisible(TabGraph, graphable);
 
     m_3d_notice->setText(notice_for(active_kind, 0));
     m_ide_notice->setText(notice_for(active_kind, 1));
     m_tex_notice->setText(notice_for(active_kind, 2));
     m_audio_notice->setText(notice_for(active_kind, 4));
+    m_graph_notice->setText(notice_for(active_kind, TabGraph));
+
+    // A graph of a real scene is not free to build (it parses the whole
+    // document), so it is only built while the tab is actually on screen. The
+    // notice text above is cheap and always current.
+    if (m_mode_tabs->currentIndex() == TabGraph) refresh_graph_view();
 
     // Animation bar & Model Top Bar are visible when viewing a 3D model in the viewport
     bool is_pod_view = (m_active_doc >= 0 && m_active_doc < m_docs.size()
@@ -2633,19 +2834,36 @@ void RubyMainWindow::sync_views() {
                 }
             }
             if (m_model_stats_label && m_viewport_3d && m_viewport_3d->has_model()) {
-                const auto& m = m_viewport_3d->current_model();
-                float w = std::max(0.0f, m.max_x - m.min_x);
-                float h = std::max(0.0f, m.max_y - m.min_y);
-                float d = std::max(0.0f, m.max_z - m.min_z);
-                if (h > 0.001f || w > 0.001f || d > 0.001f) {
+                if (m_viewport_3d->has_glb()) {
+                    const auto& glb = m_viewport_3d->glb_model();
+                    float w = std::max(0.0f, glb.max_bounds().x() - glb.min_bounds().x());
+                    float h = std::max(0.0f, glb.max_bounds().y() - glb.min_bounds().y());
+                    float d = std::max(0.0f, glb.max_bounds().z() - glb.min_bounds().z());
+                    int meshes = glb.mesh_count();
+                    int verts = glb.total_vertices();
                     m_model_stats_label->setText(QString(
                         "Dims: %1 W × %2 H × %3 D units &nbsp;|&nbsp; %4 %5, %6 Verts")
                         .arg(QString::number(w, 'f', 1))
                         .arg(QString::number(h, 'f', 1))
                         .arg(QString::number(d, 'f', 1))
-                        .arg(m.meshes.size())
-                        .arg(m.meshes.size() == 1 ? "Mesh" : "Meshes")
-                        .arg(m.total_vertices));
+                        .arg(meshes)
+                        .arg(meshes == 1 ? "Mesh" : "Meshes")
+                        .arg(verts));
+                } else {
+                    const auto& m = m_viewport_3d->current_model();
+                    float w = std::max(0.0f, m.max_x - m.min_x);
+                    float h = std::max(0.0f, m.max_y - m.min_y);
+                    float d = std::max(0.0f, m.max_z - m.min_z);
+                    if (h > 0.001f || w > 0.001f || d > 0.001f) {
+                        m_model_stats_label->setText(QString(
+                            "Dims: %1 W × %2 H × %3 D units &nbsp;|&nbsp; %4 %5, %6 Verts")
+                            .arg(QString::number(w, 'f', 1))
+                            .arg(QString::number(h, 'f', 1))
+                            .arg(QString::number(d, 'f', 1))
+                            .arg(m.meshes.size())
+                            .arg(m.meshes.size() == 1 ? "Mesh" : "Meshes")
+                            .arg(m.total_vertices));
+                    }
                 }
             }
         }
@@ -2656,9 +2874,94 @@ void RubyMainWindow::sync_views() {
             ? QFileInfo(m_docs[m_active_doc].path).fileName() : QString();
         if (m_ide_status->text().startsWith("No file") || !file.isEmpty())
             m_ide_status->setText(file.isEmpty() ? "No file open"
-                : file + "   ·   Script IDE (FileRift binary markup supported for .scene/.scl/.swdm)");
+                : file + "   ·   Script IDE (FileRift binary markup supported)");
     }
     update_filerift_toggle_ui();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Node Graph: active document -> Graphy canvas
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Graphy itself is generic: it knows nodes, pins, wires and geometry, and
+// nothing about Swordigo. This is the adapter — the only place that knows a
+// `.scene` is a Scene full of SceneObjects. It keeps that knowledge out of the
+// canvas so the same widget can host the RBSRC timeline later.
+
+void RubyMainWindow::invalidate_graph_view() {
+    ++m_graph_revision;
+}
+
+void RubyMainWindow::show_graph_notice(const QString& text) {
+    if (!m_graph_stack || !m_graph_notice) return;
+    m_graph_notice->setText(text);
+    m_graph_stack->setCurrentIndex(StackNotice);
+}
+
+void RubyMainWindow::refresh_graph_view() {
+    if (!m_graph_canvas || !m_graph_stack) return;
+
+    // No document (or a document this builder cannot read): explain, never show
+    // a stale graph. The old behaviour was a hard-coded demo graph, which meant
+    // the tab always looked like it was doing something.
+    if (m_active_doc < 0 || m_active_doc >= m_docs.size()) {
+        m_graph_built_path.clear();
+        m_graph_canvas->set_graph(std::make_shared<ruby::graph::Graph>());
+        show_graph_notice(notice_for(QStringLiteral("none"), TabGraph));
+        return;
+    }
+
+    const RubyDocEntry& doc = m_docs[m_active_doc];
+    const std::string path = doc.path.toStdString();
+    if (!ruby::graph::is_graphable_document(path)) {
+        m_graph_built_path.clear();
+        m_graph_canvas->set_graph(std::make_shared<ruby::graph::Graph>());
+        show_graph_notice(QString::fromStdString(ruby::graph::graph_unsupported_reason(path)));
+        return;
+    }
+
+    // Building parses the whole document, so an unchanged document is kept.
+    if (m_graph_built_path == doc.path &&
+        m_graph_built_revision == m_graph_revision &&
+        m_graph_canvas->graph() && !m_graph_canvas->graph()->nodes().empty()) {
+        m_graph_stack->setCurrentIndex(StackView);
+        return;
+    }
+
+    // Unsaved FileRift edits win over the file on disk: the graph should show
+    // what the user is looking at in the IDE, not the last save.
+    const ruby::graph::GraphBuildStyle style{m_graph_canvas->metrics(),
+                                            m_graph_canvas->text_measure()};
+    std::shared_ptr<ruby::graph::Graph> g;
+    const auto t0 = std::chrono::steady_clock::now();
+    if (scene_has_user_text_edits(doc.path) && m_script_buffers.contains(doc.path)) {
+        g = ruby::graph::build_graph_from_markup(
+                m_script_buffers.value(doc.path).toStdString(), path, {}, style);
+    } else {
+        g = ruby::graph::build_graph_from_file(path, {}, style);
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    m_graph_built_path = doc.path;
+    m_graph_built_revision = m_graph_revision;
+
+    if (!g || g->nodes().empty()) {
+        m_graph_canvas->set_graph(std::make_shared<ruby::graph::Graph>());
+        show_graph_notice(QString("Nothing to graph in %1 \u2014 the document lists no objects.")
+                              .arg(QFileInfo(doc.path).fileName()));
+        return;
+    }
+
+    m_graph_canvas->set_graph(g);
+    m_graph_canvas->frame_all();
+    m_graph_stack->setCurrentIndex(StackView);
+    ruby::core::ProjectContext::instance().set_status(
+        QString("Node Graph: %1 nodes \u00b7 %2 wires \u00b7 %3 (%4 ms)")
+            .arg(g->nodes().size())
+            .arg(g->connections().size())
+            .arg(QFileInfo(doc.path).fileName())
+            .arg(ms, 0, 'f', 1));
 }
 
 void RubyMainWindow::refresh_tab_labels() {
@@ -2718,9 +3021,11 @@ void RubyMainWindow::activate_document(int index) {
     }
 
     const bool is_scene = (doc.kind == "scene");
+    const bool graphable = ruby::graph::is_graphable_document(doc.path.toStdString());
     m_mode_tabs->setTabVisible(2, !is_scene && caps.texture);
     m_mode_tabs->setTabVisible(3, is_scene);
     m_mode_tabs->setTabVisible(4, !is_scene && caps.audio);
+    m_mode_tabs->setTabVisible(TabGraph, graphable);
 
     // Restore the document's last active mode tab, falling back to its kind default
     int target_tab = doc.active_mode_tab;
@@ -2732,6 +3037,7 @@ void RubyMainWindow::activate_document(int index) {
     else if (target_tab == 2 && (is_scene || !caps.texture)) target_tab = caps.default_tab;
     else if (target_tab == 3 && !is_scene) target_tab = caps.default_tab;
     else if (target_tab == 4 && (is_scene || !caps.audio)) target_tab = caps.default_tab;
+    else if (target_tab == TabGraph && !graphable) target_tab = caps.default_tab;
 
     if (target_tab >= 0 && target_tab < m_mode_tabs->count() &&
         m_mode_tabs->currentIndex() != target_tab) {
@@ -2744,6 +3050,8 @@ void RubyMainWindow::activate_document(int index) {
     if (caps.viewport) {
         if (doc.kind == "model") {
             if (m_viewport_3d->load_model(doc.path.toStdString())) {
+                QStringList clips = m_viewport_3d->animation_clips();
+                m_animation_controls->set_clips(clips, m_viewport_3d->active_animation_clip());
                 m_animation_controls->set_frame_count(m_viewport_3d->frame_count());
                 ruby::core::ProjectContext::instance().set_status("Loaded 3D Model: " + doc.path);
             } else ruby::core::ProjectContext::instance().set_status("Could not load model: " + doc.path);
@@ -2768,7 +3076,7 @@ void RubyMainWindow::activate_document(int index) {
                 ruby::core::ProjectContext::instance().set_status("Texture in 3D: " + doc.path);
             else ruby::core::ProjectContext::instance().set_status("Could not decode texture: " + doc.path);
         }
-        if (doc.has_camera_state) {
+        if (doc.has_camera_state && doc.kind != "model") {
             ruby::viewport::Viewport3DWidget::CameraState cam;
             cam.pitch = doc.cam_pitch;
             cam.yaw = doc.cam_yaw;
@@ -2937,8 +3245,8 @@ void RubyMainWindow::update_filerift_toggle_ui() {
     }
     const RubyDocEntry& doc = m_docs[m_active_doc];
     const QString ext = QFileInfo(doc.path).suffix().toLower();
-    const bool is_filerift = (doc.kind == "scene" || ext == "scene" || ext == "scn" ||
-                              ext == "scl" || ext == "swdm" || ext == "gmesh" ||
+    const QString fr_type = filerift_type_for_path(doc.path);
+    const bool is_filerift = (doc.kind == "scene" || !fr_type.isEmpty() ||
                               !m_script_types.value(doc.path).isEmpty());
 
     m_filerift_toggle->blockSignals(true);

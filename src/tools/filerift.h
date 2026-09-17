@@ -13,6 +13,18 @@ namespace filerift {
    
     std::string recode_markup(const std::string& text, const std::string& filetype);
 
+    // Check if a filetype or extension is supported by FileRift
+    bool is_supported_filetype(const std::string& filetype);
+
+    // Normalize a filetype or extension to its canonical schema name (e.g. "scn" -> "scene", "Map" -> "scmap")
+    std::string normalize_filetype(const std::string& filetype);
+
+    // Identify the FileRift filetype from file path and/or content header
+    std::string detect_filetype(const std::string& path_or_ext, const std::string& header_or_bytes = "");
+
+    // Returns the list of all canonical FileRift filetypes
+    const std::vector<std::string>& supported_filetypes();
+
     // Our generic lua extractor
     std::string extract_lua_generic(const std::string& bytes);
 

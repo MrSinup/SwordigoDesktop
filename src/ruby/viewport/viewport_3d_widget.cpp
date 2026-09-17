@@ -29,6 +29,7 @@
 #include "ruby/core/project_context.h"
 #include "platform/pvr_loader.h"
 #include "tools/gltf_glb.h"
+#include "tools/image_decode.h"   // WebP fallback for EXT_texture_webp (Qt may lack the plugin)
 #include "tools/obj_loader.h"
 #include "tools/fbx_import.h"
 #include "tools/scene_asset_resolver.h"
@@ -43,7 +44,9 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <QMatrix4x4>
 #include <QOpenGLShaderProgram>
 #include <QSaveFile>
@@ -1177,6 +1180,10 @@ void Viewport3DWidget::paintGL() {
         if (m_viewport_shader.ready()) m_viewport_shader.bind();
         if (m_has_scene) draw_scene();
         if (m_has_model) draw_model();
+        else if (m_has_glb) {
+            upload_current_model_matrix();
+            m_glb_model.draw(m_wireframe, m_show_textures, m_viewport_shader.ready() ? &m_viewport_shader : nullptr);
+        }
         if (m_viewport_shader.ready()) m_viewport_shader.release();
         if (m_has_model && m_show_skeleton) draw_skeleton();
     }
@@ -2450,6 +2457,8 @@ void Viewport3DWidget::draw_pod_instance(const av::PODModel& model, const std::v
         const bool shader_on = m_viewport_shader.ready();
 
         if (skinned) {
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
             glEnableClientState(GL_VERTEX_ARRAY);
             glVertexPointer(3, GL_FLOAT, 0, m_scratch_positions.data());
             if (shader_on) {
@@ -2687,6 +2696,9 @@ void Viewport3DWidget::draw_model() {
         float matrix[16];
         av::get_node_matrix(m_model, node_index, m_frame, matrix);
         glPushMatrix();
+        if (m_model.has_center_point) {
+            glTranslatef(-m_model.center_point[0], -m_model.center_point[1], -m_model.center_point[2]);
+        }
         glMultMatrixf(matrix);
 
         const int material_index = node.material_index;
@@ -2737,6 +2749,8 @@ void Viewport3DWidget::draw_model() {
         const bool shader_on = m_viewport_shader.ready();
 
         if (skinned) {
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
             glEnableClientState(GL_VERTEX_ARRAY);
             glVertexPointer(3, GL_FLOAT, 0, m_scratch_positions.data());
             if (shader_on) {
@@ -2869,21 +2883,39 @@ bool Viewport3DWidget::load_model(const std::string& model_path) {
     std::string ext = file.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-    // Parse POD / GLB / glTF / OBJ into the same av::PODModel scene graph.
+    const bool is_gl = (ext == ".glb" || ext == ".gltf");
+    if (is_gl) {
+        makeCurrent();
+        m_has_model = false;
+        m_has_glb = false;
+        m_has_texture = false;
+        m_has_import = false;
+        std::string glb_err;
+        if (!m_glb_model.load_from_file(model_path, &glb_err)) {
+            return false;
+        }
+        m_has_glb = true;
+        m_cam_target[0] = m_glb_model.center().x();
+        m_cam_target[1] = m_glb_model.center().y();
+        m_cam_target[2] = m_glb_model.center().z();
+        m_cam_dist = std::max(30.0f, m_glb_model.radius() * 2.5f);
+        update();
+        return true;
+    }
+
+    m_has_glb = false;
+    m_glb_model.clear();
+
+    // Parse POD / OBJ / FBX into the same av::PODModel scene graph.
     av::PODModel loaded;
     std::string err;
     bool ok = false;
     const bool is_pod = (ext == ".pod");
-    const bool is_gl = (ext == ".glb" || ext == ".gltf");
     std::vector<av::GLTFImageBuffer> gltf_images;
     av::GLTFPBRInfo pbr;
     if (is_pod) {
         loaded = load_pod_to_ram(model_path, "");
         ok = !loaded.meshes.empty();
-    } else if (is_gl) {
-        ok = (ext == ".glb")
-            ? av::gltf_import_glb(model_path, loaded, gltf_images, &err, &pbr)
-            : av::gltf_import_gltf(model_path, loaded, gltf_images, &err, &pbr);
     } else if (ext == ".obj") {
         ok = av::obj_load(model_path, loaded, &err);
     } else if (ext == ".fbx") {
@@ -2920,6 +2952,17 @@ bool Viewport3DWidget::load_model(const std::string& model_path) {
                 if (image.data.empty()) continue;
                 QImage decoded = QImage::fromData(QByteArray(
                     reinterpret_cast<const char*>(image.data.data()), int(image.data.size())));
+                if (decoded.isNull() && av::bytes_are_webp(image.data.data(), image.data.size())) {
+                    // EXT_texture_webp REPLACES the core texture, so a model can
+                    // require WebP and ship no PNG. Qt decodes it only when its
+                    // webp image-format plugin happens to be installed; libwebp
+                    // is the dependency we control. .copy() detaches the QImage
+                    // from the temporary buffer.
+                    std::vector<uint8_t> rgba;
+                    int ww = 0, hh = 0;
+                    if (av::webp_decode_rgba(image.data.data(), image.data.size(), rgba, ww, hh) && !rgba.empty())
+                        decoded = QImage(rgba.data(), ww, hh, ww * 4, QImage::Format_RGBA8888).copy();
+                }
                 if (!decoded.isNull()) m_import_textures[i] = upload_image(decoded);
             }
         }
@@ -2959,7 +3002,7 @@ bool Viewport3DWidget::load_model(const std::string& model_path) {
         m_model.center_y = (mn[1] + mx[1]) * 0.5f;
         m_model.center_z = (mn[2] + mx[2]) * 0.5f;
         const float dx = mx[0] - mn[0], dy = mx[1] - mn[1], dz = mx[2] - mn[2];
-        m_model.radius = std::max(10.0f, 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz));
+        m_model.radius = std::max(0.1f, 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz));
     }
 
     clear_mesh_gpu();
@@ -2973,13 +3016,13 @@ bool Viewport3DWidget::load_model(const std::string& model_path) {
     m_has_model = true;
     m_has_scene = false;
     m_scene_ready = false;
-    m_scene_extent = std::max(400.0f, m_model.radius * 6.0f);
+    m_scene_extent = std::max(10.0f, m_model.radius * 6.0f);
 
     // Frame camera to model bounds.
     m_cam_target[0] = m_model.center_x;
     m_cam_target[1] = m_model.center_y;
     m_cam_target[2] = m_model.center_z;
-    m_cam_dist = std::max(20.0f, m_model.radius * 2.5f);
+    m_cam_dist = std::max(0.1f, m_model.radius * 2.5f);
 
     emit modelLoaded(QString::fromStdString(file.filename().string()),
                      static_cast<int>(m_model.meshes.size()),
@@ -3941,7 +3984,13 @@ void Viewport3DWidget::reset_camera() {
     update();
 }
 
-void Viewport3DWidget::set_frame(float frame) { m_frame = std::max(0.0f, frame); update(); }
+void Viewport3DWidget::set_frame(float frame) {
+    m_frame = std::max(0.0f, frame);
+    if (m_has_glb) {
+        m_glb_model.update_animation(m_frame / 30.0f);
+    }
+    update();
+}
 void Viewport3DWidget::set_playing(bool) {}
 void Viewport3DWidget::set_selected_object(int index) {
     // Picking another object mid-session commits the mesh edit first (the
@@ -3955,7 +4004,40 @@ void Viewport3DWidget::set_selected_object(int index) {
     m_selected_scene_object = index;
     update();
 }
-int Viewport3DWidget::frame_count() const { return std::max(1, m_model.num_frames); }
+int Viewport3DWidget::frame_count() const {
+    if (m_has_glb) {
+        float dur = m_glb_model.current_animation_duration();
+        return std::max(1, static_cast<int>(std::round(dur * 30.0f)) + 1);
+    }
+    return std::max(1, m_model.num_frames);
+}
+
+void Viewport3DWidget::set_animation_clip(int clip_index) {
+    if (m_has_glb) {
+        m_glb_model.set_active_animation(clip_index);
+        m_frame = 0.0f;
+        m_glb_model.update_animation(0.0f);
+        update();
+    }
+}
+
+QStringList Viewport3DWidget::animation_clips() const {
+    QStringList list;
+    if (m_has_glb) {
+        const auto& anims = m_glb_model.animations();
+        for (const auto& a : anims) {
+            list.append(QString::fromStdString(a.name.empty() ? "Clip" : a.name));
+        }
+    }
+    return list;
+}
+
+int Viewport3DWidget::active_animation_clip() const {
+    if (m_has_glb) {
+        return m_glb_model.active_animation();
+    }
+    return 0;
+}
 
 // ── Camera dynamics (asset_viewer.cpp-grade feel, no ImGui) ────────────────
 // Orbit/pan carry release velocity with exponential damping; zoom is
@@ -4496,32 +4578,35 @@ void Viewport3DWidget::wheelEvent(QWheelEvent* event) {
     // a near-plane-tied floor so the camera can never dolly through the focus.
     const float factor = std::pow(0.94f, delta_y / 120.0f * m_cam_zoom_speed);
     const float old_dist = m_cam_dist;
-    const float min_dist = std::max(2.0f, m_cam_dist * 0.004f);
-    const float max_dist = std::max(5000.0f, m_scene_extent * 3.0f);
+    const float min_dist = std::max(0.005f, m_cam_dist * 0.001f);
+    const float max_dist = std::max(100000.0f, m_scene_extent * 10.0f);
     const float new_dist = std::clamp(old_dist * factor, min_dist, max_dist);
     const float delta_dist = old_dist - new_dist;
 
-    // Keep the world point under the mouse cursor stationary.
-    const float w = static_cast<float>(std::max(1, width()));
-    const float h = static_cast<float>(std::max(1, height()));
-    const QPointF mouse_pos = event->position();
-    const float ndc_x = (2.0f * static_cast<float>(mouse_pos.x()) / w) - 1.0f;
-    const float ndc_y = 1.0f - (2.0f * static_cast<float>(mouse_pos.y()) / h);
-    constexpr float pi = 3.14159265f;
-    constexpr float fov = 45.0f * (pi / 180.0f);
-    const float f = 1.0f / std::tan(fov * 0.5f);
-    const float aspect = w / h;
-    const float vx = (ndc_x * aspect) / f;
-    const float vy = ndc_y / f;
-    const float rad_pitch = m_cam_pitch * (pi / 180.0f);
-    const float rad_yaw   = m_cam_yaw * (pi / 180.0f);
-    const float rx = std::cos(rad_yaw), ry = 0.0f, rz = -std::sin(rad_yaw);
-    const float ux = -std::sin(rad_pitch) * std::sin(rad_yaw);
-    const float uy =  std::cos(rad_pitch);
-    const float uz = -std::sin(rad_pitch) * std::cos(rad_yaw);
-    m_cam_target[0] += delta_dist * (vx * rx + vy * ux);
-    m_cam_target[1] += delta_dist * (vx * ry + vy * uy);
-    m_cam_target[2] += delta_dist * (vx * rz + vy * uz);
+    // Keep the world point under the mouse cursor stationary for scene mode.
+    // In model viewer mode (single model inspection), keep the focus centered.
+    if (!m_has_model && !m_has_glb) {
+        const float w = static_cast<float>(std::max(1, width()));
+        const float h = static_cast<float>(std::max(1, height()));
+        const QPointF mouse_pos = event->position();
+        const float ndc_x = (2.0f * static_cast<float>(mouse_pos.x()) / w) - 1.0f;
+        const float ndc_y = 1.0f - (2.0f * static_cast<float>(mouse_pos.y()) / h);
+        constexpr float pi = 3.14159265f;
+        constexpr float fov = 45.0f * (pi / 180.0f);
+        const float f = 1.0f / std::tan(fov * 0.5f);
+        const float aspect = w / h;
+        const float vx = (ndc_x * aspect) / f;
+        const float vy = ndc_y / f;
+        const float rad_pitch = m_cam_pitch * (pi / 180.0f);
+        const float rad_yaw   = m_cam_yaw * (pi / 180.0f);
+        const float rx = std::cos(rad_yaw), ry = 0.0f, rz = -std::sin(rad_yaw);
+        const float ux = -std::sin(rad_pitch) * std::sin(rad_yaw);
+        const float uy =  std::cos(rad_pitch);
+        const float uz = -std::sin(rad_pitch) * std::cos(rad_yaw);
+        m_cam_target[0] += delta_dist * (vx * rx + vy * ux);
+        m_cam_target[1] += delta_dist * (vx * ry + vy * uy);
+        m_cam_target[2] += delta_dist * (vx * rz + vy * uz);
+    }
 
     m_cam_dist = new_dist;
     update();
@@ -4677,6 +4762,18 @@ void Viewport3DWidget::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_F) {
         if (m_selected_scene_object >= 0 && m_selected_scene_object < static_cast<int>(m_scene.objects.size())) {
             focus_object(m_selected_scene_object);
+        } else if (m_has_model) {
+            m_cam_target[0] = m_model.center_x;
+            m_cam_target[1] = m_model.center_y;
+            m_cam_target[2] = m_model.center_z;
+            m_cam_dist = std::max(0.1f, m_model.radius * 2.5f);
+            update();
+        } else if (m_has_glb) {
+            m_cam_target[0] = m_glb_model.center().x();
+            m_cam_target[1] = m_glb_model.center().y();
+            m_cam_target[2] = m_glb_model.center().z();
+            m_cam_dist = std::max(0.1f, m_glb_model.radius() * 2.5f);
+            update();
         } else {
             reset_camera();
         }
@@ -5616,53 +5713,158 @@ bool Viewport3DWidget::mesh_ray_object_plane(const av::SceneObject& obj, const f
     return true;
 }
 
-// Import the polygon + generator params from the object. The authoritative
-// source is the GroundPolygonComponent (payload 110) parsed directly from the
-// component bytes — scene_loader never fills ground_polygon_points — with the
-// embedded ground-mesh vertices as the fallback. Textures follow the mesh
-// field mapping (8=SurfaceMesh→top, 9=FrontMesh→side, 6=Mesh→base).
+// Import an existing GroundMesh object's polygon into the editor.
+// Authoritatively extracts TextureMapping, GroundMeshGenerator parameters
+// (surface width, random seed, hat offsets), Min/Max depth, and component IDs
+// to prevent metadata loss and save corruption on apply.
 void Viewport3DWidget::mesh_import(int idx) {
     m_mesh_points.clear();
     if (idx < 0 || idx >= (int)m_scene.objects.size()) return;
     const av::SceneObject& obj = m_scene.objects[idx];
     float min_depth = -45.0f, max_depth = 45.0f;
+    bool have_depth = false;
 
     const auto& comps = obj.components.empty() ? obj.resolved_components : obj.components;
+
+    boulder::GroundComponentIds target_ids;
+    uint32_t surface_tm_id = 0, front_tm_id = 0;
+    float surface_width = 80.0f;
+    float hat_height = 25.0f;
+    float hat_offset_1 = 5.0f;
+    float hat_offset_2 = 5.0f;
+    uint32_t random_seed = 1291618994u;
+
+    // Pass 1: Extract GroundPolygon, GroundMesh, GroundMeshGenerator, CollisionShape
     for (const auto& comp : comps) {
-        if (comp.payload_field != 110 && comp.type_name != "GroundPolygon") continue;
-        try {
-            proto::Reader wrapper(comp.raw_data);
-            proto::Field f;
-            while (wrapper.read_field(f)) {
-                if (f.field_number != 110 || f.wire_type != proto::WIRE_LEN) continue;
-                proto::Reader gpc(f.bytes_val);
-                proto::Field g;
-                while (gpc.read_field(g)) {
-                    if (g.field_number == 4 && g.wire_type == proto::WIRE_I32) {
-                        min_depth = g.float_val; continue;
-                    } else if (g.field_number == 5 && g.wire_type == proto::WIRE_I32) {
-                        max_depth = g.float_val; continue;
-                    } else if (g.field_number != 2 || g.wire_type != proto::WIRE_LEN) {
-                        continue;
-                    }
-                    proto::Reader poly(g.bytes_val);
-                    proto::Field p;
-                    while (poly.read_field(p)) {
-                        if (p.field_number != 1 || p.wire_type != proto::WIRE_LEN) continue;  // Vertex
-                        proto::Reader vec2(p.bytes_val);
-                        proto::Field v;
-                        float x = 0, y = 0;
-                        while (vec2.read_field(v)) {
-                            if (v.field_number == 1) x = v.float_val;
-                            else if (v.field_number == 2) y = v.float_val;
+        const int payload = comp.payload_field;
+        // GroundPolygon (110)
+        if (payload == 110 || comp.type_name == "GroundPolygon") {
+            if (comp.type_id > 0) target_ids.polygon_id = comp.type_id;
+            try {
+                proto::Reader wrapper(comp.raw_data);
+                proto::Field f;
+                while (wrapper.read_field(f)) {
+                    if (f.field_number != 110 || f.wire_type != proto::WIRE_LEN) continue;
+                    proto::Reader gpc(f.bytes_val);
+                    proto::Field g;
+                    while (gpc.read_field(g)) {
+                        if (g.field_number == 4 && g.wire_type == proto::WIRE_I32) {
+                            min_depth = g.float_val; have_depth = true; continue;
+                        } else if (g.field_number == 5 && g.wire_type == proto::WIRE_I32) {
+                            max_depth = g.float_val; have_depth = true; continue;
+                        } else if (g.field_number != 2 || g.wire_type != proto::WIRE_LEN) {
+                            continue;
                         }
-                        m_mesh_points.push_back({x, y});
+                        proto::Reader poly(g.bytes_val);
+                        proto::Field p;
+                        while (poly.read_field(p)) {
+                            if (p.field_number != 1 || p.wire_type != proto::WIRE_LEN) continue;  // Vertex
+                            proto::Reader vec2(p.bytes_val);
+                            proto::Field v;
+                            float x = 0, y = 0;
+                            while (vec2.read_field(v)) {
+                                if (v.field_number == 1) x = v.float_val;
+                                else if (v.field_number == 2) y = v.float_val;
+                            }
+                            m_mesh_points.push_back({x, y});
+                        }
                     }
                 }
-            }
-        } catch (...) {}
-        break;
+            } catch (...) {}
+        }
+        // GroundMesh (111)
+        else if (payload == 111 || comp.type_name == "GroundMesh") {
+            if (comp.type_id > 0) target_ids.mesh_id = comp.type_id;
+        }
+        // GroundMeshGenerator (112)
+        else if (payload == 112 || comp.type_name == "GroundMeshGenerator") {
+            if (comp.type_id > 0) target_ids.generator_id = comp.type_id;
+            try {
+                proto::Reader wrapper(comp.raw_data);
+                proto::Field f;
+                while (wrapper.read_field(f)) {
+                    if (f.field_number != 112 || f.wire_type != proto::WIRE_LEN) continue;
+                    proto::Reader ggc(f.bytes_val);
+                    proto::Field g;
+                    while (ggc.read_field(g)) {
+                        if (g.field_number == 3) front_tm_id = static_cast<uint32_t>(g.varint_val);
+                        else if (g.field_number == 4) surface_tm_id = static_cast<uint32_t>(g.varint_val);
+                        else if (g.field_number == 5) random_seed = static_cast<uint32_t>(g.varint_val);
+                        else if (g.field_number == 8 && g.wire_type == proto::WIRE_I32) surface_width = g.float_val;
+                        else if (g.field_number == 9 && g.wire_type == proto::WIRE_I32) hat_height = g.float_val;
+                        else if (g.field_number == 10 && g.wire_type == proto::WIRE_I32) hat_offset_1 = g.float_val;
+                        else if (g.field_number == 11 && g.wire_type == proto::WIRE_I32) hat_offset_2 = g.float_val;
+                    }
+                }
+            } catch (...) {}
+        }
+        // CollisionShape (120/121)
+        else if (payload == 120 || payload == 121 || comp.type_name == "CollisionShape") {
+            if (comp.type_id > 0) target_ids.collision_id = comp.type_id;
+        }
     }
+
+    if (surface_tm_id > 0) target_ids.tm_surface_id = static_cast<int>(surface_tm_id);
+    if (front_tm_id > 0) target_ids.tm_front_id = static_cast<int>(front_tm_id);
+
+    // Pass 2: Extract TextureMapping (113) matching surface_tm_id and front_tm_id
+    std::string top_tex_from_tm, front_tex_from_tm;
+    float scale_from_tm = 250.0f;
+    for (const auto& comp : comps) {
+        const int payload = comp.payload_field;
+        if (payload == 113 || comp.type_name == "TextureMapping") {
+            const uint32_t tm_id = static_cast<uint32_t>(comp.type_id);
+            std::string tname;
+            float tscale = 250.0f;
+            try {
+                proto::Reader wrapper(comp.raw_data);
+                proto::Field f;
+                while (wrapper.read_field(f)) {
+                    if (f.field_number != 113 || f.wire_type != proto::WIRE_LEN) continue;
+                    proto::Reader tmc(f.bytes_val);
+                    proto::Field g;
+                    while (tmc.read_field(g)) {
+                        if (g.field_number == 1 && g.wire_type == proto::WIRE_LEN) tname = g.bytes_val;
+                        else if (g.field_number == 2 && g.wire_type == proto::WIRE_I32) tscale = g.float_val;
+                    }
+                }
+            } catch (...) {}
+            if (tm_id == surface_tm_id || (surface_tm_id == 0 && top_tex_from_tm.empty())) {
+                top_tex_from_tm = tname;
+                scale_from_tm = tscale;
+                if (comp.type_id > 0) target_ids.tm_surface_id = comp.type_id;
+            } else if (tm_id == front_tm_id || (front_tm_id == 0 && front_tex_from_tm.empty())) {
+                front_tex_from_tm = tname;
+                if (comp.type_id > 0) target_ids.tm_front_id = comp.type_id;
+            }
+        }
+    }
+
+    std::string top_tex = top_tex_from_tm;
+    std::string bottom_tex = front_tex_from_tm;
+
+    // Fallback to mesh textures if TextureMapping was not populated
+    if (top_tex.empty() || bottom_tex.empty()) {
+        const size_t n = std::min({obj.ground_meshes.size(), obj.ground_mesh_textures.size(),
+                                   obj.ground_mesh_fields.size()});
+        for (size_t i = 0; i < n; ++i) {
+            const std::string& tex = obj.ground_mesh_textures[i];
+            if (tex.empty()) continue;
+            const int src_field = obj.ground_mesh_fields[i];
+            if (src_field == 9) {
+                if (bottom_tex.empty()) bottom_tex = tex;
+            } else if (src_field == 8) {
+                if (top_tex.empty()) top_tex = tex;
+                else if (bottom_tex.empty()) bottom_tex = tex;
+            } else if (src_field == 6 && bottom_tex.empty()) {
+                bottom_tex = tex;
+            }
+        }
+    }
+    if (top_tex.empty()) top_tex = bottom_tex;
+    if (bottom_tex.empty()) bottom_tex = top_tex;
+    if (top_tex.empty()) top_tex = "fire_grass";
+    if (bottom_tex.empty()) bottom_tex = "graveyard_ground";
 
     // Fallback: unique XY positions from the embedded ground meshes.
     if (m_mesh_points.size() < 3) {
@@ -5679,33 +5881,29 @@ void Viewport3DWidget::mesh_import(int idx) {
     }
     if (m_mesh_points.size() < 3) return;
 
+    if (!have_depth) {
+        float dmin = 1e30f, dmax = -1e30f;
+        for (const auto& pm : obj.ground_meshes) {
+            dmin = std::min(dmin, pm.min_z); dmax = std::max(dmax, pm.max_z);
+        }
+        if (dmin < 1e29f && dmax > -1e29f) { min_depth = dmin; max_depth = dmax; }
+    }
+
     m_mesh_params = boulder::GroundMesh{};
     m_mesh_params.polygon = m_mesh_points;
     m_mesh_params.min_depth = min_depth;
     m_mesh_params.max_depth = max_depth;
     m_mesh_params.z = obj.pos_z;
+    m_mesh_params.top_texture = top_tex;
+    m_mesh_params.bottom_texture = bottom_tex;
+    m_mesh_params.surface_width = surface_width;
+    m_mesh_params.hat_height = hat_height;
+    m_mesh_params.hat_width_offset_1 = hat_offset_1;
+    m_mesh_params.hat_width_offset_2 = hat_offset_2;
+    m_mesh_params.texture_scale = scale_from_tm;
+    m_mesh_params.random_seed = random_seed;
+    m_mesh_ids = target_ids;
     m_mesh_z = obj.pos_z;
-
-    const size_t n = std::min({obj.ground_meshes.size(), obj.ground_mesh_textures.size(),
-                               obj.ground_mesh_fields.size()});
-    std::string top_tex, bottom_tex;
-    for (size_t i = 0; i < n; ++i) {
-        const std::string& tex = obj.ground_mesh_textures[i];
-        if (tex.empty()) continue;
-        const int src_field = obj.ground_mesh_fields[i];
-        if (src_field == 9) {
-            if (bottom_tex.empty()) bottom_tex = tex;
-        } else if (src_field == 8) {
-            if (top_tex.empty()) top_tex = tex;
-            else if (bottom_tex.empty()) bottom_tex = tex;
-        } else if (src_field == 6 && bottom_tex.empty()) {
-            bottom_tex = tex;
-        }
-    }
-    if (top_tex.empty()) top_tex = bottom_tex;
-    if (bottom_tex.empty()) bottom_tex = top_tex;
-    m_mesh_params.top_texture = top_tex.empty() ? "fire_grass" : top_tex;
-    m_mesh_params.bottom_texture = bottom_tex.empty() ? "graveyard_ground" : bottom_tex;
 }
 
 void Viewport3DWidget::begin_mesh_edit() {
@@ -5857,6 +6055,7 @@ bool Viewport3DWidget::mesh_apply() {
     if (parsed.objects.empty()) return false;
 
     av::SceneObject& target = m_scene.objects[m_mesh_edit_object];
+    const bool was_dim = target.is_dimension_object;
     av::SceneObject fresh = std::move(parsed.objects[0]);
 
     const auto is_ground_comp = [](const av::SceneComponent& c) {
@@ -5873,6 +6072,30 @@ bool Viewport3DWidget::mesh_apply() {
     target.components = std::move(fresh.components);
     for (auto& c : preserved) target.components.push_back(std::move(c));
 
+    if (was_dim) {
+        bool has_dim = false;
+        for (const auto& c : target.components) {
+            if (c.type_name == "DimensionObject" || c.payload_field == 253) {
+                has_dim = true;
+                break;
+            }
+        }
+        if (!has_dim) {
+            int instance_id = 1;
+            for (const auto& c : target.components)
+                instance_id = std::max(instance_id, c.type_id + 1);
+            proto::Writer w;
+            w.write_string_field(1, "DimensionObject");
+            w.write_varint_field(2, static_cast<uint64_t>(instance_id));
+            av::SceneComponent comp;
+            comp.type_name = "DimensionObject";
+            comp.type_id = instance_id;
+            comp.raw_data = w.to_string();
+            target.components.push_back(std::move(comp));
+        }
+    }
+
+    target.resolved_components = target.components;
     target.pos_z = (float)m_mesh_z;
     av::scene_refresh(m_scene);
     // The re-parsed geometry (SurfaceMesh / FrontMesh / hats) wins over what

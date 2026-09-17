@@ -16,10 +16,14 @@ constexpr Stage kUpdate = Stage::Parsed | Stage::Instantiated | Stage::Updated;
 constexpr Stage kRender = Stage::Parsed | Stage::Instantiated | Stage::Rendered;
 constexpr Stage kBoth   = Stage::Parsed | Stage::Instantiated | Stage::Updated | Stage::Rendered;
 
-// Recovered from the `Component` schema in scene_schemas.cpp (payload tag >> 3).
-// Keep payload_field verbatim — the gaps are the game's own numbering.
-// `recover_dir` is the matching directory under
-// OpenSwordigo/arm64_12/functions/Caver/ holding the per-function decompilation.
+// Recovered from the binary itself: every payload slot is the value of
+// `Caver::Proto::<Class>::kExtensionFieldNumber` in libswordigo.so, read by
+// tools/extract_component_schema.py (v1.4.13, armeabi-v7a). Keep payload_tag
+// verbatim — the gaps are the game's own numbering, and several classes share a
+// slot while others have none at all.
+//
+// The per-function decompilation for each class is under
+// OpenSwordigo/arm32_13/functions/Caver/<Class>/.
 const ComponentType kTypes[] = {
     {"SpriteComponent",                         "Sprite",                         802, kRender, false},
     {"ModelComponent",                          "Model",                          810, kBoth,   false},
@@ -98,7 +102,23 @@ const ComponentType kTypes[] = {
     {"ProjectileControllerComponent",           "ProjectileController",          4442, kParsed, true},
     {"MagicBombComponent",                      "MagicBomb",                     4450, kParsed, true},
     {"MagicHookshotComponent",                  "MagicHookshot",                 4458, kParsed, true},
-    {"SpellComponent",                          "Spell",                         4466, kParsed, true},
+    {"SpellComponent",                          "Spell",                          4466, kParsed, true},
+    {"DimensionObjectComponent",                 "DimensionObject",                4474, kParsed, true},
+    {"DimensionSpellComponent",                  "DimensionSpell",                 4482, kParsed, true},
+    {"ParticleFieldComponent",                   "ParticleField",                  2058, kRender, false},
+
+    // Runtime-only classes: registered in Caver::DefaultComponents::RegisterAll
+    // but with no protobuf extension, so an .scl holds nothing but ClassName +
+    // Identifier. Transform is the object's own transform slot, the *Controller
+    // variants are scripted drivers, and the rest are engine-generated effects.
+    {"TransformComponent",                     "Transform",                        0, kParsed, false, false},
+    {"TransformControllerComponent",            "TransformController",               0, kParsed, true,  false},
+    {"MagicParticleEmitterComponent",           "MagicParticleEmitter",              0, kRender, false, false},
+    {"ProjectileMonsterControllerComponent",    "ProjectileMonsterController",       0, kParsed, true,  false},
+    {"RotatingBackgroundComponent",             "RotatingBackground",                0, kRender, false, false},
+    {"ShatterComponent",                       "ShatterComponent",                   0, kRender, false, false},
+    {"TextBubbleComponent",                    "TextBubble",                        0, kRender, false, false},
+    {"UtilityShapeComponent",                  "UtilityShape",                    962, kRender, false},
 };
 
 // One payload field can carry more than one ClassName string in shipping data:
@@ -106,11 +126,16 @@ const ComponentType kTypes[] = {
 // corpus uses UtilityShape for collision helpers, Shape for pure geometry).
 struct Alias { const char* short_name; const char* class_name; };
 const Alias kAliases[] = {
-    {"UtilityShape", "ShapeComponent"},
+    {"UtilityShape", "UtilityShapeComponent"},
     {"CollisionShape", "CollisionShapeComponent"},
     {"Program", "ProgramComponent"},
     {"Glow", "SimpleGlowComponent"},
     {"TextureMapping", "TextureMappingComponent"},
+    // Shipping data writes the spell payload's ClassName as "DimensionSpell" but
+    // sets slot 558 (the SpellComponent base); the dimension-specific slot 560 is
+    // usually empty. Resolve it to the class that owns the write.
+    {"DimensionSpell", "SpellComponent"},
+    {"Spell", "SpellComponent"},
 };
 
 constexpr size_t kTypeCount = sizeof(kTypes) / sizeof(kTypes[0]);
@@ -150,10 +175,24 @@ const ComponentType* component_type_by_short(const std::string& short_name) {
     return nullptr;
 }
 
-const ComponentType* component_type_by_field(uint32_t payload_field) {
+const ComponentType* component_type_by_tag(uint32_t payload_tag) {
     for (const auto& t : kTypes)
-        if (payload_field == t.payload_field) return &t;
+        if (payload_tag && payload_tag == t.payload_tag) return &t;
     return nullptr;
+}
+
+const ComponentType* component_type_by_field(uint32_t field_number) {
+    if (!field_number) return nullptr;
+    for (const auto& t : kTypes)
+        if (t.payload_tag && (t.payload_tag >> 3) == field_number) return &t;
+    return nullptr;
+}
+
+std::vector<const ComponentType*> component_types_for_field(uint32_t field_number) {
+    std::vector<const ComponentType*> rows;
+    for (const auto& t : kTypes)
+        if (t.payload_tag && (t.payload_tag >> 3) == field_number) rows.push_back(&t);
+    return rows;
 }
 
 CoverageReport coverage() {

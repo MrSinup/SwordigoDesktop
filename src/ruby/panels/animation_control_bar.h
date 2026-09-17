@@ -18,21 +18,25 @@ public:
     explicit AnimationControlBar(QWidget* parent = nullptr);
     void set_frame_count(int frames);
     void set_frame(float frame);
+    void set_clips(const QStringList& clip_names, int active_index = 0);
 
 signals:
     void frameChanged(float frame);
     void playingChanged(bool playing);
+    void clipChanged(int clip_index);
 
 private slots:
     void toggle_playback();
     void stop();
     void advance();
     void update_fps(const QString& value);
+    void on_clip_selected(int index);
 
 private:
     void refresh_label();
 
     QSlider* m_timeline = nullptr;
+    QComboBox* m_clip_box = nullptr;
     QComboBox* m_fps = nullptr;
     QLabel* m_frame_label = nullptr;
     QTimer* m_timer = nullptr;

@@ -21,6 +21,8 @@
 #include <QStyle>
 #include <QTimer>
 #include <QDir>
+#include <QToolButton>
+#include <QHBoxLayout>
 #include <functional>
 #include <algorithm>
 
@@ -267,7 +269,8 @@ QIcon get_file_icon(const QString& ext) {
         return get_pod_icon();
     if (ext == "scene" || ext == "scn")
         return get_scene_icon();
-    if (ext == "scl")
+    if (ext == "scl" || ext == "gdata" || ext == "gopt" || ext == "gplayer" ||
+        ext == "gstate" || ext == "scmap" || ext == "sounds" || ext == "atlas" || ext == "fr")
         return get_scl_icon();
     if (ext == "pvr" || ext == "tex")
         return get_pvr_icon();
@@ -312,6 +315,14 @@ public:
             if (ext == "lua") return QStringLiteral("Lua Script");
             if (ext == "scl") return QStringLiteral("Object Library");
             if (ext == "scene" || ext == "scn") return QStringLiteral("Scene");
+            if (ext == "gdata") return QStringLiteral("Game Data");
+            if (ext == "gopt") return QStringLiteral("Game Options");
+            if (ext == "gplayer") return QStringLiteral("Player Profile");
+            if (ext == "gstate") return QStringLiteral("Game State");
+            if (ext == "scmap") return QStringLiteral("Scene Map");
+            if (ext == "sounds") return QStringLiteral("Sound Library");
+            if (ext == "atlas") return QStringLiteral("Texture Atlas");
+            if (ext == "fr") return QStringLiteral("FileRift File");
             if (ext == "swdm" || ext == "gmesh") return QStringLiteral("Mesh Data");
             if (ext == "pvr.png" || ext == "png" || ext == "jpg" || ext == "jpeg") return QStringLiteral("Texture Image");
             if (ext == "rbm") return QStringLiteral("RubyMesh");
@@ -348,6 +359,51 @@ AssetBrowserPanel::AssetBrowserPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(4);
+
+    // ── Navigation Toolbar & Address Bar ──────────────────────────────
+    auto* nav_layout = new QHBoxLayout();
+    nav_layout->setContentsMargins(0, 0, 0, 0);
+    nav_layout->setSpacing(2);
+
+    m_btn_back = new QToolButton(this);
+    m_btn_back->setText("◄");
+    m_btn_back->setToolTip("Back (Alt+Left)");
+    m_btn_back->setEnabled(false);
+    m_btn_back->setFixedSize(24, 24);
+    connect(m_btn_back, &QToolButton::clicked, this, &AssetBrowserPanel::navigate_back);
+    nav_layout->addWidget(m_btn_back);
+
+    m_btn_fwd = new QToolButton(this);
+    m_btn_fwd->setText("►");
+    m_btn_fwd->setToolTip("Forward (Alt+Right)");
+    m_btn_fwd->setEnabled(false);
+    m_btn_fwd->setFixedSize(24, 24);
+    connect(m_btn_fwd, &QToolButton::clicked, this, &AssetBrowserPanel::navigate_forward);
+    nav_layout->addWidget(m_btn_fwd);
+
+    m_btn_up = new QToolButton(this);
+    m_btn_up->setText("▲");
+    m_btn_up->setToolTip("Up to Parent Folder (Alt+Up)");
+    m_btn_up->setEnabled(true);
+    m_btn_up->setFixedSize(24, 24);
+    connect(m_btn_up, &QToolButton::clicked, this, &AssetBrowserPanel::navigate_up);
+    nav_layout->addWidget(m_btn_up);
+
+    m_btn_home = new QToolButton(this);
+    m_btn_home->setText("⌂");
+    m_btn_home->setToolTip("Jump to Project / Asset Home");
+    m_btn_home->setEnabled(true);
+    m_btn_home->setFixedSize(24, 24);
+    connect(m_btn_home, &QToolButton::clicked, this, &AssetBrowserPanel::navigate_home);
+    nav_layout->addWidget(m_btn_home);
+
+    m_path_bar = new QLineEdit(this);
+    m_path_bar->setPlaceholderText("Current Directory Path...");
+    m_path_bar->setStyleSheet(QStringLiteral("QLineEdit { padding: 2px 4px; font-size: 11px; }"));
+    connect(m_path_bar, &QLineEdit::returnPressed, this, &AssetBrowserPanel::onPathBarReturnPressed);
+    nav_layout->addWidget(m_path_bar, 1);
+
+    layout->addLayout(nav_layout);
 
     m_search_box = new QLineEdit(this);
     m_search_box->setPlaceholderText("Filter files (e.g. *.scl, pod, main)...");
@@ -432,9 +488,110 @@ void AssetBrowserPanel::update_column_widths() {
 }
 
 void AssetBrowserPanel::set_root_path(const QString& path) {
-    m_file_model->setRootPath(path);
-    m_tree_view->setRootIndex(m_file_model->index(path));
+    if (m_home_path.isEmpty() && !path.isEmpty()) {
+        m_home_path = QDir::cleanPath(path);
+    }
+    navigate_to(path, true);
+}
+
+void AssetBrowserPanel::navigate_to(const QString& raw_path, bool record_history) {
+    if (raw_path.isEmpty()) return;
+    const QString clean = QDir::cleanPath(raw_path);
+    const QString current = m_file_model ? m_file_model->rootPath() : QString();
+
+    if (record_history && !current.isEmpty() && current != clean) {
+        m_history_back.append(current);
+        m_history_forward.clear();
+    }
+
+    if (m_file_model) {
+        m_file_model->setRootPath(clean);
+        m_tree_view->setRootIndex(m_file_model->index(clean));
+    }
+    if (m_path_bar && m_path_bar->text() != clean) {
+        m_path_bar->setText(clean);
+    }
+
+    update_nav_buttons_state();
     rewatch_root();
+    emit directoryNavigated(clean);
+}
+
+void AssetBrowserPanel::navigate_back() {
+    if (m_history_back.isEmpty()) return;
+    const QString current = m_file_model ? m_file_model->rootPath() : QString();
+    const QString target = m_history_back.takeLast();
+    if (!current.isEmpty()) {
+        m_history_forward.append(current);
+    }
+    navigate_to(target, false);
+}
+
+void AssetBrowserPanel::navigate_forward() {
+    if (m_history_forward.isEmpty()) return;
+    const QString current = m_file_model ? m_file_model->rootPath() : QString();
+    const QString target = m_history_forward.takeLast();
+    if (!current.isEmpty()) {
+        m_history_back.append(current);
+    }
+    navigate_to(target, false);
+}
+
+void AssetBrowserPanel::navigate_up() {
+    const QString current = m_file_model ? m_file_model->rootPath() : QString();
+    if (current.isEmpty()) return;
+    QDir dir(current);
+    if (dir.cdUp()) {
+        navigate_to(dir.absolutePath(), true);
+    }
+}
+
+void AssetBrowserPanel::navigate_home() {
+    if (!m_home_path.isEmpty() && QFileInfo::exists(m_home_path)) {
+        navigate_to(m_home_path, true);
+    }
+}
+
+void AssetBrowserPanel::onPathBarReturnPressed() {
+    if (!m_path_bar) return;
+    const QString text = m_path_bar->text().trimmed();
+    if (text.isEmpty()) return;
+    QFileInfo fi(text);
+    if (fi.exists() && fi.isDir()) {
+        navigate_to(fi.absoluteFilePath(), true);
+    } else if (fi.exists() && fi.isFile()) {
+        navigate_to(fi.absolutePath(), true);
+        select_and_reveal_file(fi.absoluteFilePath());
+    }
+}
+
+void AssetBrowserPanel::update_nav_buttons_state() {
+    if (m_btn_back) m_btn_back->setEnabled(!m_history_back.isEmpty());
+    if (m_btn_fwd) m_btn_fwd->setEnabled(!m_history_forward.isEmpty());
+    if (m_btn_up) {
+        const QString current = m_file_model ? m_file_model->rootPath() : QString();
+        QDir d(current);
+        m_btn_up->setEnabled(d.cdUp());
+    }
+}
+
+void AssetBrowserPanel::select_and_reveal_file(const QString& file_path) {
+    if (file_path.isEmpty() || !m_file_model) return;
+    const QString clean = QDir::cleanPath(file_path);
+    const QFileInfo fi(clean);
+    const QString parent_dir = fi.absolutePath();
+
+    // If file is not inside currently viewed root, navigate to its enclosing folder
+    const QString current_root = m_file_model->rootPath();
+    if (!clean.startsWith(current_root) || current_root.isEmpty()) {
+        navigate_to(parent_dir, true);
+    }
+
+    QModelIndex idx = m_file_model->index(clean);
+    if (idx.isValid()) {
+        m_tree_view->setCurrentIndex(idx);
+        m_tree_view->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+    }
 }
 
 // Re-point the OS watcher at the model root. If the root does not exist yet
@@ -503,6 +660,8 @@ void AssetBrowserPanel::refresh_now() {
     if (root.isEmpty()) return;
     m_file_model->setRootPath(root);
     m_tree_view->setRootIndex(m_file_model->index(root));
+    if (m_path_bar) m_path_bar->setText(root);
+    update_nav_buttons_state();
     rewatch_root();
 }
 
@@ -517,7 +676,11 @@ QString AssetBrowserPanel::current_selected_folder() const {
 }
 
 void AssetBrowserPanel::onItemDoubleClicked(const QModelIndex& index) {
-    if (!m_file_model->isDir(index)) {
+    if (m_file_model->isDir(index)) {
+        // Diving into double-clicked directory
+        const QString target_dir = m_file_model->filePath(index);
+        navigate_to(target_dir, true);
+    } else {
         emit fileSelected(m_file_model->filePath(index));
     }
 }

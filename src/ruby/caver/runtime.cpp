@@ -70,6 +70,18 @@ bool RuntimeComponent::is(const std::string& cls) const {
     return false;
 }
 
+const RuntimePayload* RuntimeComponent::payload_for(uint32_t f) const {
+    for (const auto& payload : payloads)
+        if (payload.field == f) return &payload;
+    return nullptr;
+}
+
+const RuntimePayload* RuntimeComponent::primary_payload() const {
+    for (const auto& payload : payloads)
+        if (payload.is_primary) return &payload;
+    return payloads.empty() ? nullptr : &payloads.front();
+}
+
 const RuntimeField* RuntimeComponent::field(const std::string& name) const {
     for (const auto& f : fields)
         if (f.name == name) return &f;
@@ -265,15 +277,45 @@ void RuntimeScene::build_object(const av::SceneObject& src, size_t index) {
     objects_.push_back(std::move(object));
 }
 
+// Component fields 1-4 are ClassName / Identifier / Label / ParentComponentIdentifier;
+// everything from here up is a payload extension slot (Sprite=100, MonsterEntity=158 …).
+constexpr int kFirstPayloadField = 8;
+
+const av::SchemaClass* schema_for_class(const std::string& class_name) {
+    auto it = av::g_schemas.find(class_name);
+    return it == av::g_schemas.end() ? nullptr : &it->second;
+}
+
+// The schema class that owns a Component *slot* (field number), e.g. 120 ->
+// ShapeComponent, 158 -> MonsterEntityComponent. Several classes can share a
+// slot, in which case the first table row wins — that matches the .proto, where
+// one extension number has exactly one message type.
+std::string schema_class_for_payload_field(uint32_t field_number) {
+    if (const ComponentType* t = component_type_by_field(field_number)) return t->class_name;
+    // Not in the recovered table (a newer class): fall back on the Component
+    // schema itself, which names every payload slot the game knows about.
+    auto it = av::g_schemas.find("Component");
+    if (it != av::g_schemas.end()) {
+        auto f = it->second.fields.find((field_number << 3) | 2);
+        if (f != it->second.fields.end() && !f->second.class_name.empty())
+            return f->second.class_name;
+    }
+    return std::string();
+}
+
 void RuntimeScene::decode_component(const av::SceneComponent& src, RuntimeObject& owner) {
     RuntimeComponent component;
     component.class_name = src.type_name;
     component.raw = src.raw_data;
-    component.type = src.payload_field ? component_type_by_field(static_cast<uint32_t>(src.payload_field))
-                                       : component_type_by_short(src.type_name);
+    component.type = component_type_by_short(src.type_name);
 
-    const uint32_t payload_field = src.payload_field ? static_cast<uint32_t>(src.payload_field) : 0;
-
+    // Pass 1 — split the Component message into its ClassName, Identifier and
+    // every payload submessage. The payloads are a *set*: a CollisionShape
+    // writes slots 120 and 121, a MonsterEntity 152 and 158. The old code kept
+    // only the one slot named below, which threw away the other half of every
+    // such component (monster movement, collision friction, spell data …).
+    std::vector<uint32_t> payload_fields;
+    std::vector<std::pair<std::string, std::string>> handler_fields;
     try {
         proto::Reader reader(src.raw_data);
         proto::Field field;
@@ -283,27 +325,52 @@ void RuntimeScene::decode_component(const av::SceneComponent& src, RuntimeObject
                 else if (field.field_number == 4) component.parent_identifier = static_cast<int32_t>(field.varint_val);
                 continue;
             }
-            if (field.field_number == 1)      component.class_name = field.bytes_val;
-            else if (field.field_number == 3) component.label = field.bytes_val;
-            else if (payload_field && field.field_number == payload_field) component.payload = field.bytes_val;
+            if (field.field_number == 1) {
+                component.class_name = field.bytes_val;
+            } else if (field.field_number == 3) {
+                component.label = field.bytes_val;
+            } else if (field.field_number >= kFirstPayloadField) {
+                RuntimePayload payload;
+                payload.field = static_cast<uint32_t>(field.field_number);
+                payload.class_name = schema_class_for_payload_field(payload.field);
+                payload.type = component_type_by_field(payload.field);
+                payload.bytes = field.bytes_val;
+                component.payloads.push_back(std::move(payload));
+                payload_fields.push_back(static_cast<uint32_t>(field.field_number));
+            }
         }
     } catch (...) {
         warnings_.push_back("object '" + owner.identifier + "': malformed component bytes");
     }
 
-    // Decode the payload against the recovered schema so refs and program fields
-    // are named. Unknown fields stay in `fields` with an empty name.
-    const std::string schema_class = component.type ? component.type->class_name
-                                                    : src.type_name + "Component";
-    const av::SchemaClass* schema = nullptr;
-    {
-        auto it = av::g_schemas.find(schema_class);
-        if (it != av::g_schemas.end()) schema = &it->second;
-    }
+    // The ClassName identifies the component even when its own slot was not
+    // written (Transform, TransformController and friends have no slot at all),
+    // so it decides the primary payload rather than the slot order in the file.
+    if (const ComponentType* by_name = component_type_by_short(component.class_name))
+        component.type = by_name;
 
-    if (!component.payload.empty()) {
+    const uint32_t own_field = (component.type && component.type->payload_tag)
+                                   ? component.type->payload_tag >> 3
+                                   : (payload_fields.empty() ? 0 : payload_fields.front());
+    for (auto& payload : component.payloads) {
+        if (payload.field == own_field) { payload.is_primary = true; break; }
+    }
+    if (!component.payloads.empty() && !component.payload_for(own_field)) {
+        // ClassName's own slot is absent (usually an empty dimension/spell part):
+        // the first slot present is what the file actually carries.
+        component.payloads.front().is_primary = true;
+    }
+    if (const RuntimePayload* primary = component.primary_payload())
+        component.payload = primary->bytes;
+
+    // Pass 2 — decode every payload against its own schema, so a field's name is
+    // always resolved in the right message. Unknown fields stay in `fields` with
+    // an empty name and are never dropped.
+    for (const auto& payload : component.payloads) {
+        const av::SchemaClass* schema = schema_for_class(payload.class_name);
+        if (payload.bytes.empty()) continue;
         try {
-            proto::Reader reader(component.payload);
+            proto::Reader reader(payload.bytes);
             proto::Field field;
             while (reader.read_field(field)) {
                 RuntimeField decoded;
@@ -313,9 +380,17 @@ void RuntimeScene::decode_component(const av::SceneComponent& src, RuntimeObject
                 decoded.double_value = field.double_val;
                 decoded.float_value = field.float_val;
                 decoded.bytes_value = field.bytes_val;
+                decoded.payload_field = payload.field;
+                decoded.payload_class = payload.class_name;
                 if (schema) {
                     auto it = schema->fields.find(decoded.tag);
-                    if (it != schema->fields.end()) decoded.name = it->second.name;
+                    if (it != schema->fields.end()) {
+                        decoded.name = it->second.name;
+                        // Handler fields carry a nested Program message; remember
+                        // it so pass 3 can collect the script.
+                        if (it->second.class_name == "Program")
+                            handler_fields.emplace_back(decoded.name, decoded.bytes_value);
+                    }
                 }
                 if (is_reference_field(decoded.name, field.wire_type)) {
                     ComponentRef ref;
@@ -327,22 +402,17 @@ void RuntimeScene::decode_component(const av::SceneComponent& src, RuntimeObject
                 component.fields.push_back(std::move(decoded));
             }
         } catch (...) {
-            warnings_.push_back("object '" + owner.identifier + "': malformed " + schema_class + " payload");
+            warnings_.push_back("object '" + owner.identifier + "': malformed " +
+                                payload.class_name + " payload");
         }
     }
 
-    // Collect embedded Lua: ProgramComponent's `Program`, plus every handler
-    // field (OnKill / OnHurt / OnActivate / OnCollide / OnLoad / OnCast …).
-    for (const auto& decoded : component.fields) {
-        if (decoded.name.empty()) continue;
-        if (schema) {
-            auto it = schema->fields.find(decoded.tag);
-            if (it == schema->fields.end() || it->second.class_name != "Program") continue;
-        } else {
-            continue;
-        }
-        collect_program(owner, component, decoded.name, decoded.bytes_value);
-    }
+    // Pass 3 — collect embedded Lua: ProgramComponent's `Program`, plus every
+    // handler field (OnKill / OnHurt / OnActivate / OnCollide / OnLoad / OnCast
+    // …) found in ANY payload, which is what makes a MonsterEntity's OnKill
+    // discoverable even though it lives in the Entity-component slot.
+    for (const auto& handler : handler_fields)
+        collect_program(owner, component, handler.first, handler.second);
 
     // The object's own OnLoad program (SceneObject field 10) is handled by the
     // loader, not the component decode; nothing to do here.
@@ -369,6 +439,11 @@ void RuntimeScene::collect_program(RuntimeObject& owner, const RuntimeComponent&
 void RuntimeScene::resolve_references(RuntimeObject& object) {
     for (auto& component : object.components) {
         for (auto& ref : component.refs) {
+            // A Reference field written as 0 means "unset", not "points at slot 0":
+            // the serialiser emits every scalar field, including zero, so treating 0
+            // as a broken edge reports a dangling reference on almost every object
+            // in the game (ParentEmitterId 0, ModelBindingId 0, AnimationId 0 …).
+            if (ref.target == 0) { ref.resolved = false; continue; }
             ref.resolved = object.find(ref.target) != nullptr;
             if (!ref.resolved)
                 warnings_.push_back("object '" + object.identifier + "': " + component.class_name +

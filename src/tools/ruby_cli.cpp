@@ -101,23 +101,10 @@ static bool write_text(const std::string& path, const std::string& text) {
 
 // ─── Filetype detection (mirror FileRift: extension after last dot) ──────────
 
-static const std::set<std::string>& supported_types() {
-    static const std::set<std::string> types = {
-        "fr", "scene", "scl", "gdata", "gopt", "gplayer",
-        "gstate", "scmap", "sounds", "fnt", "atlas",
-    };
-    return types;
-}
-
 std::string filetype_for_path(const std::string& path) {
-    std::string lower = path;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-    size_t dot = lower.find_last_of('.');
-    if (dot == std::string::npos || dot + 1 >= lower.size()) return "fr";
-    std::string ext = lower.substr(dot + 1);
-    if (!supported_types().count(ext)) return "";
-    return ext;
+    const std::string detected = filerift::detect_filetype(path);
+    if (!detected.empty()) return detected;
+    return "fr";
 }
 
 // ─── Single file decode/recode (shared backend) ─────────────────────────────
@@ -711,7 +698,7 @@ static void print_info(const Options& opt) {
         "Ruby CLI  (native FileRift-compatible)\n"
         "--------------------------------------\n"
         "Supported file types:\n");
-    for (auto& t : supported_types()) std::printf("    .%s\n", t.c_str());
+    for (auto& t : filerift::supported_filetypes()) std::printf("    .%s\n", t.c_str());
     std::printf(
         "\nModes:\n"
         "    decode    binary -> markup   (default dir: de_in)\n"
@@ -905,7 +892,7 @@ int run_cli(int argc, char** argv) {
         buf << std::cin.rdbuf();
         std::string markup = buf.str();
         std::string filetype = opt.file_type.empty() ? "fr" : opt.file_type;
-        if (!supported_types().count(filetype)) {
+        if (!filerift::is_supported_filetype(filetype)) {
             std::fprintf(stderr, "unknown file type: %s\n", filetype.c_str());
             return 1;
         }
@@ -923,7 +910,7 @@ int run_cli(int argc, char** argv) {
         buf << std::cin.rdbuf();
         std::string bytes = buf.str();
         std::string filetype = opt.file_type.empty() ? "fr" : opt.file_type;
-        if (!supported_types().count(filetype)) {
+        if (!filerift::is_supported_filetype(filetype)) {
             std::fprintf(stderr, "unknown file type: %s\n", filetype.c_str());
             return 1;
         }

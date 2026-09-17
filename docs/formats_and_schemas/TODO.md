@@ -26,6 +26,18 @@
 
 ### 1.1 Open
 
+- [ ] **S1d — companion clip PODs are not yet compared against the game's path.**
+  Report §8e.5. `<model>_<clip>.POD` files carry `numMeshes = 0` and no mesh
+  section (stock does the same); our loader merges them onto the base model, but
+  the game's own `Caver::PODLoader::CreateAnimationFromFile` (`0x4E59C0`) has not
+  been diffed against ours. Needs the same decompile-vs-writer treatment §8d/§8e
+  got: does it index nodes by name, and does it expect the base node table to
+  come from a separate file?
+- [ ] **S1e — `pod_loader.cpp` should warn, not silently fall back.**
+  Report §8e.5. A skinned mesh with no 6015/6016 is loaded with an identity
+  slot→bone mapping, which is why this class of defect is invisible from inside
+  ruby_gg. Emit a one-time warning naming the file, so the next producer that
+  forgets the table is caught by the viewer instead of only by the game.
 - [ ] **E8 — `template_scaling` double-multiply data check**
   - Doc: `pod_fbx_gltf_interconversion_report.md` §3.5 / edge E8, line ~257-261.
   - Current code: `scene_workspace.cpp` `object_world_matrix` multiplies
@@ -107,7 +119,10 @@
 - [x] **E6 scene-scale clamp ≥ 0.01** (inspector clamp + comment citing `DrawModels`).
 - [x] **E10 static-node TRS encoding** — game reads static 5004/5/6 fine (verified).
 - [x] **E12 PVR header parity** — CHANGELOG + byte-verified vs stock.
-- [x] **E13 1002/1003 omitted** — informational per PowerVR spec.
+- [x] **E13 1002/1003** — informational per the PowerVR spec, and now **written**.
+  The original "omit them" call was defensible (libswordigo skips unknown tags)
+  but it left our files structurally distinguishable from stock. Both blocks are
+  back as of S1d, copied from `rock1.POD`. See report §8f.
 - [x] **E16 GLB export V-flip** (`gltf_export_glb` `flip_v` default on).
 - [x] **E18 stale `fbx_import.h` doc** corrected.
 - [x] **POD version-block "close-tag bug" claim → cleared.** `more_model_research.md`
@@ -117,6 +132,30 @@
   same `pod_loader` path; the spec treats version as open+close. Not a bug.
 - [x] **Bone-batch indices populated** — `gltf_import.cpp:410` now fills
   `m.bone_batches.indices` from remapped skin joints (old "empty indices" concern gone).
+- [x] **S1d — the block grammar now matches the reference writer byte-for-byte** —
+  report §8f. `PVRShamanGUI` carries the reference implementation
+  (`CPVRTModelPOD::SavePOD` @ 0x753370) and headless IDA extraction recovered its
+  three block helpers, which settle the framing outright: `sub_74BA40(f,tag,len)`
+  opens a block (`<tag:u16><0:u16><len:u32>`), `sub_74BAB0(f,tag)` closes it
+  (`<tag:u16><0x8000:u16><0:u32>`), and `sub_74BB90` writes **nothing** for a NULL
+  source. So every block — leaf and container alike — carries its close pair; a
+  stream with `n == 0` has no `9003` payload; scene children run
+  materials/meshes/nodes/textures; and materials carry the full 3000–3026 tag set,
+  including the nine auxiliary texture slots which stock sets to the `-1` sentinel
+  and we were leaving at the `calloc`'d 0 (a *valid* texture index). Evidence:
+  `OpenSwordigo/PVRToolsDecomp/POD_WRITER_GRAMMAR.md`;
+  regression: `tests/pod_game_reader_contract_test.cpp` (126 checks) plus
+  `.scratch/pod_canon.py`, which diffs our output against `rock1.POD` tag-by-tag.
+- [x] **S1c — skinned meshes now always carry a bone-batch table** — report §8e.
+  A mesh's 6012 BONEIDX stream is a SLOT index into 6015, whose entries are POD
+  **node** indices; `Caver::PODLoader::CreateMesh` dereferences `6016[0]` with no
+  null check, so a skinned mesh without 6015/6016 crashed the loader and left the
+  model as an empty silhouette in-game (while ruby_gg, which is lenient, drew it
+  fine). `pod_writer.cpp` now emits 6018/6019 for every mesh (0/0 when static,
+  matching stock and a fresh `PVRGeoPODCLI` export), synthesises the table from
+  the game's own “Bone*/Control* + ancestors, ascending node index” marking rule
+  when a producer forgot, and pads 6018 so a stray slot cannot index past it.
+  Contract pinned by `tests/pod_game_reader_contract_test.cpp` (57 checks).
 - [x] **E7 LocalAABB on scale edit — cleared by design** — inspector comment
   (`asset_viewer.cpp:4231-4233`) documents Tag 8 is object-local and excludes scale;
   ground-mesh holders recompute their own AABB. Keep a manual QA pass when editing
@@ -240,6 +279,50 @@
     scale channels resample at exactly the target rate (LINEAR/STEP/
     CUBICSPLINE preserved), landing on the engine's frame grid — verified
     reference: `hiro_run.POD` (25 frames @ 24 fps).
+
+- [x] **S1b · Motion-aware choice of the rigid bake's bone**
+  - Doc: `pod_fbx_gltf_interconversion_report.md` §8c.1. **Done 2026-09-14** —
+    the collapse to one bone per vertex used `argmax(weight)` **at the bind
+    pose**, a decision taken from a single instant for a mesh that exists to be
+    animated. `refine_rigid_skin()` now scores each vertex's own top-4
+    influences against every pose of every clip and keeps the one that tracks it
+    best. Same file format, same engine semantics. `soldier.glb`: 12.2 % of
+    vertices re-bound, worst-case deviation 15.45 → 11.04; `pilot.glb`: 9.4 %,
+    30.46 → 25.46. Falls back to max-weight when no clips exist, so unanimated
+    conversions are byte-identical. **Base and clip PODs must be regenerated
+    together** (the collapse now depends on the clips). Regression test:
+    `tests/rigid_skin_refine_test.cpp` (33 checks over soldier / pilot / statue)
+    asserts it is not a no-op, never regresses against smooth skinning, never
+    touches the geometry, and is a strict no-op without clips.
+
+- [x] **S2b · Clip browser and converter must agree on fps**
+  - Doc: §8c.4. **Done 2026-09-14** — `gltf_inspect_animations` computed the
+    span from the max last-key over *all* samplers and fps as a flat 24, while
+    the bake used the 90th-percentile span and key-density fps; both now call
+    `derive_clip_timing()`. Fixing it exposed the companion path's real problem:
+    companion clips are mostly **2-key constant tracks** (70 of 72 for
+    `soldier`'s walk), so a median over all tracks derived **1 fps** — a 2-frame
+    walk clip. Key density is now measured from tracks with ≥ 4 keys in both the
+    GLB and companion paths; all 11 soldier clips derive 30 fps. `--anim-fps 24`
+    (engine parity) unchanged; `--anim-fps 0` now means the same thing in both.
+
+- [x] **S4 · POD provenance sidecar (`<file>.POD.meta`)**
+  - Doc: §8c.2. **Done 2026-09-14** — the POD format has no version field
+    (its only version slot is the engine-parsed `AB.POD.2.0` string), so a stale
+    bake is indistinguishable from a fresh one. `pod_stamp.{h,cpp}` writes a
+    flat JSON sidecar next to every converted POD, and `pod_load()` warns once
+    per path when a POD's revision differs from the build's. Native assets have
+    no sidecar and are never mentioned. Bump `SWORDIGO_POD_PIPELINE_REVISION`
+    whenever the importer changes what it writes.
+
+- [x] **S5 · `EXT_texture_webp` resolution + libwebp decode**
+  - Doc: §8c.5. **Done 2026-09-14** — the extension *replaces* the core
+    texture rather than falling back to it, so `textures[i].source` can legitimately
+    be absent; `texture_source_image()` now reads
+    `extensions.EXT_texture_webp.source`. `image_decode.{h,cpp}` adds an optional
+    libwebp path (decode-only), used by all four `pod_convert.cpp` decoder sites
+    and both Qt viewer sites. `pilot.glb` converts with **1 texture** where it
+    reported "0 textures". Without libwebp the build and behaviour are unchanged.
 
 - [ ] **S3 · `minecraft_bee.glb` end-to-end skinning regression**
   - See A2. After IBM import + dominant-bone bake, convert bee and measure the

@@ -1,4 +1,5 @@
 #include "elf_loader_arm64.h"
+#include "platform/gdb_compat.h"
 #include "../jni/jni_bridge_arm64.h"
 #include <fstream>
 #include <iostream>
@@ -220,6 +221,9 @@ int ElfLoaderArm64::load(so_module_arm64* mod, const std::string& filename, uint
               << " (" << mod->num_dynsym << " symbols, "
               << mod->num_reladyn << " rela.dyn, "
               << mod->num_relaplt << " rela.plt)" << std::endl;
+
+    // Register ELF with GDB/LLDB for symbol resolution and stack unwinding
+    gdb_register_elf(filename.c_str(), (uintptr_t)(guest_base + load_addr), mod->dynamic);
 
     return 0;
 }

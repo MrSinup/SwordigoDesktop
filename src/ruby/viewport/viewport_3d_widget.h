@@ -35,6 +35,7 @@ namespace fs = std::filesystem;
 #include "tools/av_renderer.h"
 #include "tools/boulder.h"
 #include "ruby/viewport/camera_bounds_gizmo.h"
+#include "ruby/render/glb_model.h"
 
 class QToolButton;
 
@@ -50,7 +51,10 @@ public:
     ~Viewport3DWidget() override;
 
     bool load_model(const std::string& pod_path);
-    bool has_model() const { return m_has_model; }
+    bool has_model() const { return m_has_model || m_has_glb; }
+    bool has_glb() const { return m_has_glb; }
+    const ruby::render::GLBModel& glb_model() const { return m_glb_model; }
+    ruby::render::GLBModel& glb_model() { return m_glb_model; }
     const std::string& current_model_path() const { return m_current_model_path; }
     const av::PODModel& current_model() const { return m_model; }
     bool load_scene(const std::string& scene_path);
@@ -117,6 +121,9 @@ public:
     void set_playing(bool playing);
     void set_selected_object(int index);
     int frame_count() const;
+    void set_animation_clip(int clip_index);
+    QStringList animation_clips() const;
+    int active_animation_clip() const;
 
     struct TransformState {
         float pos[3];
@@ -473,6 +480,8 @@ private:
     bool m_has_scene = false;
     bool m_scene_ready = false;   // load landed and the scene is interactive
     bool m_has_model = false;
+    ruby::render::GLBModel m_glb_model;
+    bool m_has_glb = false;
     std::string m_current_scene_path;
     std::string m_current_model_path;
     std::string m_current_texture_path;

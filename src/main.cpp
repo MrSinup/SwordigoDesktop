@@ -476,6 +476,7 @@ so_module_arm64 g_sre_mod;
 so_module_arm64 g_sre_extras_mod;   // optional libsre-extras.so (closed-source addon)
 bool g_sre_extras_loaded = false;   // true when libsre-extras.so was loaded
 ElfLoaderArm64* g_loader_64 = nullptr;
+std::string g_boot_scene = "";
 
 // Normalize host paths to forward slashes before writing them into guest VFS
 // globals. The guest SRE code does literal '/' string matching (e.g.
@@ -737,6 +738,41 @@ static uint64_t sre_char_set_value_addr   = 0;   // int — the value to write
 static uint64_t sre_hero_obj_addr = 0;
 static uint64_t sre_hero_health_comp_addr = 0;
 static uint64_t sre_hero_mana_comp_addr = 0;
+
+// SRE Developer Overlays & Tools
+static uint64_t g_sre_toggle_debug_info_addr = 0;
+static uint64_t g_sre_toggle_collision_shapes_addr = 0;
+static uint64_t g_sre_toggle_combat_wireframe_addr = 0;
+
+void trigger_toggle_debug_info() {
+    if (g_sre_toggle_debug_info_addr && g_guest_memory) {
+        *(volatile int*)(g_guest_memory + g_sre_toggle_debug_info_addr) = 1;
+        mod_toast("Touch Foo Debug HUD toggled", 1.5f);
+        std::cout << "[Developer] Requested Touch Foo Debug Info HUD toggle" << std::endl;
+    } else {
+        std::cout << "[Developer] SRE debug info toggle symbol not available" << std::endl;
+    }
+}
+
+void trigger_toggle_collision_shapes() {
+    if (g_sre_toggle_collision_shapes_addr && g_guest_memory) {
+        *(volatile int*)(g_guest_memory + g_sre_toggle_collision_shapes_addr) = 1;
+        mod_toast("Collision Shapes toggled", 1.5f);
+        std::cout << "[Developer] Requested Collision Shapes toggle" << std::endl;
+    } else {
+        std::cout << "[Developer] SRE collision shapes toggle symbol not available" << std::endl;
+    }
+}
+
+void trigger_toggle_combat_wireframe() {
+    if (g_sre_toggle_combat_wireframe_addr && g_guest_memory) {
+        *(volatile int*)(g_guest_memory + g_sre_toggle_combat_wireframe_addr) = 1;
+        mod_toast("Combat Wireframe toggled", 1.5f);
+        std::cout << "[Developer] Requested Combat Wireframe toggle" << std::endl;
+    } else {
+        std::cout << "[Developer] SRE combat wireframe toggle symbol not available" << std::endl;
+    }
+}
 
 // SRE ButtonController — guest addresses and layout struct
 #define SRE_BTN_MAX       128
@@ -1427,6 +1463,18 @@ void process_gui_action(GuiAction gui_action, bool& running) {
                     mod_toast("Music: Unmuted (100%)", 1.5f);
                 }
             }
+            break;
+        }
+        case GUI_TOGGLE_TOUCHFOO_DEBUG_INFO: {
+            trigger_toggle_debug_info();
+            break;
+        }
+        case GUI_TOGGLE_COLLISION_SHAPES: {
+            trigger_toggle_collision_shapes();
+            break;
+        }
+        case GUI_TOGGLE_COMBAT_WIREFRAME: {
+            trigger_toggle_combat_wireframe();
             break;
         }
         default: break;
@@ -2354,7 +2402,7 @@ void load_and_boot() {
                             }
                             if (should_block_keyboard()) {
                                 bool is_toggle = (event.key.key == SDLK_F1 || event.key.key == SDLK_F2 || event.key.key == SDLK_F3 || event.key.key == SDLK_F4 || event.key.key == SDLK_GRAVE || event.key.key == SDLK_ESCAPE);
-                                if (!is_toggle) break;
+                                if (!is_toggle && !(event.key.mod & SDL_KMOD_CTRL)) break;
                             }
                             if (event.key.key == SDLK_F1 && !event.key.repeat) {
                                 gui_visible = !gui_visible;
@@ -2376,9 +2424,21 @@ void load_and_boot() {
                                 break;
                             }
                             if (event.key.key == SDLK_F3 && !event.key.repeat) {
+                                if (event.key.mod & SDL_KMOD_CTRL) {
+                                    trigger_toggle_debug_info();
+                                    break;
+                                }
                                 debug_visible = !debug_visible;
                                 g_swordfare_gui.toggle_visible();
                                 std::cout << "[Debug] " << (debug_visible ? "ON" : "OFF") << std::endl;
+                                break;
+                            }
+                            if (event.key.key == SDLK_D && !event.key.repeat && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
+                                trigger_toggle_collision_shapes();
+                                break;
+                            }
+                            if (event.key.key == SDLK_W && !event.key.repeat && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
+                                trigger_toggle_combat_wireframe();
                                 break;
                             }
                             if (event.key.key == SDLK_F12 && !event.key.repeat) {
@@ -4841,6 +4901,18 @@ void load_and_boot_arm64() {
                     }
                 }
 
+                // Resolve developer overlay request symbols
+                g_sre_toggle_debug_info_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_request_toggle_debug_info");
+                g_sre_toggle_collision_shapes_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_request_toggle_collision_shapes");
+                g_sre_toggle_combat_wireframe_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_request_toggle_combat_wireframe");
+                if (g_sre_toggle_debug_info_addr) {
+                    std::cout << "[SRE] Developer debug overlays active (HUD=0x" << std::hex 
+                              << g_sre_toggle_debug_info_addr << " Shapes=0x" 
+                              << g_sre_toggle_collision_shapes_addr << " Combat=0x" 
+                              << g_sre_toggle_combat_wireframe_addr << std::dec << ")" << std::endl;
+                }
+
+
                 // Resolve game notification symbols
                 g_sre_game_notification_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_game_notification");
                 g_sre_game_notification_pending_addr = g_loader_64->get_symbol_vaddr(&g_sre_mod, "g_sre_game_notification_pending");
@@ -5626,6 +5698,34 @@ void load_and_boot_arm64() {
     if (setupApp) {
         std::cout << "[Boot64] Calling setupApplication" << std::endl;
         g_emulator_64->call(setupApp, {env_ptr, 0});
+
+        if (!g_boot_scene.empty()) {
+            std::string sc = g_boot_scene;
+            if (sc.size() > 6 && sc.substr(sc.size() - 6) == ".scene") {
+                sc = sc.substr(0, sc.size() - 6);
+            }
+            uint64_t caver_shell_offset = (swordi_abi == 13) ? 0x651700ULL : 0x6E9C20ULL;
+            uint64_t caver_shell_slot = g_main_mod_64.base_addr + caver_shell_offset;
+            uint64_t shell_ptr = *(uint64_t*)(g_guest_memory + caver_shell_slot);
+            if (shell_ptr >= 0x20000000ULL && shell_ptr < 0xE0000000ULL) {
+                // In ARM64 libc++, CaverShell+104 is std::string for initial scene.
+                // SSO layout: byte 0 = (len << 1), bytes 1..len = chars, followed by '\0'.
+                char* str_slot = (char*)(g_guest_memory + shell_ptr + 104);
+                size_t len = sc.length();
+                if (len <= 22) {
+                    memset(str_slot, 0, 24);
+                    str_slot[0] = (char)(len << 1);
+                    memcpy(str_slot + 1, sc.c_str(), len);
+                    str_slot[1 + len] = '\0';
+                    std::cout << "[Boot64] Direct scene boot: Injected '" << sc << "' into CaverShell" << std::endl;
+                } else {
+                    std::cerr << "[Boot64] Direct scene boot warning: scene name exceeds SSO length (22): '" << sc << "'" << std::endl;
+                }
+            } else {
+                std::cerr << "[Boot64] Direct scene boot error: CaverShell pointer invalid: 0x"
+                          << std::hex << shell_ptr << std::dec << std::endl;
+            }
+        }
     }
     if (setApplicationViewSize) {
         std::cout << "[Boot64] Calling setApplicationViewSize" << std::endl;
@@ -7625,7 +7725,7 @@ void load_and_boot_arm64() {
                             }
                             if (should_block_keyboard()) {
                                 bool is_toggle = (event.key.key == SDLK_F1 || event.key.key == SDLK_F2 || event.key.key == SDLK_F3 || event.key.key == SDLK_F4 || event.key.key == SDLK_GRAVE || event.key.key == SDLK_ESCAPE);
-                                if (!is_toggle) break;
+                                if (!is_toggle && !(event.key.mod & SDL_KMOD_CTRL)) break;
                             }
                             if (event.key.key == SDLK_F1 && !event.key.repeat) { gui_visible = !gui_visible; break; }
                             if (event.key.key == SDLK_F4 && !event.key.repeat) {
@@ -7651,8 +7751,20 @@ void load_and_boot_arm64() {
                                 if (g_input_config.editor_handle_key(event.key.scancode)) break;
                             }
                             if (event.key.key == SDLK_F3 && !event.key.repeat) {
+                                if (event.key.mod & SDL_KMOD_CTRL) {
+                                    trigger_toggle_debug_info();
+                                    break;
+                                }
                                 debug_visible = !debug_visible;
                                 g_swordfare_gui.toggle_visible();
+                                break;
+                            }
+                            if (event.key.key == SDLK_D && !event.key.repeat && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
+                                trigger_toggle_collision_shapes();
+                                break;
+                            }
+                            if (event.key.key == SDLK_W && !event.key.repeat && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
+                                trigger_toggle_combat_wireframe();
                                 break;
                             }
                             if (event.key.key == SDLK_F5 && !event.key.repeat) { cam_toggle(); break; }
@@ -8397,6 +8509,14 @@ int main(int argc, char* argv[]) {
             g_lib_name = "engine/v1.4.12/armeabi-v7a/libswordigo.so";
             std::cout << "[Main] Using v1.4.12 ARM32" << std::endl;
         }
+        if (strcmp(argv[i], "--scene") == 0 && i + 1 < argc) {
+            g_boot_scene = argv[++i];
+            std::cout << "[Main] Direct boot scene: " << g_boot_scene << std::endl;
+        }
+        if (strncmp(argv[i], "--scene=", 8) == 0) {
+            g_boot_scene = argv[i] + 8;
+            std::cout << "[Main] Direct boot scene: " << g_boot_scene << std::endl;
+        }
         if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
             g_lib_name = argv[++i];
             std::cout << "[Main] Custom lib: " << g_lib_name << std::endl;
@@ -8523,7 +8643,8 @@ int main(int argc, char* argv[]) {
         bool skip_launcher = false;
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "--vulkan") == 0 || strcmp(argv[i], "--no-launcher") == 0 ||
-                strcmp(argv[i], "--lib") == 0) {
+                strcmp(argv[i], "--lib") == 0 || strcmp(argv[i], "--scene") == 0 ||
+                strncmp(argv[i], "--scene=", 8) == 0) {
                 skip_launcher = true;
                 break;
             }

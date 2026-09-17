@@ -52,3 +52,37 @@ endif()
 
 # Unicorn is optional and runtime-loaded (src/platform/unicorn_dyn.cpp).
 find_library(UNICORN_LIBRARY NAMES unicorn)
+
+# ---------------------------------------------------------------------------
+# libwebp — OPTIONAL, and the only dependency here that changes what a model
+# converts to rather than whether it builds.
+#
+# stb_image (converter) and QImage (viewer) both decode PNG/JPEG/TGA/BMP/GIF,
+# and neither decodes WebP. glTF's EXT_texture_webp replaces the core texture
+# rather than falling back to it, so a file may be required to ship WebP and
+# carry no PNG at all — pilot.glb is exactly that, and its albedo has never
+# reached a converted POD or the viewport. Without libwebp those payloads are
+# skipped and reported, exactly as before; with it they convert like any other
+# texture. See src/tools/image_decode.h.
+# ---------------------------------------------------------------------------
+if (NOT WIN32)
+    pkg_check_modules(WEBP QUIET libwebp)
+endif()
+if (WEBP_FOUND)
+    set(SWORDIGO_HAVE_WEBP TRUE)
+    set(SWORDIGO_WEBP_INCLUDE_DIRS ${WEBP_INCLUDE_DIRS})
+    set(SWORDIGO_WEBP_LIBRARIES ${WEBP_LIBRARIES})
+    message(STATUS "libwebp ${WEBP_VERSION} — EXT_texture_webp textures will decode")
+else()
+    find_path(SWORDIGO_WEBP_INCLUDE_DIR webp/decode.h)
+    find_library(SWORDIGO_WEBP_LIBRARY NAMES webp webpdecoder)
+    if (SWORDIGO_WEBP_INCLUDE_DIR AND SWORDIGO_WEBP_LIBRARY)
+        set(SWORDIGO_HAVE_WEBP TRUE)
+        set(SWORDIGO_WEBP_INCLUDE_DIRS ${SWORDIGO_WEBP_INCLUDE_DIR})
+        set(SWORDIGO_WEBP_LIBRARIES ${SWORDIGO_WEBP_LIBRARY})
+        message(STATUS "libwebp found — EXT_texture_webp textures will decode")
+    else()
+        set(SWORDIGO_HAVE_WEBP FALSE)
+        message(STATUS "libwebp not found — EXT_texture_webp textures will be skipped")
+    endif()
+endif()

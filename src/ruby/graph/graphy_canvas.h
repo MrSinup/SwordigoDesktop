@@ -15,10 +15,12 @@
 // ============================================================================
 
 #include "graphy.h"
+#include "graphy_layout.h"
 #include <QWidget>
 #include <QPointF>
 #include <QRectF>
 #include <QPainterPath>
+#include <unordered_map>
 #include <unordered_set>
 
 class QMenu;
@@ -40,6 +42,31 @@ public:
 
     /// Clear selection
     void clear_selection();
+
+    // ── Layout ───────────────────────────────────────────────────────────────
+    // Geometry is computed by `graphy_layout.cpp` and cached here, so the
+    // painter and hit-testing can never disagree about where a rect is.
+    // Changing metrics re-measures immediately (no rebuild needed to retune).
+
+    const LayoutMetrics& metrics() const { return m_metrics; }
+    void set_metrics(const LayoutMetrics& m);
+
+    /// Text measurer used for every rect. Defaults to font metrics; overriding
+    /// it makes the canvas deterministic for tests and for embedders that want
+    /// a different font.
+    const TextMeasure& text_measure() const { return m_measure; }
+    void set_text_measure(TextMeasure measure);
+
+    /// Cached geometry for a node, or nullptr when the node is unknown.
+    const NodeGeometry* node_geometry(int node_id) const;
+
+    // ── Minimap HUD ──────────────────────────────────────────────────────────
+    bool minimap_visible() const { return m_show_minimap; }
+    void set_minimap_visible(bool visible);
+
+public slots:
+    /// Toggle the minimap HUD (also bound to the M key).
+    void toggle_minimap();
 
 signals:
     void selection_changed();
@@ -70,6 +97,7 @@ private:
 
     // Layout & geometry cache
     void update_node_layout(Node& node);
+    void relayout_all();
     QPainterPath make_spline_path(const QPointF& p0, const QPointF& p1) const;
 
     // Painting sub-passes
@@ -133,10 +161,22 @@ private:
     int m_hovered_conn = 0;
     std::shared_ptr<Node> m_hovered_node;
 
+    // Geometry cache, refreshed by relayout_all() at the top of paintEvent.
+    LayoutMetrics m_metrics;
+    TextMeasure   m_measure;
+    std::unordered_map<int, NodeGeometry> m_geometry;
+
     // Minimap
     bool m_show_minimap = true;
     QRect m_minimap_rect;
     bool m_dragging_minimap = false;
+
+    // Minimap -> canvas mapping, published by draw_minimap() so that clicks in
+    // the HUD navigate the view instead of being swallowed.
+    float   m_minimap_scale  = 1.0f;
+    QPointF m_minimap_origin;
+    QPointF minimap_to_canvas(const QPointF& p) const;
+    QPointF canvas_to_minimap(const QPointF& p) const;
 };
 
 } // namespace ruby::graph

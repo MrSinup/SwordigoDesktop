@@ -11,14 +11,12 @@
 #ifndef PVR_LOADER_H
 #define PVR_LOADER_H
 
-#include "platform/gl_inc.h"
 #include <stdint.h>
-
-/* Load a PVR file and return a GL texture ID. Returns 0 on failure.
- * Supports PVR v2 (44-byte header) and v3 (52-byte header).
- * Decodes ETC1 compressed pixel data to RGBA8.
- * Also returns width/height if out pointers are non-null. */
 #include <vector>
+
+#if !defined(__gl_h_) && !defined(__gltypes_h_) && !defined(__gl2_h_) && !defined(__gl3_h_) && !defined(GL_VERSION_1_1)
+typedef unsigned int GLuint;
+#endif
 
 /* Decode a PVR or gzipped .tex file buffer directly to RGBA8888.
  * Handles automatic gzip decompression.

@@ -24,6 +24,7 @@ if (SWORDIGO_BUILD_RUBY_GG)
         ${SRC_DIR}/ruby/editor/doc_viewer_dialog.cpp
         ${SRC_DIR}/ruby/editor/new_file_dialog.cpp
         ${SRC_DIR}/ruby/editor/model_convert_dialog.cpp
+        ${SRC_DIR}/ruby/editor/desktop_integration_dialog.cpp
         ${SRC_DIR}/ruby/editor/apk_session_panel.cpp
         ${SRC_DIR}/ruby/docs/docs.qrc
         ${SRC_DIR}/ruby/editor/filerift_schema.cpp
@@ -48,6 +49,7 @@ if (SWORDIGO_BUILD_RUBY_GG)
         ${SRC_DIR}/ruby/render/fbo_chain.cpp
         ${SRC_DIR}/ruby/render/ssao_pass.cpp
         ${SRC_DIR}/ruby/render/post_pass.cpp
+        ${SRC_DIR}/ruby/render/glb_model.cpp
         ${SRC_DIR}/ruby/panels/animation_control_bar.cpp
         ${SRC_DIR}/ruby/panels/texture_viewer_panel.cpp
         ${SRC_DIR}/ruby/panels/audio_viewer_panel.cpp
@@ -64,6 +66,10 @@ if (SWORDIGO_BUILD_RUBY_GG)
         ${SRC_DIR}/ruby/tools/ground_mesh_studio.cpp
         ${SRC_DIR}/ruby/graph/graphy.cpp
         ${SRC_DIR}/ruby/graph/graphy_canvas.cpp
+        ${SRC_DIR}/ruby/graph/graphy_layout.cpp
+        # Native document -> Graph builder: .scene/.scl bytes straight into the
+        # canvas, no Python and no intermediate JSON.
+        ${SRC_DIR}/ruby/graph/graphy_scene_builder.cpp
 
         # ---- Inline engine pod (1.4.13 mini emulator dock) ----
         ${SRC_DIR}/platform/pod_ipc.cpp
@@ -95,6 +101,7 @@ if (SWORDIGO_BUILD_RUBY_GG)
         ${SRC_DIR}/tools/scene_generator_v3.cpp
         ${SRC_DIR}/tools/scene_v3_db.cpp
         ${SRC_DIR}/tools/boulder.cpp
+        ${SRC_DIR}/tools/boulderx.cpp
         ${SRC_DIR}/tools/rubymesh.cpp
         ${SRC_DIR}/tools/obj_loader.cpp
         ${SRC_DIR}/tools/ani_loader.cpp
@@ -108,6 +115,7 @@ if (SWORDIGO_BUILD_RUBY_GG)
         ${SRC_DIR}/tools/batch_converter.cpp
         ${SRC_DIR}/tools/apk_session.cpp
         ${SRC_DIR}/platform/zip_archive.cpp
+        ${SRC_DIR}/platform/desktop_integration.cpp
         ${SRC_DIR}/tools/ufbx/ufbx.c
         ${SRC_DIR}/tools/tiny_gltf_v3.c
         ${SRC_DIR}/platform/win_dll_dir.cpp
@@ -187,6 +195,9 @@ if (SWORDIGO_BUILD_RUBY_GG)
         ZLIB::ZLIB
         Threads::Threads
     )
+    if (WIN32)
+        target_link_libraries(git2_static PRIVATE pcre2-8 ws2_32 crypt32)
+    endif()
     if (UNIX AND NOT APPLE)
         target_link_libraries(git2_static PRIVATE rt)
     endif()
@@ -226,9 +237,12 @@ if (SWORDIGO_BUILD_RUBY_GG)
 
     # Standalone SCL Visual Node Graph Interactive Viewer
     add_executable(scl_graph_viewer
+        # The standalone viewer stays Qt-only: the native document builder lives
+        # in ruby_gg, which already links the scene loader and FileRift.
         ${SRC_DIR}/tools/scl_graph_viewer.cpp
         ${SRC_DIR}/ruby/graph/graphy.cpp
         ${SRC_DIR}/ruby/graph/graphy_canvas.cpp
+        ${SRC_DIR}/ruby/graph/graphy_layout.cpp
     )
     set_target_properties(scl_graph_viewer PROPERTIES
         AUTOMOC ON

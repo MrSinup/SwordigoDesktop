@@ -216,6 +216,36 @@ struct BehaviourState {
     std::string blend_animation;
     std::string cast_animation;
 
+    // ── character animation (CharController + CharAnimController) ──────────
+    // Swordigo's hero (and every other character) does not animate itself: a
+    // CharControllerComponent owns a CharAnimControllerComponent, which blends
+    // between one AnimNode per lifecycle clip, each built from a
+    // KeyframeAnimation component. Recovered from
+    // CharAnimControllerComponent::{StartMoving,StopMoving,StartJumping,
+    // StartFalling,SetCurrentRunSpeed} and CharControllerComponent::Update.
+    struct AnimClip {
+        std::string name;          // KeyframeAnimationComponent.Name → the .POD
+        float speed = 1.0f;        // SpeedMultiplier (the node's playback rate)
+        bool  repeating = true;    // Repeating
+        bool  running = true;      // Running
+    };
+    struct CharAnimState {
+        bool  active = false;
+        // The clips the CharAnimController names, resolved to pod names.
+        std::string stand, walk, jump, fall, air_jump, cast, hurt, die, push, lift;
+        std::string current;       // clip playing now (pod name; "" = none)
+        float time = 0.0f;         // clip clock in seconds, already rate-scaled
+        float rate = 1.0f;         // speed * (run speed / 100) for the walk clip
+        bool  repeating = true;
+        bool  in_action = false;   // a jump/fall/attack clip owns the clock
+        float run_speed = 0.0f;    // CharControllerComponent.NormalRunSpeed
+        float jump_speed = 0.0f;   // CharControllerComponent.JumpSpeed
+        float air_time = 0.0f;
+    };
+    CharAnimState char_anim;
+    // Every KeyframeAnimation clip on the object, by name.
+    std::vector<AnimClip> anim_clips;
+
     // ── physics / damage ───────────────────────────────────────────────────
     PhysicsState physics;
     HealthState  health;

@@ -7,7 +7,11 @@
 #include <cstdio>
 #include <iostream>
 #include <string>
+#ifdef _WIN32
+#include <direct.h>
+#else
 #include <sys/stat.h>   // for mkdir()
+#endif
 
 struct IOJob {
     enum Type { SAVE, LOAD };
@@ -60,7 +64,7 @@ static void io_thread_loop() {
                             std::string component = dir.substr(0, i);
                             // mkdir() is idempotent on existing dirs
 #ifdef _WIN32
-                            ::mkdir(component.c_str());
+                            _mkdir(component.c_str());
 #else
                             ::mkdir(component.c_str(), 0755);
 #endif

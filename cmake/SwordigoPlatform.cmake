@@ -11,7 +11,7 @@ set(INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include")
 # --- Common include dirs (platform-independent) -----------------------------
 set(COMMON_INCLUDES
     "${SRC_DIR}" "${SRC_DIR}/imgui" "${SRC_DIR}/sre/base/lua/src"
-    "${SRC_DIR}/sre/base/toml-c" "${SRC_DIR}/sre/base/luasocket/src"
+    "${SRC_DIR}/sre/base/toml-c"
     "${SRC_DIR}/sre/base/raknet" "${INCLUDE_DIR}" "${SWORDIGO_FFMPEG_ROOT}/include")
 if (SWORDIGO_USE_DYNARMIC)
     list(APPEND COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/deps/dynarmic/src")

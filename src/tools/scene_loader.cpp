@@ -1088,7 +1088,7 @@ static std::string reencode_mesh_data(const std::string& original, const PODMesh
     // Append anything the original lacked (protobuf ordering is insignificant).
     if (!wrote_count)    w.write_varint_field(1, static_cast<uint64_t>(pm.num_vertices));
     if (!wrote_vertices) w.write_bytes_field(50, vertex_data);
-    if (!wrote_indices)  w.write_bytes_field(51, index_data);
+    if (!wrote_indices && !pm.indices.empty())  w.write_bytes_field(51, index_data);
     return w.to_string();
 }
 

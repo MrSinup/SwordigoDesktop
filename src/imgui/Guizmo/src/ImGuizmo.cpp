@@ -1443,10 +1443,35 @@ namespace IMGUIZMO_NAMESPACE
          }
          if (!gContext.mbUsing || usingAxis)
          {
+            // Nicer ring look: a soft dark shadow underlay gives the ring depth
+            // and readability over bright/!busy backgrounds, then the coloured
+            // ring on top. When the axis is hovered or being dragged we also lay
+            // down a wider translucent "glow" of the same colour so the active
+            // ring reads clearly without changing hit-testing.
+            const int   ptCount    = circleMul * halfCircleSegmentCount + 1;
+            const ImU32 ringColor  = colors[3 - axis];
+            const float baseThick  = gContext.mStyle.RotationLineThickness;
+            const bool  hot        = usingAxis || (type == (MOVETYPE)(MT_ROTATE_Z - axis));
+
+            // Glow (only when hot) — wide, low-alpha, same hue.
+            if (hot)
+            {
+               ImU32 glow = (ringColor & 0x00FFFFFF) | 0x40000000; // ~25% alpha
 #if IMGUI_VERSION_NUM < 19276
-            drawList->AddPolyline(circlePos, circleMul* halfCircleSegmentCount + 1, colors[3 - axis], 0, gContext.mStyle.RotationLineThickness );
+               drawList->AddPolyline(circlePos, ptCount, glow, 0, baseThick + 6.0f);
 #else
-            drawList->AddPolyline(circlePos, circleMul* halfCircleSegmentCount + 1, colors[3 - axis], gContext.mStyle.RotationLineThickness, 0 );
+               drawList->AddPolyline(circlePos, ptCount, glow, 0, baseThick + 6.0f);
+#endif
+            }
+
+            // Shadow underlay — slightly thicker, dark, semi-transparent.
+            const ImU32 shadow = IM_COL32(0, 0, 0, 90);
+#if IMGUI_VERSION_NUM < 19276
+            drawList->AddPolyline(circlePos, ptCount, shadow, 0, baseThick + 2.0f);
+            drawList->AddPolyline(circlePos, ptCount, ringColor, 0, hot ? baseThick + 1.0f : baseThick);
+#else
+            drawList->AddPolyline(circlePos, ptCount, shadow, 0, baseThick + 2.0f);
+            drawList->AddPolyline(circlePos, ptCount, ringColor, 0, hot ? baseThick + 1.0f : baseThick);
 #endif
          }
 

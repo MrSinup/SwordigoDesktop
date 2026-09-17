@@ -42,6 +42,10 @@ struct PodConvertOptions {
     // Overwrite existing output POD / texture files.
     bool overwrite = false;
 
+    // Re-center model bounding box at origin (predictable scene placement).
+    // Default false (preserves authored pivot / ground alignment). CLI: --center.
+    bool center = false;
+
     // Uniform scale factor applied to geometry, node translations, and animation.
     float scale = 1.0f;
 
@@ -81,6 +85,16 @@ struct PodConvertOptions {
     // preventing name collisions between converted models in the game resources folder.
     // Explicit names remain untouched. Default true.
     bool smart_texture_naming = true;
+
+    // Animation source selection
+    enum class AnimationSource {
+        Auto = 0,          // Auto-route: In-GLB if present, else companion motions.json if present
+        InGlb = 1,         // Force embedded In-GLB animations only
+        CompanionJson = 2, // Force companion motions.json only
+        None = 3           // Do not export animation clips (base model only)
+    };
+    AnimationSource anim_source = AnimationSource::Auto;
+    std::string companion_motions_path; // Optional explicit path to companion motions.json
 };
 
 // Convert an FBX into a game POD. On success the newly written game textures

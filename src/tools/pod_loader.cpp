@@ -2,9 +2,11 @@
 // Reference: com/powervr/pod/PODLoader.as & EPODIdentifiers.as
 
 #include "pod_loader.h"
+#include "pod_stamp.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -680,6 +682,21 @@ static PODMesh readMeshBlock(const uint8_t* data, size_t size, size_t& off) {
         mesh.bone_batches.count = num_bone_batches;
 
         merge_bone_batches(mesh);
+    } else if (mesh.bones_per_vertex > 0 && !mesh.bone_indices.empty()) {
+        // A skinned mesh with no bone-batch table.  Caver::PODLoader::CreateMesh
+        // (0x4E4E74) dereferences 6016[0] with no null check before it can draw
+        // anything, so the GAME cannot load this — while this loader happily
+        // falls back to an identity slot->bone mapping, which is exactly why
+        // such a file looked fine in ruby_gg and broken in the game.  Say so.
+        static bool warned_missing_bone_batches = false;
+        if (!warned_missing_bone_batches) {
+            warned_missing_bone_batches = true;
+            std::fprintf(stderr,
+                         "[POD] skinned mesh without a bone-batch table "
+                         "(6015/6016/6018); the shipped runtime dereferences "
+                         "6016[0] and will fail to load this file. "
+                         "Falling back to an identity slot->bone mapping.\n");
+        }
     }
 
     if (mesh.has_unpack_matrix &&
@@ -767,7 +784,21 @@ static PODNode readNodeBlock(const uint8_t* data, size_t size, size_t& off) {
                 node.anim_scale = read_float_array(data, len, off);
                 break;
             case eNodeAnimationMatrix:
-                node.anim_matrix = read_float_array(data, len, off);
+                // 5011 (pfAnimMatrix) is the tag the game's CPVRTModelPOD reader
+                // stores at node+88 and uses verbatim as the node's LOCAL matrix
+                // (GetWorldMatrixNoCache takes that branch before it ever looks
+                // at pfAnimPosition/Rotation/Scale).  A lone 64-byte payload is
+                // therefore a static transform, not a track — route it through
+                // has_matrix so every downstream consumer keeps its existing
+                // code path.  5010 (eNodeMatrix) is a no-op at runtime and is
+                // only still parsed here so files written by older revisions
+                // stay readable.
+                if (len == 64) {
+                    for (int i = 0; i < 16; i++) node.matrix[i] = read_float(data, size, off);
+                    node.has_matrix = true;
+                } else {
+                    node.anim_matrix = read_float_array(data, len, off);
+                }
                 break;
             case eNodeAnimationFlags:
                 node.anim_flags = read_u32(data, size, off);
@@ -997,6 +1028,15 @@ PODModel pod_parse(const uint8_t* data, size_t size) {
 }
 
 PODModel pod_load(const std::string& path, const std::string& merge_hint) {
+    // Provenance check first, so it fires on every return path including the
+    // animation-only merge below and the runtime file-loader hook. A conversion
+    // POD carries a <file>.POD.meta sidecar naming the pipeline revision that
+    // produced it; if that is not the one this build implements, the model may
+    // be a stale bake whose mesh and skeleton disagree about their space —
+    // valid on disk, wrong under animation. Native Swordigo assets have no
+    // sidecar and are never mentioned. See pod_stamp.h.
+    pod_warn_if_stale(path);
+
     if (g_pod_file_loader) {
         std::vector<uint8_t> data;
         if (g_pod_file_loader(path, data) && !data.empty()) {
@@ -1124,6 +1164,10 @@ PODModel pod_load(const std::string& path, const std::string& merge_hint) {
                                 base_node.anim_scale_idx = anim_node.anim_scale_idx;
                                 base_node.anim_matrix_idx = anim_node.anim_matrix_idx;
                                 base_node.anim_flags = anim_node.anim_flags;
+                                if (!anim_node.anim_matrix.empty() || !anim_node.anim_translation.empty() ||
+                                    !anim_node.anim_rotation.empty() || !anim_node.anim_scale.empty()) {
+                                    base_node.has_matrix = false;
+                                }
                                 break;
                             }
                         }

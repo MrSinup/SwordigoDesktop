@@ -2889,6 +2889,15 @@ GuiAction SwordfareGUI::draw_control_panel(bool* p_open) {
             if (ImGui::MenuItem("Volume Down"))    action = GUI_MUSIC_VOL_DOWN;
         });
 
+        // ── Developer ────────────────────────────────────────────────────
+        menu("Developer", [&]() {
+            ImGui::TextDisabled("CAVER ENGINE HUD & TOOLS");
+            ImGui::Separator();
+            if (ImGui::MenuItem("Touch Foo HUD (FPS/VRAM)", "Ctrl+F3"))   action = GUI_TOGGLE_TOUCHFOO_DEBUG_INFO;
+            if (ImGui::MenuItem("Collision Wireframes",      "Ctrl+Shift+D")) action = GUI_TOGGLE_COLLISION_SHAPES;
+            if (ImGui::MenuItem("Combat Hitboxes",          "Ctrl+Shift+W")) action = GUI_TOGGLE_COMBAT_WIREFRAME;
+        });
+
         // ── Help ─────────────────────────────────────────────────────────
         menu("Help", [&]() {
             if (ImGui::MenuItem("Help / Hotkeys")) m_show_help = true;
@@ -3266,8 +3275,11 @@ void SwordfareGUI::draw_help_panel(bool* p_open, float top_offset) {
         {"F8",  "Pause / Resume"},
         {"F10", "Toggle native on-screen controls"},
         {"F11", "Scene Shifter and display toolbox"},
-        {"F12", "Fullscreen toggle"},
-        {"\\",  "Toggle keyboard typing mode"},
+        {"F12",          "Fullscreen toggle"},
+        {"\\",           "Toggle keyboard typing mode"},
+        {"Ctrl+F3",      "Touch Foo Developer HUD (FPS/VRAM)"},
+        {"Ctrl+Shift+D", "Toggle 3D collision wireframes"},
+        {"Ctrl+Shift+W", "Toggle combat & attack hitboxes"},
     };
 
     if (ImGui::Begin("Hotkeys", p_open, ImGuiWindowFlags_NoCollapse)) {

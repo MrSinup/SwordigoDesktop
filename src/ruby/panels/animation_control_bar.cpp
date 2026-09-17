@@ -26,6 +26,13 @@ AnimationControlBar::AnimationControlBar(QWidget* parent) : QWidget(parent) {
         refresh_label();
         emit frameChanged(m_current_frame);
     });
+
+    m_clip_box = new QComboBox(this);
+    m_clip_box->setToolTip(QStringLiteral("Active Animation Clip"));
+    m_clip_box->setVisible(false);
+    connect(m_clip_box, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &AnimationControlBar::on_clip_selected);
+
     m_fps = new QComboBox(this);
     m_fps->addItems({"24 FPS", "30 FPS", "60 FPS"});
     m_fps->setCurrentText("30 FPS");
@@ -34,6 +41,7 @@ AnimationControlBar::AnimationControlBar(QWidget* parent) : QWidget(parent) {
 
     layout->addWidget(play);
     layout->addWidget(stop_button);
+    layout->addWidget(m_clip_box);
     layout->addWidget(m_timeline, 1);
     layout->addWidget(m_frame_label);
     layout->addWidget(m_fps);
@@ -41,6 +49,25 @@ AnimationControlBar::AnimationControlBar(QWidget* parent) : QWidget(parent) {
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &AnimationControlBar::advance);
     refresh_label();
+}
+
+void AnimationControlBar::set_clips(const QStringList& clip_names, int active_index) {
+    QSignalBlocker blocker(m_clip_box);
+    m_clip_box->clear();
+    if (clip_names.isEmpty()) {
+        m_clip_box->setVisible(false);
+        return;
+    }
+    m_clip_box->addItems(clip_names);
+    m_clip_box->setCurrentIndex(qBound(0, active_index, clip_names.size() - 1));
+    m_clip_box->setVisible(clip_names.size() > 1);
+}
+
+void AnimationControlBar::on_clip_selected(int index) {
+    if (index >= 0) {
+        stop();
+        emit clipChanged(index);
+    }
 }
 
 void AnimationControlBar::set_frame_count(int frames) {

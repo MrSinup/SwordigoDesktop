@@ -66,11 +66,22 @@ public:
     explicit RubyMainWindow(QWidget* parent = nullptr);
     ~RubyMainWindow() override;
 
+    // Open an external file (e.g. from CLI argument, file manager association, or drag & drop)
+    // Automatically pivots Asset Browser root and opens document
+    void open_external_file(const QString& file_path);
+
     // Wayland-only: Qt moves floating QDockWidgets with QWidget::move(), a
     // no-op for toplevels on Wayland — so floating dock title bars cannot be
     // dragged there. This filter routes title-strip presses through the
     // interactive move protocol instead (see eventFilter()).
     bool eventFilter(QObject* watched, QEvent* event) override;
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
+private:
+    bool check_and_handle_filename_collision(const QString& clean_path);
 
 private slots:
     void onNewFile(const QString& target_dir = QString());
@@ -83,6 +94,7 @@ private slots:
     void onModelLoaded(const QString& name, int meshCount, int vertCount);
     void onConvertModel(const QString& source_path = QString());
     void onOpenTools();
+    void onOpenDesktopIntegration();
     void onOpenDocumentation();
     void onEngineBootClicked();       // phone button → show dock + boot
     void on_engine_run_scene(const QString& scene_path); // ▶ Run Scene in dock
@@ -196,6 +208,24 @@ private:
     void sync_views();               // push notices / show viewers for active doc
     void update_filerift_toggle_ui(); // update FileRift encode checkbox state
 
+    // Mode-tab indices. The rest of the window still addresses tabs by literal
+    // index; these names exist so the Node Graph wiring cannot drift if a tab is
+    // ever inserted.
+    enum ModeTab { Tab3D = 0, TabIDE = 1, TabTexture = 2, TabTools = 3,
+                   TabAudio = 4, TabGraph = 5 };
+
+    // Build the Node Graph for the active .scene / .scl document and hand it to
+    // the canvas. Reads from the in-memory editor buffer when the user has
+    // unsaved FileRift edits, so the graph tracks what they see in the IDE.
+    // Cheap when nothing changed (same document + same buffer revision).
+    void refresh_graph_view();
+    // Drop the cached graph so the next refresh rebuilds it. Called from the
+    // choke points that already know a document's content changed (IDE typing,
+    // IDE tab exit, viewport structured edits) rather than from every edit path.
+    void invalidate_graph_view();
+    // Show `text` on the Node Graph notice page and switch the page to it.
+    void show_graph_notice(const QString& text);
+
     // Document tab bar (above the viewing-mode tabs) + per-document state.
     QTabBar* m_doc_tabs = nullptr;
     QVector<RubyDocEntry> m_docs;
@@ -229,6 +259,15 @@ private:
     ruby::panels::TextureViewerPanel* m_texture_viewer = nullptr;
     ruby::panels::AudioViewerPanel*   m_audio_viewer = nullptr;
     ruby::graph::GraphyCanvas*        m_graph_canvas = nullptr;
+    // Node Graph gets the same view/notice stack every other mode page has, so
+    // an ungraphable document explains itself instead of showing a stale graph.
+    QStackedWidget* m_graph_stack = nullptr;
+    QLabel*         m_graph_notice = nullptr;
+    // Identity of the graph the canvas currently holds, so a tab switch that
+    // does not change the document never rebuilds a multi-thousand-node graph.
+    QString m_graph_built_path;
+    quint64 m_graph_built_revision = 0;
+    quint64 m_graph_revision = 0;
     ruby::panels::SceneHierarchyPanel* m_scene_hierarchy = nullptr;
     ruby::editor::StudioIdleWidget*   m_idle_widget = nullptr;
     QDockWidget* m_scene_dock = nullptr;

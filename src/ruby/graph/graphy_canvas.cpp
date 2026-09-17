@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <cmath>
 #include <algorithm>
+#include <utility>
 
 namespace ruby::graph {
 
@@ -23,6 +24,8 @@ GraphyCanvas::GraphyCanvas(QWidget* parent)
     setMouseTracking(true);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setAttribute(Qt::WA_NoSystemBackground, true);
+
+    m_measure = default_text_measure();
 
     // Initial default demo showcase graph
     m_graph = Graph::create_demo_graph();
@@ -77,7 +80,11 @@ void GraphyCanvas::frame_all() {
 
     float zx = width()  / gw;
     float zy = height() / gh;
-    m_zoom = std::clamp(std::min(zx, zy), 0.25f, 1.35f);
+    // The old floor of 0.25 meant "frame all" could not fit a graph wider than
+    // 4x the viewport, which is most real scene graphs, so F left the view
+    // somewhere that still showed a fraction of the nodes. Zoom out as far as
+    // fitting actually requires; only cap the zoom-*in* case.
+    m_zoom = std::clamp(std::min(zx, zy), 0.02f, 1.0f);
 
     m_pan_x = (width()  - gw * m_zoom) * 0.5f - min_x * m_zoom;
     m_pan_y = (height() - gh * m_zoom) * 0.5f - min_y * m_zoom;
@@ -110,40 +117,64 @@ QRectF GraphyCanvas::canvas_to_screen_rect(const QRectF& cr) const {
 // ── Layout & Node Geometry ───────────────────────────────────────────────────
 
 void GraphyCanvas::update_node_layout(Node& node) {
-    if (node.flags() & NodeFlags::Reroute) {
-        node.set_size(24.0f, 24.0f);
-        if (!node.inputs().empty()) {
-            node.inputs_mut()[0].canvas_x = node.x() + 12.0f;
-            node.inputs_mut()[0].canvas_y = node.y() + 12.0f;
-        }
-        if (!node.outputs().empty()) {
-            node.outputs_mut()[0].canvas_x = node.x() + 12.0f;
-            node.outputs_mut()[0].canvas_y = node.y() + 12.0f;
-        }
-        return;
+    const TextMeasure& measure = m_measure;
+    const PinConnectedFn connected = [this](int pin_id) {
+        return m_graph && !m_graph->connections_for_pin(pin_id).empty();
+    };
+
+    NodeGeometry geo = compute_node_geometry(node, m_metrics, measure, connected);
+
+    // The layout engine is the single authority for node size. Sizing from the
+    // node's own measured text is what removes the dead band that came from
+    // `max(json_height, pin_count_height)`, and stops a long subtitle from
+    // being cut off by a card that was sized for its pin count alone.
+    node.set_size(geo.card.w, geo.card.h);
+
+    for (size_t i = 0; i < node.inputs().size() && i < geo.inputs.size(); ++i) {
+        node.inputs_mut()[i].canvas_x = geo.inputs[i].pin_x;
+        node.inputs_mut()[i].canvas_y = geo.inputs[i].y;
+    }
+    for (size_t i = 0; i < node.outputs().size() && i < geo.outputs.size(); ++i) {
+        node.outputs_mut()[i].canvas_x = geo.outputs[i].pin_x;
+        node.outputs_mut()[i].canvas_y = geo.outputs[i].y;
     }
 
-    const float header_h = 32.0f;
-    const float pin_h    = 22.0f;
-    const float pad_bot  = 8.0f;
+    m_geometry[node.id()] = std::move(geo);
+}
 
-    size_t rows = std::max(node.inputs().size(), node.outputs().size());
-    float calc_h = header_h + (float)rows * pin_h + pad_bot;
-    node.set_size(std::max(node.width(), 190.0f), std::max(node.height(), calc_h));
-
-    float cur_y = node.y() + header_h + pin_h * 0.5f;
-    for (auto& pin : node.inputs_mut()) {
-        pin.canvas_x = node.x();
-        pin.canvas_y = cur_y;
-        cur_y += pin_h;
+void GraphyCanvas::relayout_all() {
+    m_geometry.clear();
+    if (!m_graph) return;
+    for (auto& n : m_graph->nodes()) {
+        if (n) update_node_layout(*n);
     }
+}
 
-    cur_y = node.y() + header_h + pin_h * 0.5f;
-    for (auto& pin : node.outputs_mut()) {
-        pin.canvas_x = node.x() + node.width();
-        pin.canvas_y = cur_y;
-        cur_y += pin_h;
-    }
+void GraphyCanvas::set_metrics(const LayoutMetrics& m) {
+    m_metrics = m;
+    relayout_all();
+    update();
+}
+
+void GraphyCanvas::set_text_measure(TextMeasure measure) {
+    m_measure = measure ? std::move(measure) : default_text_measure();
+    relayout_all();
+    update();
+}
+
+const NodeGeometry* GraphyCanvas::node_geometry(int node_id) const {
+    const auto it = m_geometry.find(node_id);
+    return (it == m_geometry.end()) ? nullptr : &it->second;
+}
+
+void GraphyCanvas::set_minimap_visible(bool visible) {
+    if (m_show_minimap == visible) return;
+    m_show_minimap = visible;
+    update();
+}
+
+void GraphyCanvas::toggle_minimap() {
+    set_minimap_visible(!m_show_minimap);
 }
 
 // ── Spline Path Builder (Unreal horizontal Bézier + Godot loopback logic) ─────
@@ -262,11 +293,9 @@ void GraphyCanvas::paintEvent(QPaintEvent* /*event*/) {
     p.translate(m_pan_x, m_pan_y);
     p.scale(m_zoom, m_zoom);
 
-    if (m_graph) {
-        for (auto& n : m_graph->nodes()) {
-            if (n) update_node_layout(*n);
-        }
-    }
+    // 1b. One layout pass: computes and caches every node's geometry, so the
+    //     painter and hit-testing can never disagree about where a rect is.
+    relayout_all();
 
     // 2. Comments / Groups (drawn behind nodes)
     draw_comments(p);
@@ -470,6 +499,16 @@ void GraphyCanvas::draw_nodes(QPainter& p) {
         bool is_selected = (m_selected_node_ids.count(n->id()) > 0);
         bool is_hovered  = (m_hovered_node && m_hovered_node->id() == n->id());
 
+        // Geometry is produced once by the layout engine (graphy_layout.cpp)
+        // and cached, so the painter draws the same rects the layout pass
+        // measured. Every text rect below is content-sized and pre-elided.
+        const NodeGeometry* geo = node_geometry(n->id());
+        if (!geo) {
+            update_node_layout(*n);
+            geo = node_geometry(n->id());
+            if (!geo) continue;
+        }
+
         // ── Reroute Knot Pin (UK2Node_Knot) ───────────────────────────────────
         if (n->flags() & NodeFlags::Reroute) {
             QColor knot_col = (!n->outputs().empty()) ? pin_type_color(n->outputs()[0].type) : QColor(200, 200, 200);
@@ -482,7 +521,7 @@ void GraphyCanvas::draw_nodes(QPainter& p) {
         }
 
         // ── Standard Unreal Node Card (SGraphNode) ────────────────────────────
-        QRectF card_rect(n->x(), n->y(), n->width(), n->height());
+        QRectF card_rect(geo->card.x, geo->card.y, geo->card.w, geo->card.h);
 
         // Drop Shadow
         p.setPen(Qt::NoPen);
@@ -494,8 +533,10 @@ void GraphyCanvas::draw_nodes(QPainter& p) {
         p.setBrush(QColor(27, 28, 33)); // #1B1C21
         p.drawRoundedRect(card_rect, 8.0f, 8.0f);
 
-        // Header gradient
-        QRectF header_rect(n->x(), n->y(), n->width(), 32.0f);
+        // Header gradient — its height is title band + (subtitle band if any),
+        // so a node with no subtitle gets a shorter header rather than a dead
+        // band, and a node with one never overlaps it with the title.
+        QRectF header_rect(n->x(), n->y(), geo->card.w, geo->header_h);
         QLinearGradient grad(header_rect.topLeft(), header_rect.bottomLeft());
 
         if (n->flags() & NodeFlags::Event) {
@@ -518,7 +559,7 @@ void GraphyCanvas::draw_nodes(QPainter& p) {
 
         p.setBrush(grad);
         p.drawRoundedRect(header_rect, 8.0f, 8.0f);
-        p.drawRect(QRectF(n->x(), n->y() + 24.0f, n->width(), 8.0f));
+        p.drawRect(QRectF(n->x(), n->y() + geo->header_h - 8.0f, geo->card.w, 8.0f));
 
         // Border / Halo
         QColor border_col = is_selected ? QColor(240, 190, 40)
@@ -527,37 +568,50 @@ void GraphyCanvas::draw_nodes(QPainter& p) {
         p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(card_rect, 8.0f, 8.0f);
 
-        // Header Title
+        // Header Title — drawn inside its own reserved band, at the same pixel
+        // size the layout engine measured it with.
         p.setPen(QColor(240, 242, 248));
         QFont f_title = p.font();
         f_title.setBold(true);
-        f_title.setPixelSize(12);
+        f_title.setPixelSize(m_metrics.title_px);
         p.setFont(f_title);
-        p.drawText(header_rect.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, n->title());
+        p.drawText(QRectF(geo->title_band.x, geo->title_band.y,
+                          geo->title_band.w, geo->title_band.h),
+                   Qt::AlignVCenter | Qt::AlignLeft,
+                   elide_to_width(n->title(), geo->title_band.w, m_metrics.title_px,
+                                  true, false, m_measure));
 
-        // Header Subtitle
-        if (!n->subtitle().isEmpty()) {
+        // Header Subtitle — its own band *below* the title. Previously this was
+        // the title band nudged down by 14px inside the same 32px strip, which
+        // is why every node in the reported screenshot collided.
+        if (geo->has_subtitle) {
             p.setPen(QColor(180, 190, 210, 180));
             QFont f_sub = p.font();
             f_sub.setBold(false);
             f_sub.setItalic(true);
-            f_sub.setPixelSize(9);
+            f_sub.setPixelSize(m_metrics.subtitle_px);
             p.setFont(f_sub);
-            p.drawText(header_rect.adjusted(12, 14, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, n->subtitle());
+            p.drawText(QRectF(geo->subtitle_band.x, geo->subtitle_band.y,
+                              geo->subtitle_band.w, geo->subtitle_band.h),
+                       Qt::AlignVCenter | Qt::AlignLeft,
+                       elide_to_width(n->subtitle(), geo->subtitle_band.w,
+                                      m_metrics.subtitle_px, false, true, m_measure));
         }
 
         // ── Pins & Labels ─────────────────────────────────────────────────────
         QFont f_pin = p.font();
         f_pin.setBold(false);
         f_pin.setItalic(false);
-        f_pin.setPixelSize(11);
+        f_pin.setPixelSize(m_metrics.label_px);
         p.setFont(f_pin);
 
         // Input pins
-        for (const auto& pin : n->inputs()) {
+        for (size_t pi = 0; pi < n->inputs().size() && pi < geo->inputs.size(); ++pi) {
+            const Pin& pin = n->inputs()[pi];
+            const PinGeometry& pg = geo->inputs[pi];
             bool conn = (!m_graph->connections_for_pin(pin.id).empty());
             QColor pcol = pin_type_color(pin.type);
-            QPointF p_pos(pin.canvas_x, pin.canvas_y);
+            QPointF p_pos(pg.pin_x, pg.y);
 
             if (pin.type == PinType::Exec) {
                 QPainterPath arrow;
@@ -574,32 +628,38 @@ void GraphyCanvas::draw_nodes(QPainter& p) {
                 p.drawEllipse(p_pos, 5.0f, 5.0f);
             }
 
+            // Label rect is exactly the measured text, so it can never be
+            // clipped and can never run under the pill.
             p.setPen(QColor(215, 220, 230));
-            QRectF txt_r(pin.canvas_x + 10.0f, pin.canvas_y - 10.0f, n->width() * 0.5f - 14.0f, 20.0f);
-            p.drawText(txt_r, Qt::AlignVCenter | Qt::AlignLeft, pin.name);
+            if (!pg.label_text.isEmpty()) {
+                p.drawText(QRectF(pg.label_rect.x, pg.label_rect.y, pg.label_rect.w, pg.label_rect.h),
+                           Qt::AlignVCenter | Qt::AlignLeft, pg.label_text);
+            }
 
-            // Inline value pill if unconnected and has default_val
-            if (!conn && !pin.default_value.isEmpty() && pin.type != PinType::Exec) {
-                float pill_w = 48.0f;
-                QRectF pill_r(pin.canvas_x + n->width() * 0.40f, pin.canvas_y - 7.0f, pill_w, 14.0f);
+            // Inline value pill — content-sized and elided, never a fixed 48px
+            // box that cuts a vector mid-character.
+            if (pg.has_pill && !conn) {
+                const QRectF pill_r(pg.pill_rect.x, pg.pill_rect.y, pg.pill_rect.w, pg.pill_rect.h);
                 p.setPen(QPen(QColor(55, 58, 68), 1.0f));
                 p.setBrush(QColor(18, 19, 22));
                 p.drawRoundedRect(pill_r, 3.0f, 3.0f);
 
                 p.setPen(QColor(140, 145, 160));
                 QFont f_val = f_pin;
-                f_val.setPixelSize(9);
+                f_val.setPixelSize(m_metrics.value_px);
                 p.setFont(f_val);
-                p.drawText(pill_r, Qt::AlignCenter, pin.default_value);
+                p.drawText(pill_r, Qt::AlignCenter, pg.value_text);
                 p.setFont(f_pin);
             }
         }
 
         // Output pins
-        for (const auto& pin : n->outputs()) {
+        for (size_t pi = 0; pi < n->outputs().size() && pi < geo->outputs.size(); ++pi) {
+            const Pin& pin = n->outputs()[pi];
+            const PinGeometry& pg = geo->outputs[pi];
             bool conn = (!m_graph->connections_for_pin(pin.id).empty());
             QColor pcol = pin_type_color(pin.type);
-            QPointF p_pos(pin.canvas_x, pin.canvas_y);
+            QPointF p_pos(pg.pin_x, pg.y);
 
             if (pin.type == PinType::Exec) {
                 QPainterPath arrow;
@@ -616,9 +676,12 @@ void GraphyCanvas::draw_nodes(QPainter& p) {
                 p.drawEllipse(p_pos, 5.0f, 5.0f);
             }
 
+            // Right-aligned rect of exactly the measured width.
             p.setPen(QColor(215, 220, 230));
-            QRectF txt_r(pin.canvas_x - n->width() * 0.5f - 10.0f, pin.canvas_y - 10.0f, n->width() * 0.5f, 20.0f);
-            p.drawText(txt_r, Qt::AlignVCenter | Qt::AlignRight, pin.name);
+            if (!pg.label_text.isEmpty()) {
+                p.drawText(QRectF(pg.label_rect.x, pg.label_rect.y, pg.label_rect.w, pg.label_rect.h),
+                           Qt::AlignVCenter | Qt::AlignLeft, pg.label_text);
+            }
         }
     }
 }
@@ -661,20 +724,46 @@ void GraphyCanvas::draw_marquee(QPainter& p) {
     p.drawRect(m_marquee_rect);
 }
 
+// ── Minimap <-> canvas mapping (set by draw_minimap) ────────────────────────
+
+QPointF GraphyCanvas::minimap_to_canvas(const QPointF& p) const {
+    if (m_minimap_scale <= 0.0f) return p;
+    return QPointF((p.x() - m_minimap_origin.x()) / m_minimap_scale,
+                   (p.y() - m_minimap_origin.y()) / m_minimap_scale);
+}
+
+QPointF GraphyCanvas::canvas_to_minimap(const QPointF& p) const {
+    return QPointF(m_minimap_origin.x() + p.x() * m_minimap_scale,
+                   m_minimap_origin.y() + p.y() * m_minimap_scale);
+}
+
 void GraphyCanvas::draw_minimap(QPainter& p) {
     if (!m_graph) return;
 
-    int mw = 170;
-    int mh = 115;
-    int mx = width() - mw - 15;
-    int my = height() - mh - 15;
+    const int mw = 170;
+    const int mh = 115;
+    const int margin = 15;
+    const int inset  = 6;
+    const float pad_canvas = 40.0f;
+
+    // Do not paint a HUD bigger than the thing it summarises.
+    if (width() < mw + margin * 2 || height() < mh + margin * 2) {
+        m_minimap_rect = QRect();
+        return;
+    }
+
+    const int mx = width() - mw - margin;
+    const int my = height() - mh - margin;
     m_minimap_rect = QRect(mx, my, mw, mh);
 
     p.setPen(QPen(QColor(50, 54, 66), 1.0f));
     p.setBrush(QColor(18, 19, 23, 210));
     p.drawRoundedRect(m_minimap_rect, 6.0f, 6.0f);
 
-    float min_x = 0.0f, min_y = 0.0f, max_x = 1000.0f, max_y = 600.0f;
+    // Real content bounds. The previous version seeded these with 0,0 and
+    // 1000,600, which forced the origin into the frame and squashed every real
+    // graph into one corner of the widget regardless of where it actually was.
+    float min_x = 1e9f, min_y = 1e9f, max_x = -1e9f, max_y = -1e9f;
     for (const auto& n : m_graph->nodes()) {
         if (!n) continue;
         min_x = std::min(min_x, n->x());
@@ -682,32 +771,70 @@ void GraphyCanvas::draw_minimap(QPainter& p) {
         max_x = std::max(max_x, n->x() + n->width());
         max_y = std::max(max_y, n->y() + n->height());
     }
-    float gw = std::max(100.0f, max_x - min_x + 200.0f);
-    float gh = std::max(100.0f, max_y - min_y + 200.0f);
+    for (const auto& c : m_graph->comments()) {
+        min_x = std::min(min_x, c.x);
+        min_y = std::min(min_y, c.y);
+        max_x = std::max(max_x, c.x + c.width);
+        max_y = std::max(max_y, c.y + c.height);
+    }
+    if (max_x <= min_x || max_y <= min_y) {
+        min_x = 0.0f; min_y = 0.0f; max_x = 100.0f; max_y = 100.0f;
+    }
+
+    const float gw = std::max(1.0f, (max_x - min_x) + pad_canvas * 2.0f);
+    const float gh = std::max(1.0f, (max_y - min_y) + pad_canvas * 2.0f);
+
+    const QRectF inner(mx + inset, my + inset, mw - inset * 2, mh - inset * 2);
+
+    // Uniform scale: a minimap must not distort the graph's aspect ratio.
+    const float scale = std::min(inner.width() / gw, inner.height() / gh);
+    const float off_x = inner.center().x() - (min_x - pad_canvas + gw * 0.5f) * scale;
+    const float off_y = inner.center().y() - (min_y - pad_canvas + gh * 0.5f) * scale;
+
+    // Publish the mapping so clicks in the HUD can be translated back into
+    // canvas space (see mousePressEvent).
+    m_minimap_scale  = scale;
+    m_minimap_origin = QPointF(off_x, off_y);
 
     auto to_mini = [&](float cx, float cy) -> QPointF {
-        float nx = (cx - min_x) / gw;
-        float ny = (cy - min_y) / gh;
-        return QPointF(mx + 6.0f + nx * (mw - 12.0f), my + 6.0f + ny * (mh - 12.0f));
+        return QPointF(off_x + cx * scale, off_y + cy * scale);
     };
 
-    // Draw mini nodes
+    // Everything in the HUD is clipped to the HUD. Previously these rects were
+    // emitted unclipped in screen space after p.restore(), so ~85 node boxes
+    // bleeding across the canvas read as a stray histogram/equalizer widget.
+    p.save();
+    p.setClipRect(inner.toRect());
+
     p.setPen(Qt::NoPen);
+    p.setBrush(QColor(70, 85, 110));
     for (const auto& n : m_graph->nodes()) {
         if (!n) continue;
-        QPointF tl = to_mini(n->x(), n->y());
-        QPointF br = to_mini(n->x() + n->width(), n->y() + n->height());
-        p.setBrush(QColor(70, 85, 110));
-        p.drawRect(QRectF(tl, br));
+        QRectF r(to_mini(n->x(), n->y()),
+                 to_mini(n->x() + n->width(), n->y() + n->height()));
+        r = r.normalized();
+        // Keep a visible floor so a node stays a mark when fully zoomed out.
+        if (r.width()  < 1.0) r.setWidth(1.0);
+        if (r.height() < 1.0) r.setHeight(1.0);
+        p.drawRect(r);
+    }
+
+    // Comment frames, so the summary matches what the canvas actually shows.
+    p.setPen(QPen(QColor(90, 100, 125, 180), 1.0f));
+    p.setBrush(Qt::NoBrush);
+    for (const auto& c : m_graph->comments()) {
+        p.drawRect(QRectF(to_mini(c.x, c.y),
+                          to_mini(c.x + c.width, c.y + c.height)).normalized());
     }
 
     // Viewport camera frustum in minimap
-    QRectF v_canvas = screen_to_canvas_rect(rect());
-    QPointF v_tl = to_mini(v_canvas.left(), v_canvas.top());
-    QPointF v_br = to_mini(v_canvas.right(), v_canvas.bottom());
+    const QRectF v_canvas = screen_to_canvas_rect(rect());
     p.setPen(QPen(QColor(240, 190, 40, 220), 1.0f));
     p.setBrush(QColor(240, 190, 40, 25));
-    p.drawRect(QRectF(v_tl, v_br));
+    p.drawRect(QRectF(to_mini(v_canvas.left(), v_canvas.top()),
+                      to_mini(v_canvas.right(), v_canvas.bottom())).normalized());
+
+    p.restore();
 }
 
 // ── Mouse Events ─────────────────────────────────────────────────────────────
@@ -716,9 +843,16 @@ void GraphyCanvas::mousePressEvent(QMouseEvent* event) {
     m_last_mouse_pos = event->pos();
     QPointF cp = screen_to_canvas(event->pos());
 
-    // Minimap interaction (Godot camera click/drag)
+    // Minimap interaction (Godot camera click/drag). This branch used to set
+    // the drag flag and return without moving the view at all, so clicking the
+    // HUD silently ate the click. It now jumps the view so the clicked point
+    // becomes the centre, which is what a minimap is for.
     if (m_show_minimap && m_minimap_rect.contains(event->pos())) {
+        const QPointF target = minimap_to_canvas(QPointF(event->pos()));
+        m_pan_x = width()  * 0.5f - target.x() * m_zoom;
+        m_pan_y = height() * 0.5f - target.y() * m_zoom;
         m_dragging_minimap = true;
+        update();
         event->accept();
         return;
     }
@@ -1092,6 +1226,14 @@ void GraphyCanvas::wheelEvent(QWheelEvent* event) {
 void GraphyCanvas::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_F) {
         frame_all();
+        event->accept();
+        return;
+    }
+
+    // Minimap HUD is a preference, not a permanent overlay: several users read
+    // the always-on version as a broken debug widget bleeding into the canvas.
+    if (event->key() == Qt::Key_M) {
+        toggle_minimap();
         event->accept();
         return;
     }

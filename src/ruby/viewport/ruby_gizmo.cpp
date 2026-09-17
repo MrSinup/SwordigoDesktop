@@ -20,11 +20,8 @@
 #include <cstdio>
 #include <cfloat>
 
-// Pull in GL functions via the project's platform header (same path viewport uses).
 // QOpenGLFunctions (inherited by RubyGizmo) covers GL ES 2.0 subset (VBOs, attribs).
-// The compat-pipeline functions (glColor3f, glLineWidth, etc.) come from the raw GL header.
-#define GL_GLEXT_PROTOTYPES 1
-#include "platform/gl_inc.h"
+// The compat-pipeline functions (glColor3f, glLineWidth, etc.) come from Qt's OpenGL headers.
 #ifndef GL_LIGHTING
 #  define GL_LIGHTING 0x0B90
 #endif

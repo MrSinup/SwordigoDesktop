@@ -14,7 +14,9 @@
 #include <QVBoxLayout>
 #include <fstream>
 #include <sstream>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 namespace ruby::panels {
 

@@ -11,6 +11,7 @@
 #include <QString>
 #include <vector>
 #include <string>
+#include "tools/gltf_glb.h"
 
 class QLineEdit;
 class QPushButton;
@@ -19,6 +20,9 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QProgressBar;
+class QGroupBox;
+class QScrollArea;
+class QFrame;
 
 namespace ruby::editor {
 
@@ -46,6 +50,8 @@ private slots:
     void onScaleChanged(double val);
     void onTexConvertToggled(bool checked);
     void onPvrResChanged(int index);
+    void onAnimSourceChanged(int index);
+    void onAnimFpsChanged(double val);
     void onConvertClicked();
     void onOpenConvertedClicked();
 
@@ -53,6 +59,7 @@ private:
     void setup_ui();
     void analyze_source_model(const QString& file_path);
     void update_resulting_bounds();
+    void update_anim_ui_and_list();
     void set_working(bool working);
 
     // Path widgets
@@ -88,6 +95,15 @@ private:
     QComboBox*      m_pvr_res_combo        = nullptr;
     QLabel*         m_pvr_mode_badge       = nullptr;
 
+    // Animation controls & routing
+    QGroupBox*      m_grp_anims            = nullptr;
+    QFrame*         m_anim_warning_frame   = nullptr;
+    QLabel*         m_anim_warning_label   = nullptr;
+    QComboBox*      m_anim_source_combo    = nullptr;
+    QLabel*         m_anim_route_info_label= nullptr;
+    QLabel*         m_anim_list_label      = nullptr;
+    QScrollArea*    m_anim_scroll_area     = nullptr;
+
     // Advanced / Compatibility
     QCheckBox*      m_rigid_skin_check  = nullptr;
     QDoubleSpinBox* m_anim_fps_spin     = nullptr;
@@ -106,6 +122,11 @@ private:
     float           m_cur_d             = 0.0f;
     int             m_mesh_count        = 0;
     int             m_vert_count        = 0;
+
+    // Detected animation clips
+    std::string     m_companion_motions_path;
+    std::vector<av::AnimationClipSummary> m_in_glb_clips;
+    std::vector<av::AnimationClipSummary> m_json_clips;
 
     // Last written output
     QString         m_last_written_pod;

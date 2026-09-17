@@ -5,6 +5,7 @@
 #include "gltf_glb.h"
 #include "pod_loader.h"
 #include "tiny_gltf_v3.h"
+#include "tinygltf_json_c.h"
 
 #include <algorithm>
 #include <cctype>
@@ -15,6 +16,9 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <filesystem>
+#include <unordered_set>
+#include <map>
 
 namespace av {
 namespace {
@@ -145,6 +149,28 @@ static const tg3_value* tg3_obj_get(const tg3_value* obj, const char* key) {
             return &kv->value;
     }
     return nullptr;
+}
+
+// The image a texture points at, honouring EXT_texture_webp.
+//
+// EXT_texture_webp is a REPLACEMENT mechanism, not a fallback: when a file
+// requires it, the texture may carry no core `source` field at all and name its
+// image only inside extensions.EXT_texture_webp.source. Reading
+// textures[i].source alone then yields -1 and the material silently loses its
+// albedo — pilot.glb converts with "0 textures" for exactly this reason. Prefer
+// the core field (the spec's own fallback), then the extension.
+static int32_t texture_source_image(const tg3_model* model, int32_t tex_idx) {
+    if (!model || tex_idx < 0 || tex_idx >= (int32_t)model->textures_count) return -1;
+    const tg3_texture& t = model->textures[tex_idx];
+    if (t.source >= 0) return t.source;
+    for (uint32_t e = 0; e < t.ext.extensions_count; ++e) {
+        const tg3_extension& ex = t.ext.extensions[e];
+        if (!ex.name.data) continue;
+        if (std::string(ex.name.data, ex.name.len) != "EXT_texture_webp") continue;
+        const tg3_value* src = tg3_obj_get(&ex.value, "source");
+        if (src && src->type == TG3_VALUE_INT) return (int32_t)src->int_val;
+    }
+    return -1;
 }
 
 static SpecGlossInfo read_spec_gloss(const tg3_material* mat) {
@@ -327,6 +353,238 @@ static bool gltf_mat4_inverse(const float in[16], float out[16]) {
     return true;
 }
 
+static void gltf_mat4_mul(const float a[16], const float b[16], float out[16]) {
+    float t[16];
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            t[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0] + a[1 * 4 + r] * b[c * 4 + 1]
+                         + a[2 * 4 + r] * b[c * 4 + 2] + a[3 * 4 + r] * b[c * 4 + 3];
+        }
+    }
+    std::memcpy(out, t, sizeof(t));
+}
+
+static void quat_mul(const float q1[4], const float q2[4], float out[4]) {
+    out[0] = q1[3]*q2[0] + q1[0]*q2[3] + q1[1]*q2[2] - q1[2]*q2[1];
+    out[1] = q1[3]*q2[1] - q1[0]*q2[2] + q1[1]*q2[3] + q1[2]*q2[0];
+    out[2] = q1[3]*q2[2] + q1[0]*q2[1] - q1[1]*q2[0] + q1[2]*q2[3];
+    out[3] = q1[3]*q2[3] - q1[0]*q2[0] - q1[1]*q2[1] - q1[2]*q2[2];
+}
+
+static void quat_rotate_vec(const float q[4], float vx, float vy, float vz, float& ox, float& oy, float& oz) {
+    float rx = q[0], ry = q[1], rz = q[2], w = q[3];
+    float tx = 2.0f * (ry * vz - rz * vy + w * vx);
+    float ty = 2.0f * (rz * vx - rx * vz + w * vy);
+    float tz = 2.0f * (rx * vy - ry * vx + w * vz);
+    ox = vx + (ry * tz - rz * ty);
+    oy = vy + (rz * tx - rx * tz);
+    oz = vz + (rx * ty - ry * tx);
+}
+
+static void mat3_to_quat(const float m[9], float q[4]) {
+    float trace = m[0] + m[4] + m[8];
+    if (trace > 0.0f) {
+        float s = 0.5f / std::sqrt(trace + 1.0f);
+        q[3] = 0.25f / s;
+        q[0] = (m[7] - m[5]) * s;
+        q[1] = (m[2] - m[6]) * s;
+        q[2] = (m[3] - m[1]) * s;
+    } else {
+        if (m[0] > m[4] && m[0] > m[8]) {
+            float s = 2.0f * std::sqrt(1.0f + m[0] - m[4] - m[8]);
+            q[3] = (m[7] - m[5]) / s;
+            q[0] = 0.25f * s;
+            q[1] = (m[1] + m[3]) / s;
+            q[2] = (m[2] + m[6]) / s;
+        } else if (m[4] > m[8]) {
+            float s = 2.0f * std::sqrt(1.0f + m[4] - m[0] - m[8]);
+            q[3] = (m[2] - m[6]) / s;
+            q[0] = (m[1] + m[3]) / s;
+            q[1] = 0.25f * s;
+            q[2] = (m[5] + m[7]) / s;
+        } else {
+            float s = 2.0f * std::sqrt(1.0f + m[8] - m[0] - m[4]);
+            q[3] = (m[3] - m[1]) / s;
+            q[0] = (m[2] + m[6]) / s;
+            q[1] = (m[5] + m[7]) / s;
+            q[2] = 0.25f * s;
+        }
+    }
+    float len = std::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+    if (len > 1e-8f) { q[0] /= len; q[1] /= len; q[2] /= len; q[3] /= len; }
+    else { q[0] = 0; q[1] = 0; q[2] = 0; q[3] = 1; }
+}
+
+struct GltfPodMapping {
+    std::vector<int> gltf_to_pod_node;     // gltf node idx -> pod node idx (primary/prim0)
+    std::vector<int> pod_mesh_of_gltf_mesh; // gltf mesh idx -> first pod mesh idx
+    int num_mesh_nodes = 0;
+    int total_nodes = 0;
+};
+
+static GltfPodMapping compute_gltf_pod_mapping(const tg3_model* model) {
+    GltfPodMapping m;
+    m.pod_mesh_of_gltf_mesh.assign(model->meshes_count, -1);
+    int cur_mesh = 0;
+    for (uint32_t mi = 0; mi < model->meshes_count; ++mi) {
+        m.pod_mesh_of_gltf_mesh[mi] = cur_mesh;
+        cur_mesh += (int)model->meshes[mi].primitives_count;
+    }
+
+    std::vector<int> mesh_gltf_nodes;
+    std::vector<int> other_gltf_nodes;
+    for (uint32_t i = 0; i < model->nodes_count; ++i) {
+        if (model->nodes[i].mesh >= 0 && model->nodes[i].mesh < (int32_t)model->meshes_count) {
+            mesh_gltf_nodes.push_back(static_cast<int>(i));
+        } else {
+            other_gltf_nodes.push_back(static_cast<int>(i));
+        }
+    }
+
+    m.gltf_to_pod_node.assign(model->nodes_count, -1);
+    int cur_node = 0;
+    for (int gn_idx : mesh_gltf_nodes) {
+        m.gltf_to_pod_node[gn_idx] = cur_node;
+        int n_prims = (int)model->meshes[model->nodes[gn_idx].mesh].primitives_count;
+        cur_node += (n_prims > 0 ? n_prims : 1);
+    }
+    m.num_mesh_nodes = cur_node;
+
+    for (int gn_idx : other_gltf_nodes) {
+        m.gltf_to_pod_node[gn_idx] = cur_node++;
+    }
+    m.total_nodes = cur_node;
+    return m;
+}
+
+static void gltf_local_static_matrix(const tg3_node* gn, float m[16]) {
+    if (gn->has_matrix) {
+        for (int k = 0; k < 16; ++k) m[k] = (float)gn->matrix[k];
+        return;
+    }
+    float S[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    float R[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    float T[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    const float x = (float)gn->rotation[0], y = (float)gn->rotation[1],
+                z = (float)gn->rotation[2], w = (float)gn->rotation[3];
+    R[0]=1-2*(y*y+z*z); R[4]=2*(x*y-z*w);   R[8]=2*(x*z+y*w);
+    R[1]=2*(x*y+z*w);   R[5]=1-2*(x*x+z*z); R[9]=2*(y*z-x*w);
+    R[2]=2*(x*z-y*w);   R[6]=2*(y*z+x*w);   R[10]=1-2*(x*x+y*y);
+    S[0]=(float)gn->scale[0]; S[5]=(float)gn->scale[1]; S[10]=(float)gn->scale[2];
+    T[12]=(float)gn->translation[0]; T[13]=(float)gn->translation[1]; T[14]=(float)gn->translation[2];
+    float tr[16];
+    gltf_mat4_mul(T, R, tr);
+    gltf_mat4_mul(tr, S, m);
+}
+
+static void gltf_rest_world_matrix(const tg3_model* model, const std::vector<int>& parent_of,
+                                   int idx, float out16[16], int depth = 0) {
+    if (idx < 0 || idx >= (int)model->nodes_count || depth > 128) {
+        std::memset(out16, 0, sizeof(float) * 16);
+        out16[0] = out16[5] = out16[10] = out16[15] = 1.0f;
+        return;
+    }
+    float local[16];
+    gltf_local_static_matrix(&model->nodes[idx], local);
+    int p = parent_of[idx];
+    if (p >= 0 && p != idx) {
+        float pw[16];
+        gltf_rest_world_matrix(model, parent_of, p, pw, depth + 1);
+        gltf_mat4_mul(pw, local, out16);
+    } else {
+        std::memcpy(out16, local, sizeof(float) * 16);
+    }
+}
+
+struct GltfSkeletonInfo {
+    std::vector<int> parent_of;
+    std::vector<bool> is_joint;
+    std::vector<bool> is_root_joint;
+    std::vector<float> skel_scale_of_joint;
+    std::vector<std::array<float, 4>> q_wrapper_of_joint;
+    std::vector<std::array<float, 3>> p_wrapper_of_joint;
+    std::vector<float> s_wrapper_of_joint;
+};
+
+static GltfSkeletonInfo analyze_skeleton(const tg3_model* model, float scale) {
+    GltfSkeletonInfo skel;
+    skel.parent_of.assign(model->nodes_count, -1);
+    for (uint32_t i = 0; i < model->nodes_count; ++i) {
+        const tg3_node* n = &model->nodes[i];
+        for (uint32_t c = 0; c < n->children_count; ++c) {
+            int32_t child_idx = n->children[c];
+            if (child_idx >= 0 && child_idx < (int32_t)model->nodes_count) {
+                skel.parent_of[child_idx] = (int)i;
+            }
+        }
+    }
+
+    skel.is_joint.assign(model->nodes_count, false);
+    for (uint32_t si = 0; si < model->skins_count; ++si) {
+        const tg3_skin* skin = &model->skins[si];
+        for (uint32_t j = 0; j < skin->joints_count; ++j) {
+            int32_t ji = skin->joints[j];
+            if (ji >= 0 && ji < (int32_t)skel.is_joint.size()) skel.is_joint[ji] = true;
+        }
+    }
+
+    skel.is_root_joint.assign(model->nodes_count, false);
+    for (uint32_t i = 0; i < model->nodes_count; ++i) {
+        if (!skel.is_joint[i]) continue;
+        int p = skel.parent_of[i];
+        if (p < 0 || !skel.is_joint[p]) skel.is_root_joint[i] = true;
+    }
+
+    skel.skel_scale_of_joint.assign(model->nodes_count, scale);
+    skel.q_wrapper_of_joint.assign(model->nodes_count, {0,0,0,1});
+    skel.p_wrapper_of_joint.assign(model->nodes_count, {0,0,0});
+    skel.s_wrapper_of_joint.assign(model->nodes_count, 1.0f);
+
+    for (uint32_t i = 0; i < model->nodes_count; ++i) {
+        if (!skel.is_root_joint[i]) continue;
+        int p = skel.parent_of[i];
+        float S_wrap = 1.0f;
+        std::array<float, 4> Q_wrap = {0, 0, 0, 1};
+        std::array<float, 3> P_wrap = {0, 0, 0};
+        if (p >= 0) {
+            float wrap_w[16];
+            gltf_rest_world_matrix(model, skel.parent_of, p, wrap_w, 0);
+            P_wrap = {wrap_w[12], wrap_w[13], wrap_w[14]};
+            float sx = std::sqrt(wrap_w[0]*wrap_w[0] + wrap_w[1]*wrap_w[1] + wrap_w[2]*wrap_w[2]);
+            float sy = std::sqrt(wrap_w[4]*wrap_w[4] + wrap_w[5]*wrap_w[5] + wrap_w[6]*wrap_w[6]);
+            float sz = std::sqrt(wrap_w[8]*wrap_w[8] + wrap_w[9]*wrap_w[9] + wrap_w[10]*wrap_w[10]);
+            S_wrap = (sx + sy + sz) / 3.0f;
+            if (S_wrap < 1e-6f) S_wrap = 1.0f;
+            float R[9] = {
+                wrap_w[0]/sx, wrap_w[1]/sx, wrap_w[2]/sx,
+                wrap_w[4]/sy, wrap_w[5]/sy, wrap_w[6]/sy,
+                wrap_w[8]/sz, wrap_w[9]/sz, wrap_w[10]/sz
+            };
+            mat3_to_quat(R, Q_wrap.data());
+        }
+        skel.s_wrapper_of_joint[i] = S_wrap;
+        skel.skel_scale_of_joint[i] = S_wrap * scale;
+        skel.q_wrapper_of_joint[i] = Q_wrap;
+        skel.p_wrapper_of_joint[i] = P_wrap;
+    }
+
+    for (uint32_t i = 0; i < model->nodes_count; ++i) {
+        if (!skel.is_joint[i] || skel.is_root_joint[i]) continue;
+        int cur = skel.parent_of[i];
+        while (cur >= 0 && skel.is_joint[cur] && !skel.is_root_joint[cur]) {
+            cur = skel.parent_of[cur];
+        }
+        if (cur >= 0 && skel.is_root_joint[cur]) {
+            skel.s_wrapper_of_joint[i] = skel.s_wrapper_of_joint[cur];
+            skel.skel_scale_of_joint[i] = skel.skel_scale_of_joint[cur];
+            skel.q_wrapper_of_joint[i] = skel.q_wrapper_of_joint[cur];
+            skel.p_wrapper_of_joint[i] = skel.p_wrapper_of_joint[cur];
+        }
+    }
+
+    return skel;
+}
+
 // ─── Rebuild PODModel from tg3_model ───────────────────────────────────
 static bool build_pod_from_tg3(const tg3_model* model,
                                PODModel& out, std::vector<GLTFImageBuffer>& images,
@@ -346,11 +604,24 @@ static bool build_pod_from_tg3(const tg3_model* model,
         }
     }
 
-    std::vector<float> accbuf;
-    auto load = [&](int32_t acc_idx) -> const std::vector<float>& {
-        accbuf.clear();
-        if (!read_accessor_floats(model, acc_idx, accbuf)) accbuf.clear();
-        return accbuf;
+    // MUST return by value. This previously handed back a reference to ONE
+    // shared scratch buffer, so any two results held at once aliased each
+    // other:
+    //
+    //     const std::vector<float>& joints  = load(joints_acc);
+    //     const std::vector<float>& weights = load(weights_acc);  // clobbers joints!
+    //
+    // `joints` silently became the WEIGHTS_0 data, so the rigid-skin bake below
+    // bound every vertex to the joint index equal to its own normalised weight
+    // (0 or 1). The result still looked perfect at the BIND POSE — all skin
+    // matrices are identity there — but any animated frame dragged 89% of the
+    // mesh with a single bone, tearing the model into long stretched sheets.
+    // Returning by value makes every call site own its data; the per-attribute
+    // copy is irrelevant for a one-shot asset conversion.
+    auto load = [&](int32_t acc_idx) -> std::vector<float> {
+        std::vector<float> buf;
+        if (!read_accessor_floats(model, acc_idx, buf)) buf.clear();
+        return buf;
     };
 
     out.meshes.clear();
@@ -511,7 +782,7 @@ static bool build_pod_from_tg3(const tg3_model* model,
                 m.bone_batches.max_bones = 1;
             }
 
-            if (scale != 1.0f && scale > 0.0f) {
+            if (scale != 1.0f && scale > 0.0f && m.bones_per_vertex <= 0) {
                 for (float& pv : m.positions) pv *= scale;
             }
 
@@ -542,62 +813,84 @@ static bool build_pod_from_tg3(const tg3_model* model,
     }
 
     out.nodes.clear();
-    std::vector<int> pod_mesh_of_gltf_mesh(model->meshes_count, -1);
-    {
-        int cursor = 0;
-        for (uint32_t m = 0; m < model->meshes_count; ++m) {
-            pod_mesh_of_gltf_mesh[m] = cursor;
-            cursor += (int)model->meshes[m].primitives_count;
-        }
-    }
+    GltfPodMapping mapping = compute_gltf_pod_mapping(model);
+    GltfSkeletonInfo skel = analyze_skeleton(model, scale);
 
-    std::vector<int> mesh_gltf_nodes;
-    std::vector<int> other_gltf_nodes;
+    out.nodes.resize(mapping.total_nodes);
+    out.num_mesh_nodes = mapping.num_mesh_nodes;
+
     for (uint32_t i = 0; i < model->nodes_count; ++i) {
-        if (model->nodes[i].mesh >= 0 && model->nodes[i].mesh < (int32_t)model->meshes_count) {
-            mesh_gltf_nodes.push_back(static_cast<int>(i));
-        } else {
-            other_gltf_nodes.push_back(static_cast<int>(i));
-        }
-    }
-
-    std::vector<int> gltf_to_pod_node(model->nodes_count, -1);
-    for (size_t k = 0; k < mesh_gltf_nodes.size(); ++k) {
-        gltf_to_pod_node[mesh_gltf_nodes[k]] = static_cast<int>(k);
-    }
-    for (size_t k = 0; k < other_gltf_nodes.size(); ++k) {
-        gltf_to_pod_node[other_gltf_nodes[k]] = static_cast<int>(mesh_gltf_nodes.size() + k);
-    }
-
-    std::vector<bool> is_joint(model->nodes_count, false);
-    for (uint32_t si = 0; si < model->skins_count; ++si) {
-        const tg3_skin* skin = &model->skins[si];
-        for (uint32_t j = 0; j < skin->joints_count; ++j) {
-            int32_t ji = skin->joints[j];
-            if (ji >= 0 && ji < (int32_t)is_joint.size()) is_joint[ji] = true;
-        }
-    }
-
-    std::vector<int> node_mesh_begin(model->nodes_count, -1);
-    std::vector<int> node_mesh_end(model->nodes_count, -1);
-    for (uint32_t n = 0; n < model->nodes_count; ++n) {
-        if (model->nodes[n].mesh >= 0 && model->nodes[n].mesh < (int32_t)model->meshes_count) {
-            int m = model->nodes[n].mesh;
-            node_mesh_begin[n] = pod_mesh_of_gltf_mesh[m];
-            node_mesh_end[n] = pod_mesh_of_gltf_mesh[m] + (int)model->meshes[m].primitives_count;
-        }
-    }
-
-    out.nodes.resize(model->nodes_count);
-    for (uint32_t i = 0; i < model->nodes_count; ++i) {
-        int pod_idx = gltf_to_pod_node[i];
+        if (model->nodes[i].mesh < 0 || model->nodes[i].mesh >= (int32_t)model->meshes_count) continue;
         const tg3_node* gn = &model->nodes[i];
+        const tg3_mesh* gm = &model->meshes[gn->mesh];
+        int num_prims = (int)gm->primitives_count;
+        int first_pod_mesh = mapping.pod_mesh_of_gltf_mesh[gn->mesh];
+        int base_pod_idx = mapping.gltf_to_pod_node[i];
+        std::string base_name = tg3_to_string(gn->name);
+        for (char& c : base_name) { if (c == ':' || c == '/' || c == '\\') c = '_'; }
+
+        bool is_skinned = (gn->skin >= 0 && gn->skin < (int32_t)model->skins_count);
+
+        for (int p = 0; p < std::max(1, num_prims); ++p) {
+            int pod_idx = base_pod_idx + p;
+            PODNode n;
+            n.name = (p == 0) ? base_name : (base_name + "_" + std::to_string(p));
+            n.object_index = (first_pod_mesh >= 0 && p < num_prims) ? (first_pod_mesh + p) : -1;
+            n.material_index = (p < num_prims) ? gm->primitives[p].material : -1;
+
+            if (is_skinned) {
+                n.parent_index = -1;
+                n.translation[0] = n.translation[1] = n.translation[2] = 0.0f;
+                n.rotation[0] = n.rotation[1] = n.rotation[2] = 0.0f;
+                n.rotation[3] = 1.0f;
+                n.scale[0] = n.scale[1] = n.scale[2] = 1.0f;
+                n.has_translation = n.has_rotation = n.has_scale = true;
+                n.has_matrix = false;
+            } else {
+                int orig_parent = skel.parent_of[i];
+                n.parent_index = (orig_parent >= 0 && orig_parent < (int)mapping.gltf_to_pod_node.size())
+                                 ? mapping.gltf_to_pod_node[orig_parent] : -1;
+                if (gn->has_matrix) {
+                    n.has_matrix = true;
+                    for (int k = 0; k < 16; ++k) n.matrix[k] = (float)gn->matrix[k];
+                    if (scale != 1.0f && orig_parent == -1) {
+                        n.matrix[12] *= scale;
+                        n.matrix[13] *= scale;
+                        n.matrix[14] *= scale;
+                    }
+                } else {
+                    n.has_translation = true;
+                    n.translation[0] = (float)gn->translation[0];
+                    n.translation[1] = (float)gn->translation[1];
+                    n.translation[2] = (float)gn->translation[2];
+                    n.has_rotation = true;
+                    n.rotation[0] = -(float)gn->rotation[0];
+                    n.rotation[1] = -(float)gn->rotation[1];
+                    n.rotation[2] = -(float)gn->rotation[2];
+                    n.rotation[3] = (float)gn->rotation[3];
+                    n.has_scale = true;
+                    n.scale[0] = (float)gn->scale[0];
+                    n.scale[1] = (float)gn->scale[1];
+                    n.scale[2] = (float)gn->scale[2];
+                    if (scale != 1.0f && orig_parent == -1) {
+                        n.translation[0] *= scale;
+                        n.translation[1] *= scale;
+                        n.translation[2] *= scale;
+                    }
+                }
+            }
+            out.nodes[pod_idx] = std::move(n);
+        }
+    }
+
+    for (uint32_t i = 0; i < model->nodes_count; ++i) {
+        if (model->nodes[i].mesh >= 0 && model->nodes[i].mesh < (int32_t)model->meshes_count) continue;
+        const tg3_node* gn = &model->nodes[i];
+        int pod_idx = mapping.gltf_to_pod_node[i];
         PODNode n;
         std::string name = tg3_to_string(gn->name);
-        for (char& c : name) {
-            if (c == ':' || c == '/' || c == '\\') c = '_';
-        }
-        if (is_joint[i]) {
+        for (char& c : name) { if (c == ':' || c == '/' || c == '\\') c = '_'; }
+        if (skel.is_joint[i]) {
             if (name.rfind("Bone", 0) != 0 &&
                 name.rfind("Control", 0) != 0 &&
                 name != "CenterPoint") {
@@ -606,60 +899,93 @@ static bool build_pod_from_tg3(const tg3_model* model,
             }
         }
         n.name = name;
-        int orig_parent = parent_of[i];
-        n.parent_index = (orig_parent >= 0 && orig_parent < (int)gltf_to_pod_node.size())
-                         ? gltf_to_pod_node[orig_parent] : -1;
+        n.object_index = -1;
+        n.material_index = -1;
 
-        if (gn->mesh >= 0 && gn->mesh < (int32_t)model->meshes_count) {
-            n.object_index = pod_mesh_of_gltf_mesh[gn->mesh];
-            if (model->meshes[gn->mesh].primitives_count > 0)
-                n.material_index = model->meshes[gn->mesh].primitives[0].material;
-        } else {
-            n.object_index = -1;
-            n.material_index = -1;
-        }
-
-        if (gn->has_matrix) {
-            n.has_matrix = true;
-            for (int k = 0; k < 16; ++k) n.matrix[k] = (float)gn->matrix[k];
-            // Apply opts.scale to world-space position only (translation column).
-            // Do NOT scale the upper 3x3: that would square the scale for any
-            // root node carrying an authored scale (unit-convert, assemblies).
-            if (scale != 1.0f && orig_parent == -1) {
-                n.matrix[12] *= scale;
-                n.matrix[13] *= scale;
-                n.matrix[14] *= scale;
-            }
-        } else {
-            n.has_translation = true;
-            n.translation[0] = (float)gn->translation[0];
-            n.translation[1] = (float)gn->translation[1];
-            n.translation[2] = (float)gn->translation[2];
-
-            n.has_rotation = true;
-            n.rotation[0] = (float)gn->rotation[0];
-            n.rotation[1] = (float)gn->rotation[1];
-            n.rotation[2] = (float)gn->rotation[2];
+        if (skel.is_root_joint[i]) {
+            n.parent_index = -1;
+            float jw[16];
+            gltf_rest_world_matrix(model, skel.parent_of, (int)i, jw, 0);
+            n.translation[0] = jw[12] * scale;
+            n.translation[1] = jw[13] * scale;
+            n.translation[2] = jw[14] * scale;
+            float sx = std::sqrt(jw[0]*jw[0] + jw[1]*jw[1] + jw[2]*jw[2]);
+            float sy = std::sqrt(jw[4]*jw[4] + jw[5]*jw[5] + jw[6]*jw[6]);
+            float sz = std::sqrt(jw[8]*jw[8] + jw[9]*jw[9] + jw[10]*jw[10]);
+            float R[9] = {
+                jw[0]/sx, jw[1]/sx, jw[2]/sx,
+                jw[4]/sy, jw[5]/sy, jw[6]/sy,
+                jw[8]/sz, jw[9]/sz, jw[10]/sz
+            };
+            float Q[4];
+            mat3_to_quat(R, Q);
+            n.rotation[0] = -Q[0];
+            n.rotation[1] = -Q[1];
+            n.rotation[2] = -Q[2];
+            n.rotation[3] = Q[3];
+            n.scale[0] = n.scale[1] = n.scale[2] = 1.0f;
+            n.has_translation = n.has_rotation = n.has_scale = true;
+            n.has_matrix = false;
+        } else if (skel.is_joint[i]) {
+            int orig_parent = skel.parent_of[i];
+            n.parent_index = (orig_parent >= 0 && orig_parent < (int)mapping.gltf_to_pod_node.size())
+                             ? mapping.gltf_to_pod_node[orig_parent] : -1;
+            float sk_s = skel.skel_scale_of_joint[i];
+            n.translation[0] = (float)gn->translation[0] * sk_s;
+            n.translation[1] = (float)gn->translation[1] * sk_s;
+            n.translation[2] = (float)gn->translation[2] * sk_s;
+            n.rotation[0] = -(float)gn->rotation[0];
+            n.rotation[1] = -(float)gn->rotation[1];
+            n.rotation[2] = -(float)gn->rotation[2];
             n.rotation[3] = (float)gn->rotation[3];
-
-            n.has_scale = true;
-            n.scale[0] = (float)gn->scale[0];
-            n.scale[1] = (float)gn->scale[1];
-            n.scale[2] = (float)gn->scale[2];
-
-            // Scale world-space translation only. The node's own scale channel
-            // must stay authored (it scales children); scaling it here would
-            // double-apply opts.scale to the whole subtree.
-            if (scale != 1.0f && orig_parent == -1) {
-                n.translation[0] *= scale;
-                n.translation[1] *= scale;
-                n.translation[2] *= scale;
+            n.scale[0] = n.scale[1] = n.scale[2] = 1.0f;
+            n.has_translation = n.has_rotation = n.has_scale = true;
+            n.has_matrix = false;
+        } else {
+            int orig_parent = skel.parent_of[i];
+            n.parent_index = (orig_parent >= 0 && orig_parent < (int)mapping.gltf_to_pod_node.size())
+                             ? mapping.gltf_to_pod_node[orig_parent] : -1;
+            if (gn->has_matrix) {
+                n.has_matrix = true;
+                for (int k = 0; k < 16; ++k) n.matrix[k] = (float)gn->matrix[k];
+                if (scale != 1.0f && orig_parent == -1) {
+                    n.matrix[12] *= scale;
+                    n.matrix[13] *= scale;
+                    n.matrix[14] *= scale;
+                }
+            } else {
+                n.has_translation = true;
+                n.translation[0] = (float)gn->translation[0];
+                n.translation[1] = (float)gn->translation[1];
+                n.translation[2] = (float)gn->translation[2];
+                n.has_rotation = true;
+                n.rotation[0] = -(float)gn->rotation[0];
+                n.rotation[1] = -(float)gn->rotation[1];
+                n.rotation[2] = -(float)gn->rotation[2];
+                n.rotation[3] = (float)gn->rotation[3];
+                n.has_scale = true;
+                n.scale[0] = (float)gn->scale[0];
+                n.scale[1] = (float)gn->scale[1];
+                n.scale[2] = (float)gn->scale[2];
+                if (scale != 1.0f && orig_parent == -1) {
+                    n.translation[0] *= scale;
+                    n.translation[1] *= scale;
+                    n.translation[2] *= scale;
+                }
             }
         }
         out.nodes[pod_idx] = std::move(n);
     }
 
-    out.num_mesh_nodes = static_cast<int>(mesh_gltf_nodes.size());
+    std::vector<int> node_mesh_begin(model->nodes_count, -1);
+    std::vector<int> node_mesh_end(model->nodes_count, -1);
+    for (uint32_t n = 0; n < model->nodes_count; ++n) {
+        if (model->nodes[n].mesh >= 0 && model->nodes[n].mesh < (int32_t)model->meshes_count) {
+            int m = model->nodes[n].mesh;
+            node_mesh_begin[n] = mapping.pod_mesh_of_gltf_mesh[m];
+            node_mesh_end[n] = mapping.pod_mesh_of_gltf_mesh[m] + (int)model->meshes[m].primitives_count;
+        }
+    }
 
     for (uint32_t i = 0; i < model->nodes_count; ++i) {
         if (model->nodes[i].skin < 0 || model->nodes[i].skin >= (int32_t)model->skins_count) continue;
@@ -675,7 +1001,7 @@ static bool build_pod_from_tg3(const tg3_model* model,
             remapped_joints.reserve(skin->joints_count);
             for (uint32_t j = 0; j < skin->joints_count; ++j) {
                 int32_t ji = skin->joints[j];
-                int rj = (ji >= 0 && ji < (int)gltf_to_pod_node.size()) ? gltf_to_pod_node[ji] : ji;
+                int rj = (ji >= 0 && ji < (int)mapping.gltf_to_pod_node.size()) ? mapping.gltf_to_pod_node[ji] : ji;
                 remapped_joints.push_back(static_cast<uint32_t>(rj));
             }
             m.bone_batches.indices = std::move(remapped_joints);
@@ -688,59 +1014,21 @@ static bool build_pod_from_tg3(const tg3_model* model,
     }
 
     // ── Capture the bind (rest) pose in POD node-world space ──────────────
-    // The skinning path (pod_loader skin_mesh) computes, per joint j:
-    //     skin[j] = inverse(worldTransform(meshNode))
-    //             · currentGlobal(j)      // = get_node_matrix(j, frame)
-    //             · inverse(bind_world[j]) // bind_matrix, inverted at runtime
-    // For the rest pose to cancel exactly at frame 0, bind_world[j] MUST live
-    // in the SAME space as currentGlobal(j) — i.e. the POD node hierarchy that
-    // get_node_matrix() walks, INCLUDING outer wrapper nodes (Sketchfab_model,
-    // Bee.fbx, Armature scale=100, …).
-    //
-    // We previously stored inverse(glTF inverseBindMatrices). That is authored
-    // in the SKIN's own coordinate space, which for many exporters EXCLUDES the
-    // wrapper nodes. For a proper single-mesh skin the leftover mesh_inverse
-    // happened to cancel it (statue/tung → ratio 1.0), but for a per-part rigid
-    // skin whose armature carries a ×100 scale (minecraft_bee.glb) the wrapper
-    // scale never cancelled → every skinned vertex blew up ×100.
-    //
-    // The robust, universal bind is the joint's REST world matrix built from
-    // its STATIC local TRS (node.translation/rotation/scale or node.matrix),
-    // ignoring animation streams, composed up the parent chain — exactly what
-    // get_node_matrix() yields when a node has no animation. This is authored
-    // bind space AND POD node space at once, so the ×100 wrapper cancels for
-    // the bee, while statue's true bind (static TRS, distinct from its posed
-    // animation frame 0) still applies animation deltas correctly.
     {
-        // Compose a node's STATIC local transform (no animation sampling).
         auto local_static = [](const PODNode& n, float m[16]) {
             if (n.has_matrix) { std::memcpy(m, n.matrix, sizeof(float) * 16); return; }
             float S[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
             float R[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
             float T[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-            const float* q = n.rotation; // xyzw
-            const float x = q[0], y = q[1], z = q[2], w = q[3];
+            const float* q = n.rotation;
+            const float x = -q[0], y = -q[1], z = -q[2], w = q[3];
             R[0]=1-2*(y*y+z*z); R[4]=2*(x*y-z*w);   R[8]=2*(x*z+y*w);
             R[1]=2*(x*y+z*w);   R[5]=1-2*(x*x+z*z); R[9]=2*(y*z-x*w);
             R[2]=2*(x*z-y*w);   R[6]=2*(y*z+x*w);   R[10]=1-2*(x*x+y*y);
             S[0]=n.scale[0]; S[5]=n.scale[1]; S[10]=n.scale[2];
             T[12]=n.translation[0]; T[13]=n.translation[1]; T[14]=n.translation[2];
-            // column-major: local = T * R * S (matches get_node_matrix)
-            auto mul = [](const float a[16], const float b[16], float o[16]) {
-                for (int c = 0; c < 4; ++c)
-                    for (int r = 0; r < 4; ++r)
-                        o[c*4+r] = a[0*4+r]*b[c*4+0] + a[1*4+r]*b[c*4+1]
-                                 + a[2*4+r]*b[c*4+2] + a[3*4+r]*b[c*4+3];
-            };
-            float tr[16]; mul(T, R, tr); mul(tr, S, m);
+            float tr[16]; gltf_mat4_mul(T, R, tr); gltf_mat4_mul(tr, S, m);
         };
-        auto mul16 = [](const float a[16], const float b[16], float o[16]) {
-            for (int c = 0; c < 4; ++c)
-                for (int r = 0; r < 4; ++r)
-                    o[c*4+r] = a[0*4+r]*b[c*4+0] + a[1*4+r]*b[c*4+1]
-                             + a[2*4+r]*b[c*4+2] + a[3*4+r]*b[c*4+3];
-        };
-        // Rest world matrix for a POD node, walking parents via static TRS.
         std::function<void(int, float[16], int)> rest_world =
             [&](int idx, float out16[16], int depth) {
                 if (idx < 0 || idx >= (int)out.nodes.size() || depth > 128) {
@@ -752,104 +1040,123 @@ static bool build_pod_from_tg3(const tg3_model* model,
                 float local[16]; local_static(n, local);
                 if (n.parent_index >= 0 && n.parent_index != idx) {
                     float parent[16]; rest_world(n.parent_index, parent, depth + 1);
-                    mul16(parent, local, out16);
+                    gltf_mat4_mul(parent, local, out16);
                 } else {
                     std::memcpy(out16, local, sizeof(float) * 16);
                 }
             };
+
         for (uint32_t si = 0; si < model->skins_count; ++si) {
             const tg3_skin* skin = &model->skins[si];
             if (skin->joints_count == 0) continue;
 
-            // Two candidate bind sources exist and they are NOT interchangeable:
-            //   (A) rest_world[j]      — joint's static-TRS world in POD space.
-            //   (B) inverse(IBM[j])    — the DCC-authored bind, but in the SKIN's
-            //                            own space, which may or may not equal (A).
-            // The skinning rest pose cancels iff bind_world[j] == rest_world[j]
-            // in POD space. So decide PER SKIN which source already lives there:
-            // read the IBMs, invert each, and measure how close inverse(IBM) is
-            // to rest_world across the joints. If they agree, the IBM is already
-            // in POD space and is the authoritative bind (statue.glb — its true
-            // bind differs from its posed animation frame 0, so we MUST keep it).
-            // If they diverge (bee.glb — IBM authored inside a ×100 armature the
-            // POD hierarchy re-applies), the IBM is in a foreign space and the
-            // rest-pose world is the only source consistent with get_node_matrix.
             std::vector<float> ibm;
             bool have_ibm = (skin->inverse_bind_matrices >= 0) &&
                             read_accessor_floats(model, skin->inverse_bind_matrices, ibm) &&
                             ibm.size() >= (size_t)skin->joints_count * 16;
 
-            // Decide per skin by SIMULATING the exact skinning matrix skin_mesh
-            // builds at the rest pose and measuring which bind source drives it
-            // closest to identity (a correct bind reproduces the authored verts):
-            //     skin[j] = mesh_inv · rest_world[j] · inverse(bind[j])
-            // The mesh node's own world (mesh_inv) lives in POD space, so the
-            // bind that also lives in POD space cancels it to identity.
-            //  • statue.glb: inverse(IBM) already sits in POD space (matches the
-            //    mesh node's ×1258 wrapper) → IBM wins, rest_world leaves ×1258.
-            //  • minecraft_bee.glb: IBM excludes the ×100 armature the POD
-            //    hierarchy re-applies → rest_world wins, IBM leaves ×100.
-            // Find the skin's mesh node (first node whose object_index feeds a
-            // skinned mesh) to get mesh_inv in POD space.
-            bool use_ibm = false;
-            if (have_ibm) {
-                // mesh node for this skin: the glTF node that references the skin.
-                int mesh_pod = -1;
-                for (uint32_t nn = 0; nn < model->nodes_count; ++nn) {
-                    if (model->nodes[nn].skin == (int32_t)si) {
-                        if (nn < gltf_to_pod_node.size()) mesh_pod = gltf_to_pod_node[nn];
-                        break;
-                    }
-                }
-                float mesh_world[16], mesh_inv[16];
-                if (mesh_pod >= 0) rest_world(mesh_pod, mesh_world, 0);
-                else { std::memset(mesh_world,0,sizeof(mesh_world)); mesh_world[0]=mesh_world[5]=mesh_world[10]=mesh_world[15]=1; }
-                if (!gltf_mat4_inverse(mesh_world, mesh_inv)) {
-                    std::memset(mesh_inv,0,sizeof(mesh_inv)); mesh_inv[0]=mesh_inv[5]=mesh_inv[10]=mesh_inv[15]=1;
-                }
-                auto identity_residual = [&](bool try_ibm) -> double {
-                    double resid = 0.0; int cnt = 0;
-                    for (uint32_t j = 0; j < skin->joints_count; ++j) {
-                        const int32_t ji = skin->joints[j];
-                        if (ji < 0 || ji >= (int)gltf_to_pod_node.size()) continue;
-                        const int rj = gltf_to_pod_node[ji];
-                        if (rj < 0 || rj >= (int)out.nodes.size()) continue;
-                        float bind[16];
-                        if (try_ibm) { if (!gltf_mat4_inverse(&ibm[(size_t)j*16], bind)) continue; }
-                        else rest_world(rj, bind, 0);
-                        float inv_bind[16];
-                        if (!gltf_mat4_inverse(bind, inv_bind)) continue;
-                        float rw[16]; rest_world(rj, rw, 0);
-                        // skin = mesh_inv · rw · inv_bind
-                        float t[16], skin[16];
-                        mul16(rw, inv_bind, t);
-                        mul16(mesh_inv, t, skin);
-                        // distance from identity
-                        static const float I[16] = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
-                        for (int k = 0; k < 16; ++k) { double d = (double)skin[k]-I[k]; resid += d*d; }
-                        ++cnt;
-                    }
-                    return cnt ? resid / cnt : 1e30;
-                };
-                const double r_ibm  = identity_residual(true);
-                const double r_rest = identity_residual(false);
-                use_ibm = (r_ibm <= r_rest);
-            }
-
             for (uint32_t j = 0; j < skin->joints_count; ++j) {
                 const int32_t ji = skin->joints[j];
-                if (ji < 0 || ji >= (int)gltf_to_pod_node.size()) continue;
-                const int rj = gltf_to_pod_node[ji];
+                if (ji < 0 || ji >= (int)mapping.gltf_to_pod_node.size()) continue;
+                const int rj = mapping.gltf_to_pod_node[ji];
                 if (rj < 0 || rj >= (int)out.nodes.size()) continue;
                 PODNode& n = out.nodes[rj];
-                if (use_ibm) {
-                    if (!gltf_mat4_inverse(&ibm[(size_t)j * 16], n.bind_matrix)) {
-                        rest_world(rj, n.bind_matrix, 0);
-                    }
-                } else {
-                    rest_world(rj, n.bind_matrix, 0);
-                }
+                rest_world(rj, n.bind_matrix, 0);
                 n.has_bind_matrix = true;
+            }
+
+            // Precompute glTF bind world matrix for each joint in this skin:
+            // M_j = (W_gltf(ji) * IBM_j) * scale
+            std::vector<std::array<float, 16>> joint_M(skin->joints_count);
+            for (uint32_t j = 0; j < skin->joints_count; ++j) {
+                const int32_t ji = skin->joints[j];
+                float W[16];
+                if (ji >= 0 && ji < (int32_t)model->nodes_count) {
+                    gltf_rest_world_matrix(model, skel.parent_of, ji, W, 0);
+                } else {
+                    std::memset(W, 0, sizeof(W));
+                    W[0] = W[5] = W[10] = W[15] = 1.0f;
+                }
+                float M[16];
+                if (have_ibm) {
+                    gltf_mat4_mul(W, &ibm[(size_t)j * 16], M);
+                } else {
+                    std::memcpy(M, W, sizeof(M));
+                }
+                if (scale != 1.0f && scale > 0.0f) {
+                    for (int c = 0; c < 15; ++c) M[c] *= scale;
+                }
+                std::memcpy(joint_M[j].data(), M, sizeof(M));
+            }
+
+            for (uint32_t nn = 0; nn < model->nodes_count; ++nn) {
+                if (model->nodes[nn].skin != (int32_t)si) continue;
+                if (node_mesh_begin[nn] < 0) continue;
+                for (int pmi = node_mesh_begin[nn];
+                     pmi < node_mesh_end[nn] && pmi < (int)out.meshes.size(); ++pmi) {
+                    PODMesh& sm = out.meshes[pmi];
+                    const int bpv = sm.bones_per_vertex;
+                    if (bpv <= 0) continue;
+                    const int nverts = (int)(sm.positions.size() / 3);
+                    if (nverts <= 0) continue;
+                    if (sm.bone_indices.size() < (size_t)nverts * bpv) continue;
+
+                    for (int v = 0; v < nverts; ++v) {
+                        float acc[3] = {0.0f, 0.0f, 0.0f};
+                        float nacc[3] = {0.0f, 0.0f, 0.0f};
+                        float wsum = 0.0f;
+                        const float* p = &sm.positions[(size_t)v * 3];
+                        const float* nv = ((size_t)v * 3 + 2 < sm.normals.size())
+                                          ? &sm.normals[(size_t)v * 3] : nullptr;
+
+                        for (int k = 0; k < bpv; ++k) {
+                            float wk = (sm.bone_weights.size() > (size_t)v * bpv + k)
+                                       ? sm.bone_weights[(size_t)v * bpv + k] : (k == 0 ? 1.0f : 0.0f);
+                            if (wk <= 0.0f) continue;
+                            int j = (int)std::lround(sm.bone_indices[(size_t)v * bpv + k]);
+                            if (j < 0 || j >= (int)skin->joints_count) continue;
+
+                            const float* B = joint_M[j].data();
+                            acc[0] += wk * (B[0]*p[0] + B[4]*p[1] + B[8]*p[2]  + B[12]);
+                            acc[1] += wk * (B[1]*p[0] + B[5]*p[1] + B[9]*p[2]  + B[13]);
+                            acc[2] += wk * (B[2]*p[0] + B[6]*p[1] + B[10]*p[2] + B[14]);
+
+                            if (nv) {
+                                nacc[0] += wk * (B[0]*nv[0] + B[4]*nv[1] + B[8]*nv[2]);
+                                nacc[1] += wk * (B[1]*nv[0] + B[5]*nv[1] + B[9]*nv[2]);
+                                nacc[2] += wk * (B[2]*nv[0] + B[6]*nv[1] + B[10]*nv[2]);
+                            }
+                            wsum += wk;
+                        }
+
+                        if (wsum > 0.0f) {
+                            float* out_p = &sm.positions[(size_t)v * 3];
+                            out_p[0] = acc[0];
+                            out_p[1] = acc[1];
+                            out_p[2] = acc[2];
+                            if (nv) {
+                                float* out_n = &sm.normals[(size_t)v * 3];
+                                float len = std::sqrt(nacc[0]*nacc[0] + nacc[1]*nacc[1] + nacc[2]*nacc[2]);
+                                if (len > 1e-8f) {
+                                    out_n[0] = nacc[0] / len;
+                                    out_n[1] = nacc[1] / len;
+                                    out_n[2] = nacc[2] / len;
+                                }
+                            }
+                        }
+                    }
+
+                    sm.min_x = sm.min_y = sm.min_z =  1e30f;
+                    sm.max_x = sm.max_y = sm.max_z = -1e30f;
+                    for (size_t i = 0; i + 2 < sm.positions.size(); i += 3) {
+                        sm.min_x = std::min(sm.min_x, sm.positions[i + 0]);
+                        sm.max_x = std::max(sm.max_x, sm.positions[i + 0]);
+                        sm.min_y = std::min(sm.min_y, sm.positions[i + 1]);
+                        sm.max_y = std::max(sm.max_y, sm.positions[i + 1]);
+                        sm.min_z = std::min(sm.min_z, sm.positions[i + 2]);
+                        sm.max_z = std::max(sm.max_z, sm.positions[i + 2]);
+                    }
+                }
             }
         }
     }
@@ -910,7 +1217,7 @@ static bool build_pod_from_tg3(const tg3_model* model,
             }
         }
         if (tex_idx >= 0 && tex_idx < (int32_t)model->textures_count) {
-            int32_t src_img = model->textures[tex_idx].source;
+            int32_t src_img = texture_source_image(model, tex_idx);
             if (src_img >= 0 && src_img < (int32_t)loaded_img_names.size()) {
                 std::string tname = loaded_img_names[src_img];
                 auto it = std::find(out.texture_filenames.begin(), out.texture_filenames.end(), tname);
@@ -961,8 +1268,7 @@ static bool build_pod_from_tg3(const tg3_model* model,
             pm.double_sided  = mat->double_sided ? true : false;
 
             auto tex_to_img = [&](int32_t t_idx) -> int {
-                if (t_idx < 0 || t_idx >= (int32_t)model->textures_count) return -1;
-                return model->textures[t_idx].source;
+                return texture_source_image(model, t_idx);
             };
 
             pm.base_tex        = tex_to_img(mat->pbr_metallic_roughness.base_color_texture.index);
@@ -1059,6 +1365,117 @@ static bool build_pod_from_tg3(const tg3_model* model,
     return true;
 }
 
+static void sample_channel(const std::string& interp, int comps,
+                           const std::vector<float>& times,
+                           const std::vector<float>& vals,
+                           int num_frames, float fps,
+                           std::vector<float>& out_dense,
+                           float scale = 1.0f) {
+    if (times.empty() || vals.empty() || num_frames <= 0 || comps <= 0) return;
+    out_dense.assign((size_t)num_frames * comps, 0.0f);
+
+    bool is_cubic = (interp == "CUBICSPLINE" || interp == "CUBIC_SPLINE");
+    bool is_step = (interp == "STEP");
+    size_t stride = is_cubic ? (size_t)comps * 3 : (size_t)comps;
+    size_t val_offset = is_cubic ? (size_t)comps : 0;
+
+    auto get_val = [&](size_t k, int c) -> float {
+        size_t idx = k * stride + val_offset + c;
+        return (idx < vals.size()) ? vals[idx] : 0.0f;
+    };
+    auto get_in_tan = [&](size_t k, int c) -> float {
+        size_t idx = k * stride + c;
+        return (idx < vals.size()) ? vals[idx] : 0.0f;
+    };
+    auto get_out_tan = [&](size_t k, int c) -> float {
+        size_t idx = k * stride + 2 * comps + c;
+        return (idx < vals.size()) ? vals[idx] : 0.0f;
+    };
+
+    for (int f = 0; f < num_frames; ++f) {
+        float t = static_cast<float>(f) / fps;
+        float* out_val = &out_dense[(size_t)f * comps];
+
+        if (t <= times.front() || times.size() == 1) {
+            for (int c = 0; c < comps; ++c) out_val[c] = get_val(0, c);
+        } else if (t >= times.back()) {
+            size_t last = times.size() - 1;
+            for (int c = 0; c < comps; ++c) out_val[c] = get_val(last, c);
+        } else {
+            size_t k = 0;
+            while (k + 1 < times.size() && times[k + 1] < t) ++k;
+            float t0 = times[k];
+            float t1 = times[k + 1];
+            float dt = t1 - t0;
+            float alpha = (dt > 1e-6f) ? std::clamp((t - t0) / dt, 0.0f, 1.0f) : 0.0f;
+
+            if (is_step) {
+                for (int c = 0; c < comps; ++c) out_val[c] = get_val(k, c);
+            } else if (is_cubic) {
+                float a2 = alpha * alpha;
+                float a3 = a2 * alpha;
+                float h00 = 2.0f * a3 - 3.0f * a2 + 1.0f;
+                float h10 = a3 - 2.0f * a2 + alpha;
+                float h01 = -2.0f * a3 + 3.0f * a2;
+                float h11 = a3 - a2;
+
+                for (int c = 0; c < comps; ++c) {
+                    float p0 = get_val(k, c);
+                    float m0 = get_out_tan(k, c) * dt;
+                    float p1 = get_val(k + 1, c);
+                    float m1 = get_in_tan(k + 1, c) * dt;
+                    out_val[c] = h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1;
+                }
+                if (comps == 4) {
+                    float len = std::sqrt(out_val[0]*out_val[0] + out_val[1]*out_val[1] +
+                                          out_val[2]*out_val[2] + out_val[3]*out_val[3]);
+                    if (len > 1e-6f) {
+                        for (int c = 0; c < 4; ++c) out_val[c] /= len;
+                    } else {
+                        out_val[0] = 0; out_val[1] = 0; out_val[2] = 0; out_val[3] = 1;
+                    }
+                }
+            } else {
+                if (comps == 4) {
+                    float q0[4] = {get_val(k, 0), get_val(k, 1), get_val(k, 2), get_val(k, 3)};
+                    float q1[4] = {get_val(k+1, 0), get_val(k+1, 1), get_val(k+1, 2), get_val(k+1, 3)};
+                    float dot = q0[0]*q1[0] + q0[1]*q1[1] + q0[2]*q1[2] + q0[3]*q1[3];
+                    if (dot < 0.0f) {
+                        for (int c = 0; c < 4; ++c) q1[c] = -q1[c];
+                        dot = -dot;
+                    }
+                    float s0 = 1.0f - alpha;
+                    float s1 = alpha;
+                    if (dot < 0.9995f) {
+                        float theta = std::acos(std::clamp(dot, -1.0f, 1.0f));
+                        float sin_theta = std::sin(theta);
+                        if (sin_theta > 1e-5f) {
+                            s0 = std::sin((1.0f - alpha) * theta) / sin_theta;
+                            s1 = std::sin(alpha * theta) / sin_theta;
+                        }
+                    }
+                    for (int c = 0; c < 4; ++c) out_val[c] = s0 * q0[c] + s1 * q1[c];
+                    float len = std::sqrt(out_val[0]*out_val[0] + out_val[1]*out_val[1] +
+                                          out_val[2]*out_val[2] + out_val[3]*out_val[3]);
+                    if (len > 1e-6f) {
+                        for (int c = 0; c < 4; ++c) out_val[c] /= len;
+                    } else {
+                        out_val[0] = 0; out_val[1] = 0; out_val[2] = 0; out_val[3] = 1;
+                    }
+                } else {
+                    for (int c = 0; c < comps; ++c) {
+                        out_val[c] = (1.0f - alpha) * get_val(k, c) + alpha * get_val(k + 1, c);
+                    }
+                }
+            }
+        }
+
+        if (scale != 1.0f && comps == 3) {
+            for (int c = 0; c < 3; ++c) out_val[c] *= scale;
+        }
+    }
+}
+
 } // namespace
 } // namespace av
 
@@ -1117,6 +1534,166 @@ bool gltf_import_gltf(const std::string& path, PODModel& out,
     return gltf_import_glb(path, out, images, err, pbr, scale, rigid_skin);
 }
 
+// ─── Clip timing: ONE rule, shared by the bake and the inspector ────────────
+// gltf_import_all_clips writes the POD; gltf_inspect_animations fills the
+// clip browser. If they compute fps and frame count separately they drift, and
+// the browser advertises a clip the converter never produced. So both call the
+// rule below.
+//
+// The rule: the clip span is the 90th-percentile last-key time of MULTI-key
+// samplers only — a lone 1-key "constant" channel, or one stray key parked far
+// out on the timeline, must not stretch the whole clip. fps is the engine-parity
+// target when one is given (the game hardcodes 24.0 FPS), else derived from the
+// source key density snapped to a common authored rate.
+struct ClipTiming { float fps = 24.0f; float duration = 0.0f; };
+
+static ClipTiming derive_clip_timing(const tg3_model& model, const tg3_animation* anim,
+                                     float target_fps) {
+    ClipTiming out;
+    auto load_acc = [&](int32_t acc_idx) -> std::vector<float> {
+        std::vector<float> buf;
+        if (!read_accessor_floats(&model, acc_idx, buf)) buf.clear();
+        return buf;
+    };
+
+    std::vector<float> sampler_ends;   // last key time of each animated sampler
+    std::vector<float> dense_deltas;   // per-sampler median spacing, SAMPLED samplers
+    std::vector<float> sparse_deltas;  // same, but including 2-key constants
+    for (uint32_t si = 0; si < anim->samplers_count; ++si) {
+        int32_t in_acc = anim->samplers[si].input;
+        if (in_acc < 0 || in_acc >= (int32_t)model.accessors_count) continue;
+        const std::vector<float>& times = load_acc(in_acc);
+        if (times.size() < 2) continue;               // skip constant channels
+        sampler_ends.push_back(times.back());
+        std::vector<float> d;
+        d.reserve(times.size() - 1);
+        for (size_t k = 1; k < times.size(); ++k) {
+            float dt = times[k] - times[k - 1];
+            if (dt > 1e-6f) d.push_back(dt);
+        }
+        if (!d.empty()) {
+            std::sort(d.begin(), d.end());
+            const float med = d[d.size() / 2];        // median spacing
+            sparse_deltas.push_back(med);
+            // A "constant" channel can be stored as exactly TWO keys spanning the
+            // whole clip, and in a rig export those usually outnumber the moving
+            // ones. Their spacing is the clip length, not a key density, so they
+            // must not be allowed to drag the estimate down to 1-2 fps (which is
+            // what a plain median over all samplers does: soldier's walk clip is
+            // 70 constant tracks and 2 dense ones). Prefer genuinely sampled
+            // channels whenever any exist.
+            if (times.size() >= 4) dense_deltas.push_back(med);
+        }
+    }
+    std::vector<float> key_deltas = dense_deltas.empty() ? sparse_deltas : dense_deltas;
+
+    float max_time = 0.0f;
+    if (!sampler_ends.empty()) {
+        std::sort(sampler_ends.begin(), sampler_ends.end());
+        // 90th-percentile end time as the span, with a gross-outlier guard.
+        float p90 = sampler_ends[(size_t)std::floor(0.9 * (sampler_ends.size() - 1))];
+        float median_end = sampler_ends[sampler_ends.size() / 2];
+        max_time = p90;
+        if (max_time > median_end * 4.0f && median_end > 0.0f)
+            max_time = median_end;                    // reject gross outlier
+    } else {
+        // No multi-key samplers at all -> fall back to any last key time.
+        for (uint32_t si = 0; si < anim->samplers_count; ++si) {
+            int32_t in_acc = anim->samplers[si].input;
+            if (in_acc < 0 || in_acc >= (int32_t)model.accessors_count) continue;
+            const std::vector<float>& times = load_acc(in_acc);
+            if (!times.empty()) max_time = std::max(max_time, times.back());
+        }
+    }
+
+    // Engine-parity default: 24 fps, not 30 (see target_fps docs above).
+    float derived_fps = (target_fps > 0.0f) ? target_fps : 30.0f;
+    if (!key_deltas.empty()) {
+        std::sort(key_deltas.begin(), key_deltas.end());
+        float med_dt = key_deltas[key_deltas.size() / 2];
+        if (med_dt > 1e-6f) {
+            float raw = 1.0f / med_dt;
+            const float candidates[] = {24.0f, 25.0f, 30.0f, 48.0f, 50.0f, 60.0f};
+            float best = 30.0f, best_err = 1e30f;
+            for (float c : candidates) {
+                float e = std::fabs(c - raw);
+                if (e < best_err) { best_err = e; best = c; }
+            }
+            derived_fps = (best_err <= best * 0.15f) ? best
+                          : std::clamp(std::round(raw), 1.0f, 120.0f);
+        }
+    }
+    if (target_fps > 0.0f) derived_fps = target_fps;   // engine parity: bypass snapping
+
+    out.fps = derived_fps;
+    out.duration = max_time;
+    return out;
+}
+
+// Companion motions.json clips carry real per-track `times`, so `--anim-fps 0`
+// ("keep the authored rate") means here exactly what it means for in-GLB clips.
+// The companion path used to hardcode 24 whenever the target was 0, so a JSON
+// authored at 30 fps was silently resampled to 24 while the in-GLB path derived
+// 30 — one flag, two behaviours. Derive from the same key density, snap to the
+// same rate list, and fall back to engine-parity 24 only when there is nothing
+// to measure.
+static float derive_companion_fps(const tg3json_value* clip, float target_fps) {
+    if (target_fps > 0.0f) return target_fps;
+
+    std::vector<float> dense_deltas;   // per-track median spacing, SAMPLED tracks
+    std::vector<float> sparse_deltas;  // same, but including 2-key constants
+    const tg3json_value* tracks = tg3json_object_get(clip, "tracks");
+    if (tracks && tracks->type == TG3JSON_ARRAY) {
+        size_t n = tg3json_array_size(tracks);
+        for (size_t ti = 0; ti < n; ++ti) {
+            const tg3json_value* t = tg3json_array_get(tracks, ti);
+            if (!t || t->type != TG3JSON_OBJECT) continue;
+            const tg3json_value* tv = tg3json_object_get(t, "times");
+            if (!tv || tv->type != TG3JSON_ARRAY) continue;
+            size_t tn = tg3json_array_size(tv);
+            if (tn < 2) continue;
+            std::vector<float> ts;
+            ts.reserve(tn);
+            for (size_t k = 0; k < tn; ++k) {
+                const tg3json_value* v = tg3json_array_get(tv, k);
+                if (v->type == TG3JSON_REAL) ts.push_back((float)v->u.real);
+                else if (v->type == TG3JSON_INT) ts.push_back((float)v->u.integer);
+            }
+            std::vector<float> d;
+            d.reserve(ts.size() > 0 ? ts.size() - 1 : 0);
+            for (size_t k = 1; k < ts.size(); ++k) {
+                float dt = ts[k] - ts[k - 1];
+                if (dt > 1e-6f) d.push_back(dt);
+            }
+            if (!d.empty()) {
+                std::sort(d.begin(), d.end());
+                const float med = d[d.size() / 2];
+                sparse_deltas.push_back(med);
+                // Most companion tracks are 2-key constants whose only spacing is
+                // the clip length; measuring them would report ~1 fps for a clip
+                // authored at 30 (soldier's walk: 70 constant tracks vs 2 dense).
+                // Measure key density from tracks that are actually sampled.
+                if (tn >= 4) dense_deltas.push_back(med);
+            }
+        }
+    }
+    const std::vector<float>& deltas = dense_deltas.empty() ? sparse_deltas : dense_deltas;
+    if (deltas.empty()) return 24.0f;                  // engine parity fallback
+
+    std::vector<float> sorted(deltas);
+    std::sort(sorted.begin(), sorted.end());
+    const float med_dt = sorted[sorted.size() / 2];
+    if (med_dt <= 1e-6f) return 24.0f;
+    const float raw = 1.0f / med_dt;
+    const float candidates[] = {24.0f, 25.0f, 30.0f, 48.0f, 50.0f, 60.0f};
+    float best = 30.0f, best_err = 1e30f;
+    for (float c : candidates) {
+        float e = std::fabs(c - raw);
+        if (e < best_err) { best_err = e; best = c; }
+    }
+    return (best_err <= best * 0.15f) ? best : std::clamp(std::round(raw), 1.0f, 120.0f);
+}
+
 bool gltf_import_all_clips(const std::string& path,
                            std::vector<std::pair<std::string, PODModel>>& out_clips,
                            std::string* err,
@@ -1173,128 +1750,15 @@ bool gltf_import_all_clips(const std::string& path,
     if (model.animations_count == 0) {
         tg3_error_stack_free(&errors);
         tg3_model_free(&model);
+        std::string comp = gltf_find_companion_motions(path);
+        if (!comp.empty()) {
+            return gltf_import_companion_motions(path, comp, out_clips, err, scale, target_fps, rigid_skin);
+        }
         return true;
     }
 
-    auto sample_channel = [](const std::string& interp, int comps,
-                             const std::vector<float>& times,
-                             const std::vector<float>& vals,
-                             int num_frames, float fps,
-                             std::vector<float>& out_dense,
-                             float scale = 1.0f) {
-        if (times.empty() || vals.empty() || num_frames <= 0 || comps <= 0) return;
-        out_dense.assign((size_t)num_frames * comps, 0.0f);
-
-        bool is_cubic = (interp == "CUBICSPLINE" || interp == "CUBIC_SPLINE");
-        bool is_step = (interp == "STEP");
-        size_t stride = is_cubic ? (size_t)comps * 3 : (size_t)comps;
-        size_t val_offset = is_cubic ? (size_t)comps : 0;
-
-        auto get_val = [&](size_t k, int c) -> float {
-            size_t idx = k * stride + val_offset + c;
-            return (idx < vals.size()) ? vals[idx] : 0.0f;
-        };
-        auto get_in_tan = [&](size_t k, int c) -> float {
-            size_t idx = k * stride + c;
-            return (idx < vals.size()) ? vals[idx] : 0.0f;
-        };
-        auto get_out_tan = [&](size_t k, int c) -> float {
-            size_t idx = k * stride + 2 * comps + c;
-            return (idx < vals.size()) ? vals[idx] : 0.0f;
-        };
-
-        for (int f = 0; f < num_frames; ++f) {
-            float t = static_cast<float>(f) / fps;
-            float* out_val = &out_dense[(size_t)f * comps];
-
-            if (t <= times.front() || times.size() == 1) {
-                for (int c = 0; c < comps; ++c) out_val[c] = get_val(0, c);
-            } else if (t >= times.back()) {
-                size_t last = times.size() - 1;
-                for (int c = 0; c < comps; ++c) out_val[c] = get_val(last, c);
-            } else {
-                size_t k = 0;
-                while (k + 1 < times.size() && times[k + 1] < t) ++k;
-                float t0 = times[k];
-                float t1 = times[k + 1];
-                float dt = t1 - t0;
-                float alpha = (dt > 1e-6f) ? std::clamp((t - t0) / dt, 0.0f, 1.0f) : 0.0f;
-
-                if (is_step) {
-                    for (int c = 0; c < comps; ++c) out_val[c] = get_val(k, c);
-                } else if (is_cubic) {
-                    float a2 = alpha * alpha;
-                    float a3 = a2 * alpha;
-                    float h00 = 2.0f * a3 - 3.0f * a2 + 1.0f;
-                    float h10 = a3 - 2.0f * a2 + alpha;
-                    float h01 = -2.0f * a3 + 3.0f * a2;
-                    float h11 = a3 - a2;
-
-                    for (int c = 0; c < comps; ++c) {
-                        float p0 = get_val(k, c);
-                        float m0 = get_out_tan(k, c) * dt;
-                        float p1 = get_val(k + 1, c);
-                        float m1 = get_in_tan(k + 1, c) * dt;
-                        out_val[c] = h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1;
-                    }
-                    if (comps == 4) {
-                        float len = std::sqrt(out_val[0]*out_val[0] + out_val[1]*out_val[1] +
-                                              out_val[2]*out_val[2] + out_val[3]*out_val[3]);
-                        if (len > 1e-6f) {
-                            for (int c = 0; c < 4; ++c) out_val[c] /= len;
-                        } else {
-                            out_val[0] = 0; out_val[1] = 0; out_val[2] = 0; out_val[3] = 1;
-                        }
-                    }
-                } else {
-                    if (comps == 4) {
-                        float q0[4] = {get_val(k, 0), get_val(k, 1), get_val(k, 2), get_val(k, 3)};
-                        float q1[4] = {get_val(k+1, 0), get_val(k+1, 1), get_val(k+1, 2), get_val(k+1, 3)};
-                        float dot = q0[0]*q1[0] + q0[1]*q1[1] + q0[2]*q1[2] + q0[3]*q1[3];
-                        if (dot < 0.0f) {
-                            for (int c = 0; c < 4; ++c) q1[c] = -q1[c];
-                            dot = -dot;
-                        }
-                        float s0 = 1.0f - alpha;
-                        float s1 = alpha;
-                        if (dot < 0.9995f) {
-                            float theta = std::acos(std::clamp(dot, -1.0f, 1.0f));
-                            float sin_theta = std::sin(theta);
-                            if (sin_theta > 1e-5f) {
-                                s0 = std::sin((1.0f - alpha) * theta) / sin_theta;
-                                s1 = std::sin(alpha * theta) / sin_theta;
-                            }
-                        }
-                        for (int c = 0; c < 4; ++c) out_val[c] = s0 * q0[c] + s1 * q1[c];
-                        float len = std::sqrt(out_val[0]*out_val[0] + out_val[1]*out_val[1] +
-                                              out_val[2]*out_val[2] + out_val[3]*out_val[3]);
-                        if (len > 1e-6f) {
-                            for (int c = 0; c < 4; ++c) out_val[c] /= len;
-                        } else {
-                            out_val[0] = 0; out_val[1] = 0; out_val[2] = 0; out_val[3] = 1;
-                        }
-                    } else {
-                        for (int c = 0; c < comps; ++c) {
-                            out_val[c] = (1.0f - alpha) * get_val(k, c) + alpha * get_val(k + 1, c);
-                        }
-                    }
-                }
-            }
-
-            if (scale != 1.0f && comps == 3) {
-                for (int c = 0; c < 3; ++c) out_val[c] *= scale;
-            }
-        }
-    };
-
-    std::vector<int> parent_of(model.nodes_count, -1);
-    for (uint32_t i = 0; i < model.nodes_count; ++i) {
-        for (uint32_t c = 0; c < model.nodes[i].children_count; ++c) {
-            int32_t child_idx = model.nodes[i].children[c];
-            if (child_idx >= 0 && child_idx < (int32_t)model.nodes_count)
-                parent_of[child_idx] = static_cast<int>(i);
-        }
-    }
+    GltfPodMapping mapping = compute_gltf_pod_mapping(&model);
+    GltfSkeletonInfo skel = analyze_skeleton(&model, scale);
 
     for (uint32_t a_idx = 0; a_idx < model.animations_count; ++a_idx) {
         const tg3_animation* anim = &model.animations[a_idx];
@@ -1325,118 +1789,25 @@ bool gltf_import_all_clips(const std::string& path,
             n.has_matrix = false;
         }
 
-        std::vector<float> accbuf;
-        auto load_acc = [&](int32_t acc_idx) -> const std::vector<float>& {
-            accbuf.clear();
-            if (!read_accessor_floats(&model, acc_idx, accbuf)) accbuf.clear();
-            return accbuf;
+        // By value, for the same reason as build_pod_from_tg3's `load` above:
+        // a reference to a shared scratch buffer aliases the moment two
+        // results are alive at once.
+        auto load_acc = [&](int32_t acc_idx) -> std::vector<float> {
+            std::vector<float> buf;
+            if (!read_accessor_floats(&model, acc_idx, buf)) buf.clear();
+            return buf;
         };
 
-        // --- Robust per-clip duration + derived fps (statue.glb fix) ---------
-        // Previously: max_time = max over ALL samplers' last key, fps hardcoded
-        // to 30. Two problems on real DCC exports (e.g. statue.glb Dragon rig):
-        //   1) A single degenerate 1-key ("constant") sampler, or a stray key
-        //      parked far out on the timeline, stretched the whole clip's frame
-        //      count while every real channel finished early and then held its
-        //      last pose -> "freeze then twitch" that reads as broken playback.
-        //   2) Hardcoded 30fps resampled 16-37s clips onto 500-1100 dense frames
-        //      x 528 nodes -> tens-of-MB PODs and crawling playback, and warped
-        //      timing when the source was authored at 24/25/60.
-        // Fix: derive the clip span from MULTI-KEY samplers only (ignore <2-key
-        // constant channels), reject stray outlier end-times, and derive fps
-        // from the source key density snapped to a sane authored rate.
-        // S2 (TODO.md): the game engine hardcodes 24.0 FPS in
-        // Caver::PODLoader::CreateAnimationFromFile (more_model_research.md §15),
-        // so a clip resampled at its authored 30/60 fps plays at the wrong speed
-        // in-game. Callers can therefore FORCE the rate via target_fps
-        // (--anim-fps, default 24); 0 keeps the key-density derivation.
-        std::vector<float> sampler_ends;   // last key time of each animated sampler
-        std::vector<float> key_deltas;     // per-sampler median inter-key spacing
-        for (uint32_t si = 0; si < anim->samplers_count; ++si) {
-            int32_t in_acc = anim->samplers[si].input;
-            if (in_acc < 0 || in_acc >= (int32_t)model.accessors_count) continue;
-            const std::vector<float>& times = load_acc(in_acc);
-            if (times.size() < 2) continue;               // skip constant channels
-            sampler_ends.push_back(times.back());
-            std::vector<float> d;
-            d.reserve(times.size() - 1);
-            for (size_t k = 1; k < times.size(); ++k) {
-                float dt = times[k] - times[k - 1];
-                if (dt > 1e-6f) d.push_back(dt);
-            }
-            if (!d.empty()) {
-                std::sort(d.begin(), d.end());
-                key_deltas.push_back(d[d.size() / 2]);    // median spacing
-            }
-        }
-
-        float max_time = 0.0f;
-        if (!sampler_ends.empty()) {
-            std::sort(sampler_ends.begin(), sampler_ends.end());
-            // Use the 90th-percentile end time as the clip span so one stray
-            // far-out key can't stretch the whole clip; guard against a lone
-            // outlier that is grossly beyond the bulk of channels.
-            float p90 = sampler_ends[(size_t)std::floor(0.9 * (sampler_ends.size() - 1))];
-            float median_end = sampler_ends[sampler_ends.size() / 2];
-            max_time = p90;
-            if (max_time > median_end * 4.0f && median_end > 0.0f)
-                max_time = median_end;                    // reject gross outlier
-        } else {
-            // No multi-key samplers at all -> fall back to any last key time.
-            for (uint32_t si = 0; si < anim->samplers_count; ++si) {
-                int32_t in_acc = anim->samplers[si].input;
-                if (in_acc < 0 || in_acc >= (int32_t)model.accessors_count) continue;
-                const std::vector<float>& times = load_acc(in_acc);
-                if (!times.empty()) max_time = std::max(max_time, times.back());
-            }
-        }
-
-        // Derive fps from source key density (median inter-key spacing), then
-        // snap to the nearest common authored rate. Falls back to 30 if unknown.
-        // Engine-parity default (see target_fps above): 24 fps, not 30.
-        float derived_fps = (target_fps > 0.0f) ? target_fps : 30.0f;
-        if (!key_deltas.empty()) {
-            std::sort(key_deltas.begin(), key_deltas.end());
-            float med_dt = key_deltas[key_deltas.size() / 2];
-            if (med_dt > 1e-6f) {
-                float raw = 1.0f / med_dt;
-                const float candidates[] = {24.0f, 25.0f, 30.0f, 48.0f, 50.0f, 60.0f};
-                float best = 30.0f, best_err = 1e30f;
-                for (float c : candidates) {
-                    float e = std::fabs(c - raw);
-                    if (e < best_err) { best_err = e; best = c; }
-                }
-                // If the source is much denser/sparser than any common rate,
-                // keep the rounded raw rate (clamped) instead of snapping.
-                derived_fps = (best_err <= best * 0.15f) ? best
-                              : std::clamp(std::round(raw), 1.0f, 120.0f);
-            }
-        }
-        // Forced target rate (game parity): bypass key-density snapping entirely.
-        if (target_fps > 0.0f) derived_fps = target_fps;
-        clip_model.fps = derived_fps;
-        clip_model.num_frames = std::max(1, static_cast<int>(std::lround(max_time * clip_model.fps)) + 1);
-
-        std::vector<int> gltf_to_pod_node(model.nodes_count, -1);
-        {
-            int mesh_count = 0;
-            for (uint32_t i = 0; i < model.nodes_count; ++i) {
-                if (model.nodes[i].mesh >= 0 && model.nodes[i].mesh < (int32_t)model.meshes_count) mesh_count++;
-            }
-            int next_mesh = 0, next_other = 0;
-            for (uint32_t i = 0; i < model.nodes_count; ++i) {
-                if (model.nodes[i].mesh >= 0 && model.nodes[i].mesh < (int32_t)model.meshes_count) {
-                    gltf_to_pod_node[i] = next_mesh++;
-                } else {
-                    gltf_to_pod_node[i] = mesh_count + (next_other++);
-                }
-            }
-        }
+        // Clip span + fps come from the shared rule (derive_clip_timing above),
+        // so the clip browser and this bake can never disagree.
+        const ClipTiming timing = derive_clip_timing(model, anim, target_fps);
+        clip_model.fps = timing.fps;
+        clip_model.num_frames = std::max(1, static_cast<int>(std::lround(timing.duration * clip_model.fps)) + 1);
 
         for (uint32_t ci = 0; ci < anim->channels_count; ++ci) {
             const tg3_animation_channel* ch = &anim->channels[ci];
             if (ch->target.node < 0 || ch->target.node >= (int32_t)model.nodes_count) continue;
-            int pod_node_idx = gltf_to_pod_node[ch->target.node];
+            int pod_node_idx = mapping.gltf_to_pod_node[ch->target.node];
             if (pod_node_idx < 0 || pod_node_idx >= (int)clip_model.nodes.size()) continue;
             if (ch->sampler < 0 || ch->sampler >= (int32_t)anim->samplers_count) continue;
             const tg3_animation_sampler* sm = &anim->samplers[ch->sampler];
@@ -1450,50 +1821,147 @@ bool gltf_import_all_clips(const std::string& path,
             std::string path_str = tg3_to_string(ch->target.path);
             int comps = (path_str == "rotation") ? 4 : 3;
             PODNode& node = clip_model.nodes[pod_node_idx];
-            float chan_scale = (path_str == "translation" && parent_of[ch->target.node] == -1) ? scale : 1.0f;
             std::string interp_str = tg3_to_string(sm->interpolation);
+            int target_gn = ch->target.node;
 
             if (path_str == "translation") {
-                sample_channel(interp_str, comps, times, vals, clip_model.num_frames, clip_model.fps, node.anim_translation, chan_scale);
+                sample_channel(interp_str, comps, times, vals, clip_model.num_frames, clip_model.fps, node.anim_translation, 1.0f);
+                if (skel.is_root_joint[target_gn]) {
+                    float S_wrap = skel.s_wrapper_of_joint[target_gn];
+                    const auto& Q_wrap = skel.q_wrapper_of_joint[target_gn];
+                    const auto& P_wrap = skel.p_wrapper_of_joint[target_gn];
+                    for (int f = 0; f < clip_model.num_frames; ++f) {
+                        float* t = &node.anim_translation[f * 3];
+                        float raw_scaled[3] = { t[0] * S_wrap, t[1] * S_wrap, t[2] * S_wrap };
+                        float rot_t[3];
+                        quat_rotate_vec(Q_wrap.data(), raw_scaled[0], raw_scaled[1], raw_scaled[2], rot_t[0], rot_t[1], rot_t[2]);
+                        t[0] = (P_wrap[0] + rot_t[0]) * scale;
+                        t[1] = (P_wrap[1] + rot_t[1]) * scale;
+                        t[2] = (P_wrap[2] + rot_t[2]) * scale;
+                    }
+                } else if (skel.is_joint[target_gn]) {
+                    float sk_s = skel.skel_scale_of_joint[target_gn];
+                    for (int f = 0; f < clip_model.num_frames; ++f) {
+                        float* t = &node.anim_translation[f * 3];
+                        t[0] *= sk_s;
+                        t[1] *= sk_s;
+                        t[2] *= sk_s;
+                    }
+                } else {
+                    if (skel.parent_of[target_gn] == -1 && scale != 1.0f) {
+                        for (int f = 0; f < clip_model.num_frames; ++f) {
+                            float* t = &node.anim_translation[f * 3];
+                            t[0] *= scale;
+                            t[1] *= scale;
+                            t[2] *= scale;
+                        }
+                    }
+                }
                 node.anim_flags |= 1;
             } else if (path_str == "rotation") {
                 sample_channel(interp_str, comps, times, vals, clip_model.num_frames, clip_model.fps, node.anim_rotation, 1.0f);
+                if (skel.is_root_joint[target_gn]) {
+                    const auto& Q_wrap = skel.q_wrapper_of_joint[target_gn];
+                    for (int f = 0; f < clip_model.num_frames; ++f) {
+                        float* q = &node.anim_rotation[f * 4];
+                        float q_world[4];
+                        quat_mul(Q_wrap.data(), q, q_world);
+                        q[0] = -q_world[0];
+                        q[1] = -q_world[1];
+                        q[2] = -q_world[2];
+                        q[3] = q_world[3];
+                    }
+                } else {
+                    for (size_t ki = 0; ki + 3 < node.anim_rotation.size(); ki += 4) {
+                        node.anim_rotation[ki + 0] = -node.anim_rotation[ki + 0];
+                        node.anim_rotation[ki + 1] = -node.anim_rotation[ki + 1];
+                        node.anim_rotation[ki + 2] = -node.anim_rotation[ki + 2];
+                    }
+                }
                 node.anim_flags |= 2;
             } else if (path_str == "scale") {
-                sample_channel(interp_str, comps, times, vals, clip_model.num_frames, clip_model.fps, node.anim_scale, 1.0f);
+                std::vector<float> s3;
+                sample_channel(interp_str, comps, times, vals,
+                               clip_model.num_frames, clip_model.fps, s3, 1.0f);
+                node.anim_scale.clear();
+                node.anim_scale.reserve((s3.size() / 3) * 7);
+                for (size_t ki = 0; ki + 2 < s3.size(); ki += 3) {
+                    node.anim_scale.push_back(s3[ki + 0]);
+                    node.anim_scale.push_back(s3[ki + 1]);
+                    node.anim_scale.push_back(s3[ki + 2]);
+                    node.anim_scale.push_back(0.0f); // scale-orientation quat = identity
+                    node.anim_scale.push_back(0.0f);
+                    node.anim_scale.push_back(0.0f);
+                    node.anim_scale.push_back(1.0f);
+                }
                 node.anim_flags |= 4;
             }
         }
 
+        // ── Fill in constant T/R/S arrays for nodes whose channels were NOT
+        // animated by this clip (e.g. a walk cycle animates the legs but not
+        // the fingers). pod_loader.cpp lines 1297–1328 reads a single dense
+        // array element when the flag bit IS set; for unset bits it uses the
+        // static PODNode.translation/rotation/scale field. So we MUST fill in
+        // a dense array for every channel, set the flag for it, and write the
+        // node's rest-pose value into every frame.
+        //
+        // SCALE FILL-IN — writes 7-float/key [sx,sy,sz, 0,0,0,1] directly.
+        // This is critical: if we wrote 3*NumFrame floats and NumFrame is a
+        // multiple of 7 (7,14,21,28,...) then 3*NumFrame % 7 == 0. The writer's
+        // expansion guard (size % 7 != 0 && size % 3 == 0) is FALSE, the raw
+        // 3-float array passes through, and pod_loader reads it with stride 7
+        // → bone-matrix corruption. Always pre-expand to 7/key here.
         for (auto& node : clip_model.nodes) {
             if (node.anim_translation.empty()) {
+                // Constant translation channel: repeat the rest-pose value.
                 node.anim_translation.assign((size_t)clip_model.num_frames * 3, 0.0f);
                 for (int f = 0; f < clip_model.num_frames; ++f) {
                     node.anim_translation[f * 3 + 0] = node.translation[0];
                     node.anim_translation[f * 3 + 1] = node.translation[1];
                     node.anim_translation[f * 3 + 2] = node.translation[2];
                 }
+                node.anim_flags |= 1;
             }
             if (node.anim_rotation.empty()) {
+                // Constant rotation channel: repeat the rest-pose quaternion.
+                // Guard against the zero-quat edge case (uninitialized node):
+                // force w=1 when x,y,z,w are all zero.
                 node.anim_rotation.assign((size_t)clip_model.num_frames * 4, 0.0f);
+                const float rw = (node.rotation[3] == 0.0f && node.rotation[0] == 0.0f
+                                  && node.rotation[1] == 0.0f && node.rotation[2] == 0.0f)
+                                 ? 1.0f : node.rotation[3];
                 for (int f = 0; f < clip_model.num_frames; ++f) {
                     node.anim_rotation[f * 4 + 0] = node.rotation[0];
                     node.anim_rotation[f * 4 + 1] = node.rotation[1];
                     node.anim_rotation[f * 4 + 2] = node.rotation[2];
-                    node.anim_rotation[f * 4 + 3] = (node.rotation[3] == 0.0f && node.rotation[0] == 0.0f) ? 1.0f : node.rotation[3];
+                    node.anim_rotation[f * 4 + 3] = rw;
                 }
+                node.anim_flags |= 2;
             }
             if (node.anim_scale.empty()) {
-                node.anim_scale.assign((size_t)clip_model.num_frames * 3, 1.0f);
+                // Constant scale channel: repeat the rest-pose scale as 7-float/key.
+                // See the long comment above — NEVER write 3-float/key here.
+                const float sx = (node.scale[0] != 0.0f) ? node.scale[0] : 1.0f;
+                const float sy = (node.scale[1] != 0.0f) ? node.scale[1] : 1.0f;
+                const float sz = (node.scale[2] != 0.0f) ? node.scale[2] : 1.0f;
+                node.anim_scale.reserve((size_t)clip_model.num_frames * 7);
                 for (int f = 0; f < clip_model.num_frames; ++f) {
-                    node.anim_scale[f * 3 + 0] = (node.scale[0] != 0.0f) ? node.scale[0] : 1.0f;
-                    node.anim_scale[f * 3 + 1] = (node.scale[1] != 0.0f) ? node.scale[1] : 1.0f;
-                    node.anim_scale[f * 3 + 2] = (node.scale[2] != 0.0f) ? node.scale[2] : 1.0f;
+                    node.anim_scale.push_back(sx);
+                    node.anim_scale.push_back(sy);
+                    node.anim_scale.push_back(sz);
+                    node.anim_scale.push_back(0.0f); // scale-orientation quaternion = identity
+                    node.anim_scale.push_back(0.0f);
+                    node.anim_scale.push_back(0.0f);
+                    node.anim_scale.push_back(1.0f);
                 }
+                node.anim_flags |= 4;
             }
-            if (node.anim_flags == 0) {
-                node.anim_flags = 7;
-            }
+            // After fill-in every node has all three dense channels with flags set.
+            // Ensure anim_flags is exactly 7 (T|R|S) — it may already be 7 from
+            // the channel loop above, but forcing here covers the edge case of a
+            // node whose fill-in channels somehow left a bit unset.
+            node.anim_flags = 7;
         }
 
         clip_model.num_mesh_nodes = 0;
@@ -1502,6 +1970,738 @@ bool gltf_import_all_clips(const std::string& path,
 
     tg3_error_stack_free(&errors);
     tg3_model_free(&model);
+    return true;
+}
+
+std::string gltf_find_companion_motions(const std::string& glb_path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p(glb_path);
+    fs::path dir = p.parent_path();
+    if (dir.empty()) dir = ".";
+    std::string stem = p.stem().string();
+
+    std::vector<fs::path> candidates = {
+        dir / "motions.json",
+        dir / (stem + "_motions.json"),
+        dir / (stem + ".motions.json"),
+        dir / "Motions.json"
+    };
+    for (const auto& c : candidates) {
+        if (fs::exists(c, ec) && fs::is_regular_file(c, ec)) {
+            return c.string();
+        }
+    }
+    return "";
+}
+
+bool gltf_inspect_animations(const std::string& glb_path,
+                             std::vector<AnimationClipSummary>& in_glb_clips,
+                             std::vector<AnimationClipSummary>& json_clips,
+                             std::string* companion_json_path,
+                             float target_fps) {
+    in_glb_clips.clear();
+    json_clips.clear();
+    if (companion_json_path) companion_json_path->clear();
+
+    // 1. Inspect embedded GLB animations
+    std::ifstream f(glb_path, std::ios::binary | std::ios::ate);
+    if (f.is_open()) {
+        std::streamsize size = f.tellg();
+        f.seekg(0);
+        std::vector<uint8_t> file(static_cast<size_t>(size));
+        if (size > 0) f.read(reinterpret_cast<char*>(file.data()), size);
+        if (f) {
+            tg3_model model;
+            tg3_error_stack errors;
+            std::memset(&model, 0, sizeof(model));
+            tg3_error_stack_init(&errors);
+
+            tg3_parse_options opts;
+            tg3_parse_options_init(&opts);
+            opts.strictness = TG3_PERMISSIVE;
+            opts.images_as_is = 1;
+
+            std::string base_dir;
+            size_t slash = glb_path.find_last_of("/\\");
+            if (slash != std::string::npos) base_dir = glb_path.substr(0, slash);
+
+            tg3_error_code code = tg3_parse_auto(&model, &errors, file.data(), file.size(),
+                                                 base_dir.c_str(), (uint32_t)base_dir.size(), &opts);
+            if (code == TG3_OK) {
+                for (uint32_t a = 0; a < model.animations_count; ++a) {
+                    const tg3_animation* anim = &model.animations[a];
+                    AnimationClipSummary s;
+                    s.name = anim->name.data ? std::string(anim->name.data, anim->name.len) : ("anim_" + std::to_string(a));
+                    s.origin = "In-GLB";
+                    // Same rule the bake uses (derive_clip_timing), so the browser
+                    // reports the clip the converter will actually produce.
+                    const ClipTiming timing = derive_clip_timing(model, anim, target_fps);
+                    s.fps = timing.fps;
+                    s.duration = timing.duration;
+                    s.num_frames = std::max(1, static_cast<int>(std::lround(timing.duration * timing.fps)) + 1);
+                    in_glb_clips.push_back(s);
+                }
+            }
+            tg3_error_stack_free(&errors);
+            tg3_model_free(&model);
+        }
+    }
+
+    // 2. Inspect companion motions.json
+    std::string json_path = gltf_find_companion_motions(glb_path);
+    if (!json_path.empty()) {
+        if (companion_json_path) *companion_json_path = json_path;
+        std::ifstream jf(json_path, std::ios::binary | std::ios::ate);
+        if (jf.is_open()) {
+            std::streamsize jsize = jf.tellg();
+            jf.seekg(0);
+            std::string jdata(static_cast<size_t>(jsize), '\0');
+            if (jsize > 0) jf.read(&jdata[0], jsize);
+            if (jf) {
+                tg3json_value root;
+                const char* err_pos = nullptr;
+                if (tg3json_parse_n(jdata.data(), jdata.size(), 0, &root, &err_pos) == 1) {
+                    const tg3json_value* clips_val = tg3json_object_get(&root, "clips");
+                    if (clips_val && clips_val->type == TG3JSON_ARRAY) {
+                        size_t ccount = tg3json_array_size(clips_val);
+                        for (size_t ci = 0; ci < ccount; ++ci) {
+                            const tg3json_value* cval = tg3json_array_get(clips_val, ci);
+                            if (!cval || cval->type != TG3JSON_OBJECT) continue;
+                            AnimationClipSummary s;
+                            const tg3json_value* nval = tg3json_object_get(cval, "name");
+                            if (nval && nval->type == TG3JSON_STRING) {
+                                s.name = std::string(nval->u.string.ptr, nval->u.string.len);
+                            } else {
+                                s.name = "clip_" + std::to_string(ci);
+                            }
+                            const tg3json_value* dval = tg3json_object_get(cval, "duration");
+                            if (dval) {
+                                if (dval->type == TG3JSON_REAL) s.duration = (float)dval->u.real;
+                                else if (dval->type == TG3JSON_INT) s.duration = (float)dval->u.integer;
+                            }
+                            // `--anim-fps 0` derives the authored rate from the
+                            // companion tracks' key density, exactly as it does
+                            // for in-GLB clips (see derive_companion_fps).
+                            s.fps = derive_companion_fps(cval, target_fps);
+                            s.num_frames = std::max(1, static_cast<int>(std::lround(s.duration * s.fps)) + 1);
+                            s.origin = "motions.json";
+                            json_clips.push_back(s);
+                        }
+                    }
+                    tg3json_value_free(&root);
+                }
+            }
+        }
+    }
+
+    return (!in_glb_clips.empty() || !json_clips.empty());
+}
+
+bool gltf_import_companion_motions(const std::string& glb_path,
+                                   const std::string& motions_json_path,
+                                   std::vector<std::pair<std::string, PODModel>>& out_clips,
+                                   std::string* err,
+                                   float scale,
+                                   float target_fps,
+                                   bool rigid_skin) {
+    out_clips.clear();
+    std::ifstream f(glb_path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) { if (err) *err = "cannot open glb: " + glb_path; return false; }
+    std::streamsize size = f.tellg();
+    f.seekg(0);
+    std::vector<uint8_t> file(static_cast<size_t>(size));
+    if (size > 0) f.read(reinterpret_cast<char*>(file.data()), size);
+    if (!f) { if (err) *err = "read glb failed"; return false; }
+
+    tg3_model model;
+    tg3_error_stack errors;
+    std::memset(&model, 0, sizeof(model));
+    tg3_error_stack_init(&errors);
+
+    tg3_parse_options opts;
+    tg3_parse_options_init(&opts);
+    opts.strictness = TG3_PERMISSIVE;
+    opts.images_as_is = 1;
+
+    std::string base_dir;
+    size_t slash = glb_path.find_last_of("/\\");
+    if (slash != std::string::npos) base_dir = glb_path.substr(0, slash);
+
+    tg3_error_code code = tg3_parse_auto(&model, &errors, file.data(), file.size(),
+                                         base_dir.c_str(), (uint32_t)base_dir.size(), &opts);
+    if (code != TG3_OK) {
+        if (err) *err = "parse glb error";
+        tg3_error_stack_free(&errors);
+        tg3_model_free(&model);
+        return false;
+    }
+
+    PODModel base_model;
+    std::vector<GLTFImageBuffer> imgs;
+    if (!build_pod_from_tg3(&model, base_model, imgs, nullptr, err, scale, rigid_skin)) {
+        tg3_error_stack_free(&errors);
+        tg3_model_free(&model);
+        return false;
+    }
+
+    tg3_error_stack_free(&errors);
+    tg3_model_free(&model);
+
+    // Read companion motions JSON
+    std::ifstream jf(motions_json_path, std::ios::binary | std::ios::ate);
+    if (!jf.is_open()) {
+        if (err) *err = "cannot open motions json: " + motions_json_path;
+        return false;
+    }
+    std::streamsize jsize = jf.tellg();
+    jf.seekg(0);
+    std::string jdata(static_cast<size_t>(jsize), '\0');
+    if (jsize > 0) jf.read(&jdata[0], jsize);
+    if (!jf) {
+        if (err) *err = "read motions json failed";
+        return false;
+    }
+
+    tg3json_value root;
+    const char* err_pos = nullptr;
+    if (tg3json_parse_n(jdata.data(), jdata.size(), 0, &root, &err_pos) != 1) {
+        if (err) *err = "motions json syntax error";
+        return false;
+    }
+
+    // Identify root joints from rigBinding (where parent == null)
+    std::unordered_set<std::string> root_bone_names;
+    const tg3json_value* rb_val = tg3json_object_get(&root, "rigBinding");
+    if (rb_val && rb_val->type == TG3JSON_ARRAY) {
+        size_t rb_count = tg3json_array_size(rb_val);
+        for (size_t ri = 0; ri < rb_count; ++ri) {
+            const tg3json_value* r_entry = tg3json_array_get(rb_val, ri);
+            if (!r_entry || r_entry->type != TG3JSON_OBJECT) continue;
+            const tg3json_value* p_val = tg3json_object_get(r_entry, "parent");
+            if (!p_val || p_val->type == TG3JSON_NULL) {
+                const tg3json_value* n_val = tg3json_object_get(r_entry, "name");
+                if (n_val && n_val->type == TG3JSON_STRING) {
+                    root_bone_names.insert(std::string(n_val->u.string.ptr, n_val->u.string.len));
+                }
+            }
+        }
+    }
+
+    const tg3json_value* clips_val = tg3json_object_get(&root, "clips");
+    if (!clips_val || clips_val->type != TG3JSON_ARRAY) {
+        tg3json_value_free(&root);
+        return true;
+    }
+
+    size_t ccount = tg3json_array_size(clips_val);
+    for (size_t ci = 0; ci < ccount; ++ci) {
+        const tg3json_value* cval = tg3json_array_get(clips_val, ci);
+        if (!cval || cval->type != TG3JSON_OBJECT) continue;
+
+        std::string clip_name;
+        const tg3json_value* nval = tg3json_object_get(cval, "name");
+        if (nval && nval->type == TG3JSON_STRING) {
+            clip_name = std::string(nval->u.string.ptr, nval->u.string.len);
+        } else {
+            clip_name = "clip_" + std::to_string(ci);
+        }
+        for (char& c : clip_name) {
+            if (c == ':' || c == '/' || c == '\\' || c == ' ') c = '_';
+        }
+
+        float clip_duration = 0.0f;
+        const tg3json_value* dval = tg3json_object_get(cval, "duration");
+        if (dval) {
+            if (dval->type == TG3JSON_REAL) clip_duration = (float)dval->u.real;
+            else if (dval->type == TG3JSON_INT) clip_duration = (float)dval->u.integer;
+        }
+
+        PODModel clip_model = base_model;
+        clip_model.meshes.clear();
+        clip_model.materials.clear();
+        clip_model.texture_filenames.clear();
+        for (auto& n : clip_model.nodes) {
+            n.object_index = -1;
+            n.material_index = -1;
+            n.anim_translation.clear();
+            n.anim_rotation.clear();
+            n.anim_scale.clear();
+            n.anim_flags = 0;
+            n.has_matrix = false;
+        }
+
+        // Must match gltf_inspect_animations' companion branch: same fps, same
+        // frame count, else the browser lists a clip the bake never writes.
+        const float fps = derive_companion_fps(cval, target_fps);
+        clip_model.fps = fps;
+        clip_model.num_frames = std::max(1, static_cast<int>(std::lround(clip_duration * fps)) + 1);
+
+        auto find_node = [&](const std::string& bname) -> int {
+            for (int i = 0; i < (int)clip_model.nodes.size(); ++i) {
+                if (clip_model.nodes[i].name == bname) return i;
+            }
+            std::string pref = "Bone_" + bname;
+            for (int i = 0; i < (int)clip_model.nodes.size(); ++i) {
+                if (clip_model.nodes[i].name == pref) return i;
+            }
+            std::string san = bname;
+            for (char& c : san) if (c == ':' || c == '/' || c == '\\') c = '_';
+            for (int i = 0; i < (int)clip_model.nodes.size(); ++i) {
+                if (clip_model.nodes[i].name == san) return i;
+            }
+            std::string san_pref = "Bone_" + san;
+            for (int i = 0; i < (int)clip_model.nodes.size(); ++i) {
+                if (clip_model.nodes[i].name == san_pref) return i;
+            }
+            return -1;
+        };
+
+        float detected_unit_factor = 1.0f;
+        const tg3json_value* tracks_val = tg3json_object_get(cval, "tracks");
+        if (tracks_val && tracks_val->type == TG3JSON_ARRAY) {
+            size_t tcount = tg3json_array_size(tracks_val);
+            std::map<float, int> unit_votes;
+            for (size_t ti = 0; ti < tcount; ++ti) {
+                const tg3json_value* tval = tg3json_array_get(tracks_val, ti);
+                if (!tval || tval->type != TG3JSON_OBJECT) continue;
+                const tg3json_value* fn_val = tg3json_object_get(tval, "name");
+                if (!fn_val || fn_val->type != TG3JSON_STRING) continue;
+                std::string full_name(fn_val->u.string.ptr, fn_val->u.string.len);
+                size_t dot = full_name.find_last_of('.');
+                if (dot == std::string::npos) continue;
+                std::string bname = full_name.substr(0, dot);
+                std::string prop = full_name.substr(dot + 1);
+                if (prop != "position") continue;
+                int pni = find_node(bname);
+                if (pni < 0 || pni >= (int)clip_model.nodes.size()) continue;
+                const PODNode& pnode = clip_model.nodes[pni];
+                if (root_bone_names.count(bname) > 0 || pnode.parent_index == -1) continue;
+
+                const tg3json_value* vv = tg3json_object_get(tval, "values");
+                if (!vv || vv->type != TG3JSON_ARRAY) continue;
+                size_t vn = tg3json_array_size(vv);
+                if (vn < 3) continue;
+
+                const float base_len = std::sqrt(pnode.translation[0]*pnode.translation[0] +
+                                                 pnode.translation[1]*pnode.translation[1] +
+                                                 pnode.translation[2]*pnode.translation[2]);
+                if (base_len <= 0.001f) continue;
+
+                double sum_sq = 0.0;
+                size_t samples = 0;
+                for (size_t k = 0; k + 2 < vn; k += 3) {
+                    const tg3json_value* v0 = tg3json_array_get(vv, k);
+                    const tg3json_value* v1 = tg3json_array_get(vv, k+1);
+                    const tg3json_value* v2 = tg3json_array_get(vv, k+2);
+                    double x = (v0->type == TG3JSON_REAL) ? v0->u.real : v0->u.integer;
+                    double y = (v1->type == TG3JSON_REAL) ? v1->u.real : v1->u.integer;
+                    double z = (v2->type == TG3JSON_REAL) ? v2->u.real : v2->u.integer;
+                    sum_sq += x*x + y*y + z*z;
+                    ++samples;
+                }
+                if (samples == 0) continue;
+                const double track_rms = std::sqrt(sum_sq / (double)samples);
+                const double ratio = (track_rms > 1e-9) ? track_rms / (double)base_len : 1.0;
+                static const double kKnown[] = {10.0, 100.0, 1000.0, 39.3701, 3.28084};
+                for (double known : kKnown) {
+                    if (std::fabs(ratio - known) <= 0.05 * known) {
+                        unit_votes[(float)(1.0 / known)]++;
+                        break;
+                    } else if (std::fabs(ratio - 1.0 / known) <= 0.05 / known) {
+                        unit_votes[(float)known]++;
+                        break;
+                    }
+                }
+            }
+            int max_votes = 0;
+            for (const auto& kv : unit_votes) {
+                if (kv.second > max_votes) {
+                    max_votes = kv.second;
+                    detected_unit_factor = kv.first;
+                }
+            }
+
+            for (size_t ti = 0; ti < tcount; ++ti) {
+                const tg3json_value* tval = tg3json_array_get(tracks_val, ti);
+                if (!tval || tval->type != TG3JSON_OBJECT) continue;
+
+                const tg3json_value* full_name_val = tg3json_object_get(tval, "name");
+                if (!full_name_val || full_name_val->type != TG3JSON_STRING) continue;
+
+                std::string full_name(full_name_val->u.string.ptr, full_name_val->u.string.len);
+                size_t dot = full_name.find_last_of('.');
+                if (dot == std::string::npos) continue;
+
+                std::string bone_name = full_name.substr(0, dot);
+                std::string prop = full_name.substr(dot + 1);
+
+                int pod_node_idx = find_node(bone_name);
+                if (pod_node_idx < 0 || pod_node_idx >= (int)clip_model.nodes.size()) continue;
+
+                PODNode& node = clip_model.nodes[pod_node_idx];
+
+                std::vector<float> times;
+                const tg3json_value* times_val = tg3json_object_get(tval, "times");
+                if (times_val && times_val->type == TG3JSON_ARRAY) {
+                    size_t tn = tg3json_array_size(times_val);
+                    times.reserve(tn);
+                    for (size_t k = 0; k < tn; ++k) {
+                        const tg3json_value* v = tg3json_array_get(times_val, k);
+                        if (v->type == TG3JSON_REAL) times.push_back((float)v->u.real);
+                        else if (v->type == TG3JSON_INT) times.push_back((float)v->u.integer);
+                    }
+                }
+
+                std::vector<float> vals;
+                const tg3json_value* vals_val = tg3json_object_get(tval, "values");
+                if (vals_val && vals_val->type == TG3JSON_ARRAY) {
+                    size_t vn = tg3json_array_size(vals_val);
+                    vals.reserve(vn);
+                    for (size_t k = 0; k < vn; ++k) {
+                        const tg3json_value* v = tg3json_array_get(vals_val, k);
+                        if (v->type == TG3JSON_REAL) vals.push_back((float)v->u.real);
+                        else if (v->type == TG3JSON_INT) vals.push_back((float)v->u.integer);
+                    }
+                }
+
+                if (times.empty() || vals.empty()) continue;
+
+                bool is_root = root_bone_names.count(bone_name) > 0 || node.parent_index == -1;
+                float unit_factor = detected_unit_factor;
+
+                float chan_scale = (prop == "position") ? (is_root ? (scale * unit_factor) : unit_factor) : 1.0f;
+
+                if (prop == "position") {
+                    sample_channel("LINEAR", 3, times, vals, clip_model.num_frames, clip_model.fps, node.anim_translation, chan_scale);
+                    node.anim_flags |= 1;
+                } else if (prop == "quaternion") {
+                    sample_channel("LINEAR", 4, times, vals, clip_model.num_frames, clip_model.fps, node.anim_rotation, 1.0f);
+                    // Invert xyz for all sampled frames to match PowerVR / TouchFoo convention
+                    for (size_t ki = 0; ki + 3 < node.anim_rotation.size(); ki += 4) {
+                        node.anim_rotation[ki + 0] = -node.anim_rotation[ki + 0];
+                        node.anim_rotation[ki + 1] = -node.anim_rotation[ki + 1];
+                        node.anim_rotation[ki + 2] = -node.anim_rotation[ki + 2];
+                    }
+                    node.anim_flags |= 2;
+                } else if (prop == "scale") {
+                    std::vector<float> s3;
+                    sample_channel("LINEAR", 3, times, vals, clip_model.num_frames, clip_model.fps, s3, 1.0f);
+                    node.anim_scale.clear();
+                    node.anim_scale.reserve((s3.size() / 3) * 7);
+                    for (size_t ki = 0; ki + 2 < s3.size(); ki += 3) {
+                        node.anim_scale.push_back(s3[ki + 0]);
+                        node.anim_scale.push_back(s3[ki + 1]);
+                        node.anim_scale.push_back(s3[ki + 2]);
+                        node.anim_scale.push_back(0.0f);
+                        node.anim_scale.push_back(0.0f);
+                        node.anim_scale.push_back(0.0f);
+                        node.anim_scale.push_back(1.0f);
+                    }
+                    node.anim_flags |= 4;
+                }
+            }
+        }
+
+        // Fill in unkeyed channels
+        for (auto& node : clip_model.nodes) {
+            if (node.anim_translation.empty()) {
+                node.anim_translation.assign((size_t)clip_model.num_frames * 3, 0.0f);
+                for (int f = 0; f < clip_model.num_frames; ++f) {
+                    node.anim_translation[f * 3 + 0] = node.translation[0];
+                    node.anim_translation[f * 3 + 1] = node.translation[1];
+                    node.anim_translation[f * 3 + 2] = node.translation[2];
+                }
+                node.anim_flags |= 1;
+            }
+            if (node.anim_rotation.empty()) {
+                node.anim_rotation.assign((size_t)clip_model.num_frames * 4, 0.0f);
+                const float rw = (node.rotation[3] == 0.0f && node.rotation[0] == 0.0f
+                                  && node.rotation[1] == 0.0f && node.rotation[2] == 0.0f)
+                                 ? 1.0f : node.rotation[3];
+                for (int f = 0; f < clip_model.num_frames; ++f) {
+                    node.anim_rotation[f * 4 + 0] = node.rotation[0];
+                    node.anim_rotation[f * 4 + 1] = node.rotation[1];
+                    node.anim_rotation[f * 4 + 2] = node.rotation[2];
+                    node.anim_rotation[f * 4 + 3] = rw;
+                }
+                node.anim_flags |= 2;
+            }
+            if (node.anim_scale.empty()) {
+                const float sx = (node.scale[0] != 0.0f) ? node.scale[0] : 1.0f;
+                const float sy = (node.scale[1] != 0.0f) ? node.scale[1] : 1.0f;
+                const float sz = (node.scale[2] != 0.0f) ? node.scale[2] : 1.0f;
+                node.anim_scale.reserve((size_t)clip_model.num_frames * 7);
+                for (int f = 0; f < clip_model.num_frames; ++f) {
+                    node.anim_scale.push_back(sx);
+                    node.anim_scale.push_back(sy);
+                    node.anim_scale.push_back(sz);
+                    node.anim_scale.push_back(0.0f);
+                    node.anim_scale.push_back(0.0f);
+                    node.anim_scale.push_back(0.0f);
+                    node.anim_scale.push_back(1.0f);
+                }
+                node.anim_flags |= 4;
+            }
+            node.anim_flags = 7;
+        }
+
+        clip_model.num_mesh_nodes = 0;
+        out_clips.emplace_back(clip_name, std::move(clip_model));
+    }
+
+    tg3json_value_free(&root);
+    return !out_clips.empty();
+}
+
+// ─── S2: rigid-bone selection scored against the clips' motion ───────────────
+//
+// See gltf_glb.h for the contract. The short version: the engine reads one bone
+// per vertex, so a smooth rig has to collapse onto a single influence, and
+// choosing it at the bind pose is a guess made while the model is standing
+// still. This scores each of a vertex's own influences against the smooth result
+// it is collapsing away, over frames drawn from every clip, and keeps the best.
+//
+// The scoring reuses skin_mesh's exact matrix —
+//     skin[j] = inverse(world(mesh_node)) · world(j,f) · inverse(bind[j]) · bind(mesh_node)
+// — because a metric that disagrees with the runtime's contract measures the
+// wrong thing. Both sides of the comparison come from the same per-frame skin
+// table, so the mesh-node and bind factors cancel and the comparison is purely
+// about which bone tracks the vertex.
+
+namespace {
+
+// Column-major 4x4 multiply, matching pod_loader's local_mat4_mul.
+void rs_mat4_mul(const float a[16], const float b[16], float out[16]) {
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            out[c * 4 + r] = a[r] * b[c * 4 + 0] + a[4 + r] * b[c * 4 + 1]
+                           + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+}
+
+void rs_mat4_identity(float m[16]) {
+    std::memset(m, 0, sizeof(float) * 16);
+    m[0] = m[5] = m[10] = m[15] = 1.0f;
+}
+
+void rs_mat4_point(const float m[16], const float p[3], float out[3]) {
+    out[0] = m[0] * p[0] + m[4] * p[1] + m[8]  * p[2] + m[12];
+    out[1] = m[1] * p[0] + m[5] * p[1] + m[9]  * p[2] + m[13];
+    out[2] = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+}
+
+// Frames scored per clip. 8 spread evenly across the clip is enough to expose
+// which bone carries a vertex through the motion, and keeps the pass cheap on a
+// 100k-vertex model with a dozen clips.
+constexpr int kRigidScoreFramesPerClip = 8;
+
+struct RsPoseSample {
+    // skin[(instance * n_nodes + node) * 16 ...] — the matrix skin_mesh would
+    // apply to a vertex of that instance driven by that node, at this frame.
+    std::vector<float> skin;
+};
+
+} // namespace
+
+bool refine_rigid_skin(PODModel& model,
+                       const std::vector<std::pair<std::string, PODModel>>& clips,
+                       RigidSkinRefineStats* stats,
+                       std::string* err) {
+    RigidSkinRefineStats out;
+    (void)err;
+
+    struct RsInstance { int mesh_node; int mesh; };
+    std::vector<RsInstance> instances;
+    for (size_t i = 0; i < model.nodes.size(); ++i) {
+        const int oi = model.nodes[i].object_index;
+        if (oi < 0 || oi >= (int)model.meshes.size()) continue;
+        const PODMesh& m = model.meshes[oi];
+        if (m.bones_per_vertex <= 0 || m.positions.empty()) continue;
+        if (m.bones_per_vertex == 1) continue;         // already rigid: nothing to choose
+        instances.push_back({(int)i, oi});
+    }
+    if (instances.empty()) {
+        if (stats) *stats = out;
+        return true;
+    }
+
+    const int n_nodes = (int)model.nodes.size();
+    std::vector<RsPoseSample> poses;
+
+    for (const auto& kv : clips) {
+        const PODModel& clip = kv.second;
+        // The clip PODs the importer builds are copies of the base model with
+        // their animation streams filled in, so nodes line up 1:1 and by name.
+        // Anything else is not a sibling of this model and cannot be scored.
+        if (clip.nodes.size() != model.nodes.size()) continue;
+        if (clip.num_frames <= 0) continue;
+
+        PODModel pose;
+        pose.nodes = model.nodes;                 // carries has_bind_matrix
+        pose.num_frames = clip.num_frames;
+        pose.fps = clip.fps;
+        for (size_t i = 0; i < pose.nodes.size(); ++i) {
+            const PODNode& src = clip.nodes[i];
+            if (src.name != pose.nodes[i].name) continue;
+            if (!src.anim_translation.empty()) pose.nodes[i].anim_translation = src.anim_translation;
+            if (!src.anim_rotation.empty())    pose.nodes[i].anim_rotation    = src.anim_rotation;
+            if (!src.anim_scale.empty())       pose.nodes[i].anim_scale       = src.anim_scale;
+            if (!src.anim_matrix.empty())      pose.nodes[i].anim_matrix      = src.anim_matrix;
+            pose.nodes[i].anim_flags = src.anim_flags;
+            // A stream, when present, wins over the static matrix — the same
+            // precedence pod_loader applies after a clip merge.
+            if (!src.anim_translation.empty() || !src.anim_rotation.empty() ||
+                !src.anim_scale.empty() || !src.anim_matrix.empty())
+                pose.nodes[i].has_matrix = false;
+        }
+
+        const int nf = pose.num_frames;
+        std::vector<int> frames;
+        for (int k = 0; k < kRigidScoreFramesPerClip; ++k) {
+            const int f = (int)std::llround((double)k * (nf - 1) /
+                                            std::max(1, kRigidScoreFramesPerClip - 1));
+            if (std::find(frames.begin(), frames.end(), f) == frames.end()) frames.push_back(f);
+        }
+
+        std::vector<float> cur((size_t)n_nodes * 16), bind((size_t)n_nodes * 16);
+        for (int f : frames) {
+            for (int j = 0; j < n_nodes; ++j) {
+                get_node_matrix(pose, j, (float)f, &cur[(size_t)j * 16]);
+                if (pose.nodes[j].has_bind_matrix)
+                    std::memcpy(&bind[(size_t)j * 16], pose.nodes[j].bind_matrix, 16 * sizeof(float));
+                else
+                    get_node_matrix(pose, j, 0.0f, &bind[(size_t)j * 16]);
+            }
+            RsPoseSample ps;
+            ps.skin.assign((size_t)instances.size() * (size_t)n_nodes * 16, 0.0f);
+            for (size_t mi = 0; mi < instances.size(); ++mi) {
+                const int mesh_node = instances[mi].mesh_node;
+                float mesh_world[16], mesh_inv[16];
+                get_node_matrix(pose, mesh_node, (float)f, mesh_world);
+                if (!gltf_mat4_inverse(mesh_world, mesh_inv)) rs_mat4_identity(mesh_inv);
+                for (int j = 0; j < n_nodes; ++j) {
+                    float inv_bind[16];
+                    if (!gltf_mat4_inverse(&bind[(size_t)j * 16], inv_bind)) rs_mat4_identity(inv_bind);
+                    float t[16], s[16];
+                    rs_mat4_mul(&cur[(size_t)j * 16], inv_bind, t);
+                    rs_mat4_mul(t, &bind[(size_t)mesh_node * 16], s);
+                    rs_mat4_mul(mesh_inv, s, &ps.skin[((size_t)mi * n_nodes + j) * 16]);
+                }
+            }
+            poses.push_back(std::move(ps));
+        }
+    }
+    out.pose_samples = (int)poses.size();
+
+    double sum_before = 0.0, sum_after = 0.0;
+    long   scored = 0;
+
+    for (size_t mi = 0; mi < instances.size(); ++mi) {
+        PODMesh& mesh = model.meshes[instances[mi].mesh];
+        const int bpv = mesh.bones_per_vertex;
+        const int nverts = mesh.num_vertices;
+        if (bpv <= 1 || bpv > 8 || nverts <= 0) continue;
+        if (mesh.bone_indices.size() < (size_t)nverts * bpv) continue;
+
+        const std::vector<uint32_t>& table = mesh.bone_batches.indices;
+        auto pod_node_of_slot = [&](int slot) -> int {
+            if (mesh.has_bone_batches && !table.empty() && slot >= 0 && (size_t)slot < table.size())
+                return (int)table[slot];
+            return slot;
+        };
+
+        std::vector<float> chosen((size_t)nverts, 0.0f);
+        out.vertices += nverts;
+
+        for (int v = 0; v < nverts; ++v) {
+            const float* p = &mesh.positions[(size_t)v * 3];
+
+            // The vertex's own influences, deduped, in raw slot space — slot
+            // space is what bone_indices stores; bone_batches maps it to a POD
+            // node, and keeping that indirection intact is what lets the
+            // engine's two-level lookup keep working unchanged.
+            int   cand[8];
+            double cost[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+            int   n_cand = 0;
+            float wsum = 0.0f;
+            int   dominant = 0;
+            float dominant_w = -1.0f;
+            for (int k = 0; k < bpv; ++k) {
+                const size_t i = (size_t)v * bpv + k;
+                if (i >= mesh.bone_indices.size()) break;
+                const float wk = mesh.bone_weights.size() > i ? mesh.bone_weights[i] : 0.0f;
+                const int slot = (int)std::lround(mesh.bone_indices[i]);
+                if (wk > dominant_w) { dominant_w = wk; dominant = std::max(slot, 0); }
+                if (wk <= 0.0f || slot < 0) continue;
+                bool seen = false;
+                for (int c = 0; c < n_cand; ++c) if (cand[c] == slot) { seen = true; break; }
+                if (!seen && n_cand < 8) cand[n_cand++] = slot;
+                wsum += wk;
+            }
+            if (n_cand == 0 || wsum <= 0.0f) { chosen[(size_t)v] = (float)std::max(dominant, 0); continue; }
+
+            // With no clips to score against, keep exactly the old behaviour
+            // rather than collapsing onto an arbitrary first influence.
+            if (poses.empty()) { chosen[(size_t)v] = (float)dominant; continue; }
+
+            int dominant_c = 0;
+            for (int c = 0; c < n_cand; ++c) if (cand[c] == dominant) { dominant_c = c; break; }
+
+            const float inv_wsum = 1.0f / wsum;
+            for (const RsPoseSample& ps : poses) {
+                // The smooth result this vertex is being collapsed away from,
+                // normalised the way skin_mesh normalises it.
+                float smooth[3] = {0.0f, 0.0f, 0.0f};
+                for (int k = 0; k < bpv; ++k) {
+                    const size_t i = (size_t)v * bpv + k;
+                    if (i >= mesh.bone_indices.size()) break;
+                    const float wk = mesh.bone_weights.size() > i ? mesh.bone_weights[i] : 0.0f;
+                    if (wk <= 0.0f) continue;
+                    const int node = pod_node_of_slot((int)std::lround(mesh.bone_indices[i]));
+                    if (node < 0 || node >= n_nodes) continue;
+                    float q[3];
+                    rs_mat4_point(&ps.skin[((size_t)mi * n_nodes + node) * 16], p, q);
+                    smooth[0] += wk * q[0]; smooth[1] += wk * q[1]; smooth[2] += wk * q[2];
+                }
+                smooth[0] *= inv_wsum; smooth[1] *= inv_wsum; smooth[2] *= inv_wsum;
+
+                for (int c = 0; c < n_cand; ++c) {
+                    const int node = pod_node_of_slot(cand[c]);
+                    if (node < 0 || node >= n_nodes) { cost[c] += 1e30; continue; }
+                    float q[3];
+                    rs_mat4_point(&ps.skin[((size_t)mi * n_nodes + node) * 16], p, q);
+                    const double dx = (double)q[0] - smooth[0];
+                    const double dy = (double)q[1] - smooth[1];
+                    const double dz = (double)q[2] - smooth[2];
+                    cost[c] += dx * dx + dy * dy + dz * dz;
+                }
+            }
+
+            int best = 0;
+            for (int c = 1; c < n_cand; ++c) if (cost[c] < cost[best]) best = c;
+            chosen[(size_t)v] = (float)cand[best];
+            if (cand[best] != dominant) ++out.moved;
+
+            const double n = (double)poses.size();
+            const double e_before = std::sqrt(cost[dominant_c] / n);
+            const double e_after  = std::sqrt(cost[best] / n);
+            sum_before += e_before;
+            sum_after  += e_after;
+            out.worst_before = std::max(out.worst_before, e_before);
+            out.worst_after  = std::max(out.worst_after,  e_after);
+            ++scored;
+        }
+
+        mesh.bones_per_vertex = 1;
+        mesh.bone_indices = std::move(chosen);
+        mesh.bone_weights.assign((size_t)nverts, 1.0f);
+    }
+
+    if (scored > 0) {
+        out.mean_before = sum_before / (double)scored;
+        out.mean_after  = sum_after / (double)scored;
+    }
+    if (stats) *stats = out;
     return true;
 }
 
