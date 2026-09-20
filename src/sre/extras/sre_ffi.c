@@ -1,5 +1,5 @@
 /* ============================================================
- * sre_ffi.c — Native FFI Lua module for SRE (CLOSED SOURCE / extras)
+ * sre_ffi.c — Native FFI Lua module for SRE (GNU GPLv3 / extras)
  * ============================================================
  * This is the UPGRADED FFI engine, moved out of SRE core and now
  * backed by the vendored libffi (libffi/ dir). Dispatch is ABI-correct

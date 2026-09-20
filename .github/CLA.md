@@ -11,7 +11,7 @@ This Contributor License Agreement ("Agreement" or "CLA") establishes the intell
 ## 1. Definitions
 
 * **"AevoraLabs"** (or "Organization", formerly OpenSwordigo Org): The governing organization, repository maintainers, and project stewards.
-* **"Lawncher Team"**: The joint development and reverse-engineering team holding joint All Rights Reserved rights over the SRE subsystem.
+* **"Lawncher Team"**: The joint development and reverse-engineering team holding joint copyright and custodial rights over the SRE subsystem under GNU GPLv3.
 * **"Contributor"** (or "You"): Any individual, collective, or legal entity that submits, proposes, or merges code, documentation, assets, or patches to any repository managed by AevoraLabs.
 * **"Contribution"**: Any source code, header, patch, documentation, tool, script, asset, or pull request submitted via version control, email, or discussion channels to AevoraLabs for inclusion in the project.
 * **"Project"**: The collective software suite including SwordigoDesktop, the Ruby and Ruby GG Studio IDE, Swordfare launcher and overlay, tools, and the Swordigo Runtime Environment (SRE).
@@ -49,7 +49,7 @@ Contributions must strictly observe the multi-license directory structure of the
 
 | Repository Tier | Target Directories | Invariant License Rule | Permitted Changes |
 | :--- | :--- | :--- | :--- |
-| **Tier 1: SRE Core** | [`../src/sre/`](../src/sre/) (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | Contributed code merges into the proprietary SRE framework. Authors retain dual ownership of their diffs; AevoraLabs (prev OpenSwordigo) and Lawncher Team retain joint stewardship and distribution authority. |
+| **Tier 1: SRE Core** | [`../src/sre/`](../src/sre/) (`sre12`, `sre13`, `extras`, `base`) | **GNU General Public License v3.0 (GPLv3)** | Strong copyleft. Contributed code merges into the open-source SRE framework under GNU GPLv3. Authors retain dual ownership of their diffs; Lawncher Team and AevoraLabs retain joint stewardship and distribution authority. |
 | **Tier 2: Studio & Tooling** | [`../src/ruby/`](../src/ruby/), [`../src/launcher/`](../src/launcher/), [`../src/platform/`](../src/platform/), [`../src/tools/`](../src/tools/), [`../tools/`](../tools/) | **GNU General Public License v3.0 (GPLv3)** | Strong copyleft. Any modifications or derivative works **must remain licensed under GNU GPLv3**. Down-licensing to permissive terms (e.g. MIT) is prohibited. |
 | **Tier 3: Host Infrastructure** | [`../src/jni/`](../src/jni/), [`../src/android/`](../src/android/), [`../src/loader/`](../src/loader/), [`../src/srehost/`](../src/srehost/) | **MIT License** | Strictly permissive. Contributions remain under standard MIT terms to ensure platform shims and loaders can be ported to other operating systems and consoles without restriction. |
 
@@ -71,7 +71,7 @@ By submitting a Contribution, you represent and warrant that:
 ## 7. Governance, Stewardship & Decision-Making Authority
 
 1. **Project Direction**: AevoraLabs and its members act as the decision-making body regarding project architecture, release schedules, build targets, community infrastructure, and repository management in accordance with the [Project Governance Model](./GOVERNANCE.md).
-2. **Relicensing Prerogatives for SRE**: Because SRE is held under All Rights Reserved terms, AevoraLabs and Lawncher Team reserve the joint sole authority to adjust SRE distribution models, maintain closed components, or publish companion tools without requiring individual approval from historic patch submitters, provided original contributor authorship is honored.
+2. **Relicensing Prerogatives for SRE**: The Lawncher Team and AevoraLabs have transitioned the SRE codebase to GNU General Public License v3.0 (GPLv3). Lawncher Team and AevoraLabs reserve joint stewardship of SRE distribution models and companion tools without requiring individual approval from historic patch submitters, provided original contributor authorship is honored.
 3. **Sole Decision-Making Body**: AevoraLabs and Lawncher Team constitute the sole decision-making authority for the project (see [GOVERNANCE.md](./GOVERNANCE.md)).
 
 ---

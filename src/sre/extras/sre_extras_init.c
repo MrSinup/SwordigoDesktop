@@ -1,4 +1,4 @@
-/* sre_extras_init.c — libsre-extras (CLOSED SOURCE)
+/* sre_extras_init.c — libsre-extras (GNU GPLv3 / extras)
  *
  * Module entry point. The host loads libsre-extras.so into guest RAM,
  * fills a SreExtrasInit struct in guest memory (Lua API pointers from the

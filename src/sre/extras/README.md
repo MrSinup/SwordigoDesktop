@@ -1,6 +1,6 @@
 # SRE Extras
 
-Closed-source extensions for SwordigoDesktop's SRE (Swordigo Runtime Emulator).
+Extended capabilities for SwordigoDesktop's SRE (Swordigo Runtime Emulator).
 
 Provides advanced modding APIs when loaded alongside `libsre12.so` **or**
 `libsre13.so` (the module is ABI-aware):
@@ -39,4 +39,4 @@ Requires `aarch64-linux-gnu-gcc` cross-compiler.
 
 ## License
 
-All Rights Reserved. Private repository.
+Licensed under the GNU General Public License v3.0 (GPLv3). See `LICENSE` for details.

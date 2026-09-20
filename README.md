@@ -180,7 +180,7 @@ This project is governed by a modular multi-license structure:
 
 | Component Domain | Directory Path | License Terms | Ownership / Rights Holders |
 | :--- | :--- | :--- | :--- |
-| **Swordigo Runtime Environment (SRE)** | `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | Jointly held by **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) & **Lawncher Team** (`Raijin`, `Kiziyon`) |
+| **Swordigo Runtime Environment (SRE)** | `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **GNU GPLv3** | Jointly held by **Lawncher Team** (`Raijin`, `Kiziyon`) & **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) |
 | **Ruby & Ruby GG Studio IDE** | `src/ruby/` | **GNU GPLv3** | Exclusively **AevoraLabs** |
 | **Swordfare Launcher & Game Overlay** | `src/launcher/`, `src/platform/` | **GNU GPLv3** | Exclusively **AevoraLabs** |
 | **Tooling & Converters** | `src/tools/`, `tools/` | **GNU GPLv3** | Exclusively **AevoraLabs** |

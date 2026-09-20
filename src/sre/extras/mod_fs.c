@@ -1,4 +1,4 @@
-/* mod_fs.c — libsre-extras (CLOSED SOURCE)
+/* mod_fs.c — libsre-extras (GNU GPLv3 / extras)
  *
  * Complete sandboxed filesystem API for mods, adapted from Kiwi Lawncher's fs.c.
  * Provides ALL fs functions — supersedes SRE's weaker implementations.

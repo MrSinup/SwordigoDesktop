@@ -1,4 +1,4 @@
-/* mod_saves.c — libsre-extras (CLOSED SOURCE)
+/* mod_saves.c — libsre-extras (GNU GPLv3 / extras)
  *
  * Per-mod save file isolation, adapted from Kiwi Lawncher's assets.c.
  * Redirects Documents/ reads/writes to per-mod save directories so each

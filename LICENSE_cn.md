@@ -1,23 +1,28 @@
 # SwordigoDesktop 多重许可声明 (Multi-License Notice)
 
-**AevoraLabs (prev OpenSwordigo) 项目许可框架 (Licensing Framework)**
+**AevoraLabs (prev OpenSwordigo) 与 Lawncher Team 许可框架 (Licensing Framework)**
 
 > **英文原版文件**: [English (LICENSE.md)](LICENSE.md) | [हिन्दी (Hindi)](LICENSE_hi.md) | [Français (French)](LICENSE_fr.md)
 
-本代码仓库是一个复合型开源/专有项目，各组件分别遵循三类不同的许可条款：
-1. **GNU 通用公共许可证第 3 版 (GPLv3)** — Swordigo 专用工具、游戏前端和关卡编辑器。
+本代码仓库是一个复合型开源项目，各组件分别遵循两类不同的许可条款：
+1. **GNU 通用公共许可证第 3 版 (GPLv3)** — Swordigo 运行时环境 (SRE)、Swordigo 专用工具、游戏前端和关卡编辑器。
 2. **MIT 许可证** — 通用宿主基础设施、Android 模拟层和 JNI 桥接。
-3. **保留所有权利 (All Rights Reserved - ARR)** — 专有 Swordigo 运行时环境 (SRE)。
 
-除 SRE 特别注明的共同所有权外，本仓库内的所有原创作品均**独家授权归 AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) 所有。
+本仓库内的原创作品归 **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) 与 **Lawncher Team** (`Raijin`, `Kiziyon`) 共同持有，详见下文。
 
 ---
 
 ## 1. GNU 通用公共许可证第 3 版 (GPLv3)
-### Swordigo 专用游戏与编辑器组件
+### Swordigo 运行时环境 (SRE)、专用游戏与编辑器组件
 
 以下子系统及目录在 **GNU General Public License, Version 3 (GPLv3)** 条款下获得许可：
 
+- **Swordigo 运行时环境 (SRE)** (`src/sre/`)：
+  - **`src/sre/sre13/`**：Swordigo 1.4.13 客体运行时、Caver 架构挂钩、rbmath Lua 数学库和控制台/音频子系统。
+  - **`src/sre/sre12/`**：Swordigo 1.4.12 客体运行时、核心挂钩和 Mini API。
+  - **`src/sre/extras/`**：扩展 SRE 模块、FFI 接口、内存补丁和存档文件系统。
+  - **`src/sre/base/`**：SRE 基础引擎、自定义运行时 ABI 胶水与平台兼容垫片。
+  - *由 Lawncher Team (`Raijin`, `Kiziyon`) 与 AevoraLabs (`QuantumCreeper`, `Msinup`, `ManoK`) 共同开发并授权许可。*
 - **Ruby 与 Ruby GG IDE 套件** (`src/ruby/`)：
   - Qt6 Studio 编辑器、`Graphy` 可视化节点编辑器、视口着色器、光照与后处理管线、Caver 视觉引擎及集成工具。
 - **Swordfare 启动器与游戏内悬浮窗 (Overlay)** (`src/launcher/`, `src/platform/`)：
@@ -25,8 +30,8 @@
 - **Swordigo 工具链与转换器** (`src/tools/`, `tools/`)：
   - SCL/Scene 转图表转换器、boulder 地形生成器、rubymesh 格式、glTF 桥接器及资产编译器。
 
-**版权所有 © 2026 AevoraLabs。保留所有权利。**
-基于 GPLv3 许可。详见 [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) 和 [`src/platform/LICENSE.md`](src/platform/LICENSE.md)。
+**版权所有 © 2026 Lawncher Team & AevoraLabs。**
+基于 GPLv3 许可。详见 [`src/sre/LICENSE.md`](src/sre/LICENSE.md)、[`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) 和 [`src/platform/LICENSE.md`](src/platform/LICENSE.md)。
 
 ---
 
@@ -53,24 +58,15 @@
 
 ---
 
-## 3. 保留所有权利 (All Rights Reserved - ARR)
-### Swordigo 运行时环境 (SRE)
+## 3. 第三方组件与许可历史
 
-`src/sre/` 中包含的完整 **Swordigo Runtime Environment (SRE)** 是受**保留所有权利 (ARR)** 保护的专有软件：
+### SRE 代码库重新许可
+Lawncher Team 与 AevoraLabs 已共同将 Swordigo 运行时环境 (SRE) 及其所有子模块（`sre13`、`extras`、`sre12` 和 `base`）的代码库许可证全面更新为 **GNU General Public License v3.0 (GPLv3)**。
 
-- **`src/sre/sre13/`**：Swordigo 1.4.13 客体运行时、Caver 架构挂钩、rbmath Lua 数学库和控制台/音频子系统。
-- **`src/sre/sre12/`**：Swordigo 1.4.12 客体运行时、核心挂钩和 Mini API。
-- **`src/sre/extras/`**：闭源 SRE 扩展、FFI 接口、内存补丁和存档文件系统。
-- **`src/sre/base/`**：SRE 基础引擎与自定义运行时 ABI 胶水。
-
-### 联合权利所有权：
-SRE 的所有权利、所有权和知识产权均由以下两方共同且独家拥有：
-- **AevoraLabs (prev OpenSwordigo)**：`QuantumCreeper`, `Msinup`, `ManoK`
-- **Lawncher Team**：`Raijin`, `Kiziyon`
-
-**未经明确事先书面授权，严禁任何形式的未授权再分发、修改、二次许可、反编译或公开镜像。**
-完整条款请参见 [`src/sre/LICENSE.md`](src/sre/LICENSE.md)。
-*（`src/sre/base/` 中的第三方集成依赖项——如上游 Lua 5.1、LuaSocket、LuaFileSystem、toml-c 和 RakNet——保留其原始开源许可）。*
+### 第三方集成依赖项
+第三方集成组件保留其原始开源许可：
+- `src/sre/base/` 中的上游依赖项（如 Lua 5.1、LuaSocket、LuaFileSystem、toml-c 和 RakNet）保留其原始许可（MIT, BSD, zlib）。
+- ufbx (`src/tools/ufbx/`) 遵循 MIT / Public Domain 双重许可。
 
 ---
 
@@ -78,7 +74,7 @@ SRE 的所有权利、所有权和知识产权均由以下两方共同且独家�
 
 | 目录 / 组件 | 许可证 | 专有性 / 版权所有者 |
 | :--- | :--- | :--- |
-| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **保留所有权利 (ARR)** | **AevoraLabs (prev OpenSwordigo)** & **Lawncher Team** |
+| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **GNU GPLv3** | 由 **Lawncher Team** (`Raijin`, `Kiziyon`) 与 **AevoraLabs** (`QuantumCreeper`, `Msinup`, `ManoK`) 共同持有 |
 | `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | 独家归 **AevoraLabs** 所有 |
 | `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | 独家归 **AevoraLabs** 所有 |
 | `src/tools/`, `tools/` (转换器与编译器) | **GNU GPLv3** | 独家归 **AevoraLabs** 所有 |
@@ -88,10 +84,10 @@ SRE 的所有权利、所有权和知识产权均由以下两方共同且独家�
 
 ---
 
-## 4. 社区协议与治理规范
+## 4. 社区协议与治理政策
 
-所有向本项目的代码贡献及在线基础设施的使用均须遵守以下补充协议：
-- **贡献者许可协议 (CLA)**：请参阅 [`.github/CLA.md`](.github/CLA.md) 了解贡献条款与 50/50 版权保留细则。
-- **项目治理模型 (Governance)**：请参阅 [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md) 了解项目管理架构及决策权。
-- **使用条款 (Terms of Use)**：请参阅 [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md) 了解在线模组商店与网络服务规范。
-- **行为准则 (Code of Conduct)**：请参阅 [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) 了解社区文明准则。
+所有向本项目提交的贡献以及对在线基础设施的使用均须遵守以下补充协议：
+- **贡献者许可协议 (CLA)**：有关贡献条款及 50/50 版权保留规则，请参见 [`.github/CLA.md`](.github/CLA.md)。
+- **项目治理模型**：有关管理架构与决策权，请参见 [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md)。
+- **使用条款**：有关在线模组商店及网络服务使用规则，请参见 [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md)。
+- **行为准则**：有关社区行为规范，请参见 [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md)。

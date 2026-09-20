@@ -42,7 +42,7 @@ The project is stewarded jointly by two recognized teams:
 
 2. **Lawncher Team**:
    - The joint reverse-engineering and runtime development team.
-   - Holds joint intellectual property rights and custodial authority over the Swordigo Runtime Environment ([`../src/sre/`](../src/sre/) — `sre12`, `sre13`, `extras`, `base`).
+   - Holds joint intellectual property rights and custodial authority over the Swordigo Runtime Environment ([`../src/sre/`](../src/sre/) — `sre12`, `sre13`, `extras`, `base`, licensed under GNU GPLv3).
    - Co-decides all architectural, ABI, memory layout, and runtime decisions relating to SRE.
 
 Together, **AevoraLabs and Lawncher Team constitute the sole decision-making authority** for the project.
@@ -58,7 +58,7 @@ Any community member who submits issues, pull requests, patches, documentation, 
 * **Repository & Tools ([`../src/ruby/`](../src/ruby/), [`../src/launcher/`](../src/launcher/), [`../src/platform/`](../src/platform/), [`../src/tools/`](../src/tools/), [`../src/jni/`](../src/jni/), [`../src/loader/`](../src/loader/))**:
   - Maintained and decided directly by AevoraLabs and its members.
 * **SRE Subsystem ([`../src/sre/`](../src/sre/))**:
-  - Managed jointly. Any architectural changes, ABI updates, hooking redesigns, or distribution modifications for SRE require mutual consensus between AevoraLabs and Lawncher Team.
+  - Managed jointly under GNU GPLv3. Any architectural changes, ABI updates, hooking redesigns, or distribution modifications for SRE require mutual consensus between AevoraLabs and Lawncher Team.
 
 ### 3.2 Review and Merges
 * All pull requests require review and approval from AevoraLabs or Lawncher Team maintainers before merging.

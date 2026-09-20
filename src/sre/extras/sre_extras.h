@@ -1,5 +1,5 @@
 /*
- * sre_extras.h — libsre-extras (CLOSED SOURCE)
+ * sre_extras.h — libsre-extras (GNU GPLv3 / extras)
  *
  * Optional ARM64 guest addon for SwordigoDesktop's SRE. Provides the
  * SwKiwi "Mini.MemoryAddress" API (memory read/write userdata, Dlsym,

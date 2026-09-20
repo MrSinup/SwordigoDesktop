@@ -1,23 +1,28 @@
 # SwordigoDesktop बहु-लाइसेंस सूचना (Multi-License Notice)
 
-**AevoraLabs (prev OpenSwordigo) परियोजना लाइसेंसिंग रूपरेखा (Licensing Framework)**
+**AevoraLabs (prev OpenSwordigo) और Lawncher Team लाइसेंसिंग रूपरेखा (Licensing Framework)**
 
 > **मूल अंग्रेज़ी दस्तावेज़**: [English (LICENSE.md)](LICENSE.md) | [Français (French)](LICENSE_fr.md) | [简体中文 (Chinese)](LICENSE_cn.md)
 
-यह रिपॉजिटरी एक समग्र (composite) परियोजना है जिसके विभिन्न घटक तीन अलग-अलग कानूनी शर्तों के तहत लाइसेंस प्राप्त हैं:
-1. **GNU General Public License v3.0 (GPLv3)** — स्वॉर्डिगो-विशिष्ट टूल्स, गेम फ्रंटएंड, और एडिटर्स।
+यह रिपॉजिटरी एक समग्र (composite) ओपन-सोर्स परियोजना है जिसके घटक दो अलग-अलग कानूनी शर्तों के तहत लाइसेंस प्राप्त हैं:
+1. **GNU General Public License v3.0 (GPLv3)** — स्वॉर्डिगो रनटाइम एनवायरनमेंट (SRE), स्वॉर्डिगो-विशिष्ट टूल्स, गेम फ्रंटएंड, और एडिटर्स।
 2. **MIT License** — सामान्य होस्ट इंफ्रास्ट्रक्चर, एंड्रॉइड इम्यूलेशन लेयर्स, और JNI ब्रिजेस।
-3. **सर्वाधिकार सुरक्षित (All Rights Reserved - ARR)** — मालिकाना स्वॉर्डिगो रनटाइम एनवायरनमेंट (SRE)।
 
-SRE के संयुक्त स्वामित्व को छोड़कर, इस रिपॉजिटरी में किए गए सभी मूल कार्य **विशेष रूप से AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) द्वारा लाइसेंस प्राप्त हैं।
+इस रिपॉजिटरी में किए गए मूल कार्य **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) और **Lawncher Team** (`Raijin`, `Kiziyon`) द्वारा लाइसेंस प्राप्त हैं।
 
 ---
 
 ## 1. GNU General Public License v3.0 (GPLv3)
-### स्वॉर्डिगो-विशिष्ट गेम और संपादक घटक
+### स्वॉर्डिगो रनटाइम एनवायरनमेंट (SRE), गेम और संपादक घटक
 
 निम्नलिखित सबसिस्टम और डायरेक्टरीज़ **GNU General Public License, Version 3 (GPLv3)** की शर्तों के तहत लाइसेंस प्राप्त हैं:
 
+- **Swordigo Runtime Environment (SRE)** (`src/sre/`):
+  - **`src/sre/sre13/`**: स्वॉर्डिगो 1.4.13 गेस्ट रनटाइम, Caver आर्किटेक्चर हुक्स, rbmath Lua मैथ लाइब्रेरी, और कंसोल/ऑडियो सबसिस्टम।
+  - **`src/sre/sre12/`**: स्वॉर्डिगो 1.4.12 गेस्ट रनटाइम, कोर हुक्स, और मिनी एपीआई।
+  - **`src/sre/extras/`**: विस्तारित SRE क्षमताएं, FFI इंटरफेस, मेमोरी पैचेस, और सेव फाइल सिस्टम।
+  - **`src/sre/base/`**: SRE बेस इंजन प्लंबिंग, कस्टम रनटाइम ABI ग्लू, और प्लेटफॉर्म शिम्स।
+  - *संयुक्त रूप से Lawncher Team (`Raijin`, `Kiziyon`) और AevoraLabs (`QuantumCreeper`, `Msinup`, `ManoK`) द्वारा लाइसेंस प्राप्त।*
 - **Ruby और Ruby GG IDE सुइट** (`src/ruby/`):
   - Qt6 स्टूडियो एडिटर, `Graphy` विज़ुअल नोड एडिटर, व्यूपोर्ट शेडर्स, लाइटिंग और पोस्ट-प्रोसेसिंग पाइपलाइन, कैवर विज़ुअल इंजन, और एकीकृत टूल्स।
 - **Swordfare लॉन्चर और इन-गेम ओवरले** (`src/launcher/`, `src/platform/`):
@@ -25,8 +30,8 @@ SRE के संयुक्त स्वामित्व को छोड़
 - **स्वॉर्डिगो टूलिंग और कन्वर्टर्स** (`src/tools/`, `tools/`):
   - SCL/Scene से ग्राफ कन्वर्टर्स, बोल्डर टेरेन जनरेटर, रूबिमेश फॉर्मेट्स, glTF ब्रिज, और एसेट कम्पाइलर्स।
 
-**कॉपीराइट © 2026 AevoraLabs. सर्वाधिकार सुरक्षित।**
-GPLv3 के तहत लाइसेंस प्राप्त। देखें [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) और [`src/platform/LICENSE.md`](src/platform/LICENSE.md)।
+**कॉपीराइट © 2026 Lawncher Team & AevoraLabs.**
+GPLv3 के तहत लाइसेंस प्राप्त। देखें [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), और [`src/platform/LICENSE.md`](src/platform/LICENSE.md)।
 
 ---
 
@@ -53,24 +58,14 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## 3. सर्वाधिकार सुरक्षित (All Rights Reserved - ARR)
-### स्वॉर्डिगो रनटाइम एनवायरनमेंट (SRE)
+## 3. तृतीय-पक्ष घटक और लाइसेंसिंग इतिहास (Licensing History)
 
-`src/sre/` के अंतर्गत मौजूद संपूर्ण **Swordigo Runtime Environment (SRE)** पूरी तरह से मालिकाना सॉफ्टवेयर है और **सर्वाधिकार सुरक्षित (ARR)** के तहत सुरक्षित है:
+### SRE का पुनर्लाइसेंसिंग (Relicensing of SRE)
+Lawncher Team और AevoraLabs ने संयुक्त रूप से स्वॉर्डिगो रनटाइम एनवायरनमेंट (SRE) कोडबेस और इसके सभी सबमॉड्यूल (`sre13`, `extras`, `sre12`, `base`) को **GNU GPLv3** के तहत खुला स्रोत कर दिया है।
 
-- **`src/sre/sre13/`**: स्वॉर्डिगो 1.4.13 गेस्ट रनटाइम, Caver आर्किटेक्चर हुक्स, rbmath Lua मैथ लाइब्रेरी, और कंसोल/ऑडियो सबसिस्टम।
-- **`src/sre/sre12/`**: स्वॉर्डिगो 1.4.12 गेस्ट रनटाइम, कोर हुक्स, और मिनी एपीआई।
-- **`src/sre/extras/`**: क्लोज्ड-सोर्स SRE एक्सटेंशन्स, FFI इंटरफेस, मेमोरी पैचेस, और सेव फाइल सिस्टम।
-- **`src/sre/base/`**: SRE बेस इंजन प्लंबिंग और कस्टम रनटाइम ABI ग्लू।
-
-### संयुक्त अधिकार स्वामित्व:
-SRE पर सभी अधिकार, शीर्षक और बौद्धिक संपदा संयुक्त रूप से और विशेष रूप से इनके पास हैं:
-- **AevoraLabs (prev OpenSwordigo)**: `QuantumCreeper`, `Msinup`, `ManoK`
-- **Lawncher Team**: `Raijin`, `Kiziyon`
-
-**बिना पूर्व लिखित अनुमति के किसी भी प्रकार का अनधिकृत पुनर्वितरण, संशोधन, उप-लाइसेंसिंग, डीकंपाइलेशन, या सार्वजनिक मिररिंग प्रतिबंधित है।**
-पूर्ण शर्तों के लिए [`src/sre/LICENSE.md`](src/sre/LICENSE.md) देखें।
-*(तृतीय-पक्ष वेंडर्ड निर्भरताएँ जैसे upstream Lua 5.1, LuaSocket, LuaFileSystem, toml-c, और RakNet अपने मूल ओपन-सोर्स लाइसेंस बनाए रखती हैं)।*
+### तृतीय-पक्ष निर्भरताएँ
+- `src/sre/base/` में मौजूद तृतीय-पक्ष वेंडर्ड निर्भरताएँ (जैसे Lua 5.1, LuaSocket, LuaFileSystem, toml-c, और RakNet) अपने मूल ओपन-सोर्स लाइसेंस (MIT, BSD, zlib) बनाए रखती हैं।
+- ufbx (`src/tools/ufbx/`) MIT / Public Domain के तहत है।
 
 ---
 
@@ -78,7 +73,7 @@ SRE पर सभी अधिकार, शीर्षक और बौद्�
 
 | डायरेक्टरी / घटक | लाइसेंस | विशिष्टता / कॉपीराइट धारक |
 | :--- | :--- | :--- |
-| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **सर्वाधिकार सुरक्षित (ARR)** | **AevoraLabs (prev OpenSwordigo)** & **Lawncher Team** |
+| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **GNU GPLv3** | संयुक्त रूप से **Lawncher Team** & **AevoraLabs** |
 | `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | विशेष रूप से **AevoraLabs** |
 | `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | विशेष रूप से **AevoraLabs** |
 | `src/tools/`, `tools/` (कन्वर्टर्स और कम्पाइलर्स) | **GNU GPLv3** | विशेष रूप से **AevoraLabs** |

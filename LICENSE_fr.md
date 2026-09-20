@@ -1,32 +1,37 @@
 # Avis de Multi-Licence SwordigoDesktop
  
-**Cadre de Licence du Projet AevoraLabs (prev OpenSwordigo)**
+**Cadre de Licence du Projet AevoraLabs (prev OpenSwordigo) & Lawncher Team**
 
 > **Document original en anglais** : [English (LICENSE.md)](LICENSE.md) | [हिन्दी (Hindi)](LICENSE_hi.md) | [简体中文 (Chinese)](LICENSE_cn.md)
 
-Ce dépôt constitue un projet composite dont les composants sont régis par trois régimes juridiques distincts :
-1. **GNU General Public License v3.0 (GPLv3)** — Outils spécifiques à Swordigo, interface de jeu et éditeurs.
+Ce dépôt constitue un projet composite open-source dont les composants sont régis par deux régimes juridiques distincts :
+1. **GNU General Public License v3.0 (GPLv3)** — Swordigo Runtime Environment (SRE), outils spécifiques à Swordigo, interface de jeu et éditeurs.
 2. **Licence MIT** — Infrastructure hôte générique, couches d'émulation Android et ponts JNI.
-3. **Tous Droits Réservés (All Rights Reserved - ARR)** — Environnement d'exécution propriétaire Swordigo Runtime Environment (SRE).
 
-Sauf attribution conjointe spécifique pour SRE, toutes les œuvres originales de ce dépôt sont **exclusivement concédées sous licence à AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`).
+Les œuvres originales de ce dépôt sont concédées sous licence par **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) et **Lawncher Team** (`Raijin`, `Kiziyon`) comme détaillé ci-dessous.
 
 ---
 
 ## 1. GNU General Public License v3.0 (GPLv3)
-### Composants de Jeu et Éditeurs Spécifiques à Swordigo
+### Swordigo Runtime Environment (SRE), Composants de Jeu et Éditeurs
 
 Les sous-systèmes et répertoires suivants sont concédés sous les termes de la **GNU General Public License, Version 3 (GPLv3)** :
 
+- **Swordigo Runtime Environment (SRE)** (`src/sre/`) :
+  - **`src/sre/sre13/`** : Environnement d'exécution invité Swordigo 1.4.13, points d'ancrage de l'architecture Caver, bibliothèque mathématique Lua rbmath et sous-systèmes console/audio.
+  - **`src/sre/sre12/`** : Environnement d'exécution invité Swordigo 1.4.12, points d'ancrage centraux et mini-API.
+  - **`src/sre/extras/`** : Extensions SRE étendues, interfaces FFI, correctifs mémoire et systèmes de fichiers de sauvegarde.
+  - **`src/sre/base/`** : Plomberie de base du moteur SRE, liant ABI d'exécution personnalisé et adaptateurs de plateforme.
+  - *Créé et concédé conjointement sous licence par Lawncher Team (`Raijin`, `Kiziyon`) et AevoraLabs (`QuantumCreeper`, `Msinup`, `ManoK`).*
 - **Suite d'Édition Ruby et Ruby GG IDE** (`src/ruby/`) :
   - Éditeur Studio Qt6, éditeur de nœuds visuel `Graphy`, shaders de vue 3D, pipeline d'éclairage et de post-traitement, moteur visuel caver et outils intégrés.
 - **Lanceur Swordfare et Overlay en Jeu** (`src/launcher/`, `src/platform/`) :
   - Overlay HUD en jeu, gestionnaire de mods, interface d'édition de sauvegarde, gestionnaire de profils, lecteur vidéo d'arrière-plan et interface d'exécution.
-- **Outillage et Convertisseurs Swordigo** (`src/tools/`, `tools/`) :
+- **Outillage et Convertisseurs Swordigo** (`src/tools/`, `tools/` :
   - Convertisseurs SCL/Scene vers graphe, générateur de terrain boulder, formats rubymesh, passerelle glTF et compilateurs d'assets.
 
-**Copyright © 2026 AevoraLabs. Tous droits réservés.**
-Licencié sous GPLv3. Voir [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) et [`src/platform/LICENSE.md`](src/platform/LICENSE.md).
+**Copyright © 2026 Lawncher Team & AevoraLabs.**
+Licencié sous GPLv3. Voir [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), et [`src/platform/LICENSE.md`](src/platform/LICENSE.md).
 
 ---
 
@@ -53,24 +58,15 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## 3. Tous Droits Réservés (All Rights Reserved - ARR)
-### Swordigo Runtime Environment (SRE)
+## 3. Composants Tiers et Historique de Licence
 
-L'intégralité du **Swordigo Runtime Environment (SRE)** situé dans `src/sre/` constitue un logiciel strictement propriétaire soumis à la mention **Tous Droits Réservés (ARR)** :
+### Changement de Licence pour SRE
+L'équipe Lawncher et AevoraLabs ont conjointement basculé la licence de l'environnement d'exécution Swordigo (SRE) vers la **GNU General Public License v3.0 (GPLv3)** pour l'ensemble des sous-modules : `sre13`, `extras`, `sre12` et `base`.
 
-- **`src/sre/sre13/`** : Environnement d'exécution invité Swordigo 1.4.13, points d'ancrage de l'architecture Caver, bibliothèque mathématique Lua rbmath et sous-systèmes console/audio.
-- **`src/sre/sre12/`** : Environnement d'exécution invité Swordigo 1.4.12, points d'ancrage centraux et mini-API.
-- **`src/sre/extras/`** : Extensions SRE fermées, interfaces FFI, correctifs mémoire et systèmes de fichiers de sauvegarde.
-- **`src/sre/base/`** : Plomberie de base du moteur SRE et liant ABI d'exécution personnalisé.
-
-### Propriété Conjointe des Droits :
-Tous les droits, titres et éléments de propriété intellectuelle relatifs à SRE sont détenus conjointement et exclusivement par :
-- **AevoraLabs (prev OpenSwordigo)** : `QuantumCreeper`, `Msinup`, `ManoK`
-- **Lawncher Team** : `Raijin`, `Kiziyon`
-
-**Toute redistribution, modification, sous-licence, décompilation ou mise en miroir publique non autorisée est strictement interdite sans consentement écrit préalable exprès.**
-Voir [`src/sre/LICENSE.md`](src/sre/LICENSE.md) pour les conditions complètes.
-*(Les dépendances tierces intégrées dans `src/sre/base/`—telles que Lua 5.1, LuaSocket, LuaFileSystem, toml-c et RakNet—conservent leurs licences open-source d'origine).*
+### Dépendances Tierces
+Les dépendances tierces conservent leurs licences open-source d'origine respectives :
+- Lua 5.1, LuaSocket, LuaFileSystem, toml-c et RakNet dans `src/sre/base/` conservent leurs licences d'origine (MIT, BSD, zlib).
+- ufbx (`src/tools/ufbx/`) est sous double licence MIT / Domaine Public.
 
 ---
 
@@ -78,7 +74,7 @@ Voir [`src/sre/LICENSE.md`](src/sre/LICENSE.md) pour les conditions complètes.
 
 | Répertoire / Composant | Licence | Exclusivité / Titulaires du Copyright |
 | :--- | :--- | :--- |
-| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **Tous Droits Réservés (ARR)** | **AevoraLabs (prev OpenSwordigo)** & **Lawncher Team** |
+| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **GNU GPLv3** | Conjointement détenu par **Lawncher Team** (`Raijin`, `Kiziyon`) & **AevoraLabs** (`QuantumCreeper`, `Msinup`, `ManoK`) |
 | `src/ruby/` (Ruby, Studio IDE Ruby GG) | **GNU GPLv3** | Exclusivement **AevoraLabs** |
 | `src/launcher/`, `src/platform/` (UI Swordfare) | **GNU GPLv3** | Exclusivement **AevoraLabs** |
 | `src/tools/`, `tools/` (Convertisseurs & Compilateurs) | **GNU GPLv3** | Exclusivement **AevoraLabs** |
@@ -91,7 +87,7 @@ Voir [`src/sre/LICENSE.md`](src/sre/LICENSE.md) pour les conditions complètes.
 ## 4. Accords Communautaires et Politiques de Gouvernance
 
 Toutes les contributions et l'utilisation de l'infrastructure en ligne du projet sont soumises aux accords suivants :
-- **Accord de Licence Contributeur (CLA)** : Voir [`.github/CLA.md`](.github/CLA.md) pour les conditions de contribution et les règles de rétention de copyright 50/50.
-- **Modèle de Gouvernance du Projet** : Voir [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md) pour l'intendance du projet et l'autorité décisionnelle.
-- **Conditions d'Utilisation (Terms of Use)** : Voir [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md) pour le Mod Store en ligne et les conditions d'infrastructure réseau.
-- **Code de Conduite** : Voir [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) pour les règles communautaires.
+- **Contrat de Licence Contributeur (CLA)** : Voir [`.github/CLA.md`](.github/CLA.md) pour les conditions de contribution.
+- **Gouvernance du Projet** : Voir [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md) pour la structure administrative.
+- **Conditions d'Utilisation** : Voir [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md) pour l'infrastructure réseau et mod store.
+- **Code de Conduite** : Voir [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) pour les normes communautaires.

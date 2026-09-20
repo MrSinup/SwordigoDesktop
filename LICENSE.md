@@ -1,23 +1,28 @@
 # SwordigoDesktop Multi-License Notice
 
-**AevoraLabs (prev OpenSwordigo) Project Licensing Framework**
+**AevoraLabs (prev OpenSwordigo) & Lawncher Team Licensing Framework**
 
 > **Translations**: [हिन्दी (Hindi)](LICENSE_hi.md) | [Français (French)](LICENSE_fr.md) | [简体中文 (Chinese)](LICENSE_cn.md)
 
-This repository is a composite project consisting of components licensed under three distinct terms:
-1. **GNU General Public License v3.0 (GPLv3)** — Swordigo-specific tools, game frontend, and editors.
+This repository is an open-source composite project consisting of components licensed under two distinct terms:
+1. **GNU General Public License v3.0 (GPLv3)** — Swordigo Runtime Environment (SRE), Swordigo-specific tools, game frontend, and editors.
 2. **MIT License** — Generic host infrastructure, Android emulation layers, and JNI bridges.
-3. **All Rights Reserved (ARR)** — Proprietary Swordigo Runtime Environment (SRE).
 
-Except where specifically co-attributed for SRE, all original works across this repository are **exclusively licensed to AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`).
+Original works across this repository are held by **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) and **Lawncher Team** (`Raijin`, `Kiziyon`) as detailed below.
 
 ---
 
 ## 1. GNU General Public License v3.0 (GPLv3)
-### Swordigo-Specific Game & Editor Components
+### Swordigo Runtime Environment (SRE), Game & Editor Components
 
 The following subsystems and directories are licensed under the terms of the **GNU General Public License, Version 3 (GPLv3)**:
 
+- **Swordigo Runtime Environment (SRE)** (`src/sre/`):
+  - **`src/sre/sre13/`**: Swordigo 1.4.13 guest runtime, Caver architecture hooks, rbmath Lua math library, console/audio subsystems, and guest engines.
+  - **`src/sre/sre12/`**: Swordigo 1.4.12 guest runtime, core hooks, and mini API.
+  - **`src/sre/extras/`**: Extended SRE capabilities, FFI interfaces, memory patches, and save file systems.
+  - **`src/sre/base/`**: SRE base engine plumbing, custom runtime ABI glue, and platform shims.
+  - *Jointly authored & licensed by Lawncher Team (`Raijin`, `Kiziyon`) and AevoraLabs (`QuantumCreeper`, `Msinup`, `ManoK`).*
 - **Ruby & Ruby GG IDE Suite** (`src/ruby/`):
   - Qt6 Studio Editor, `Graphy` visual node editor, viewport shaders, lighting and post-processing pipeline, caver visual engine, and integrated tools.
 - **Swordfare Launcher & Game Overlay** (`src/launcher/`, `src/platform/`):
@@ -25,8 +30,8 @@ The following subsystems and directories are licensed under the terms of the **G
 - **Swordigo Tooling & Converters** (`src/tools/`, `tools/`):
   - SCL/Scene to graph converters, boulder terrain generator, rubymesh formats, glTF bridge, and asset compilers.
 
-**Copyright © 2026 AevoraLabs. All Rights Reserved.**
-Licensed under GPLv3. See [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) and [`src/platform/LICENSE.md`](src/platform/LICENSE.md).
+**Copyright © 2026 Lawncher Team & AevoraLabs.**
+Licensed under GPLv3. See [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), and [`src/platform/LICENSE.md`](src/platform/LICENSE.md).
 
 ---
 
@@ -53,24 +58,15 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## 3. All Rights Reserved (ARR)
-### Swordigo Runtime Environment (SRE)
+## 3. Third-Party Vendored Components & Licensing History
 
-The entire **Swordigo Runtime Environment (SRE)** contained within `src/sre/` is strictly proprietary software held under **All Rights Reserved (ARR)**:
+### Relicensing of SRE
+The Lawncher Team and AevoraLabs have jointly updated the Swordigo Runtime Environment (SRE) codebase license to **GNU General Public License v3.0 (GPLv3)** across all submodules: `sre13`, `extras`, `sre12`, and `base`.
 
-- **`src/sre/sre13/`**: Swordigo 1.4.13 guest runtime, Caver architecture hooks, rbmath Lua math library, and console/audio subsystems.
-- **`src/sre/sre12/`**: Swordigo 1.4.12 guest runtime, core hooks, and mini API.
-- **`src/sre/extras/`**: Closed-source SRE extensions, FFI interfaces, memory patches, and save file systems.
-- **`src/sre/base/`**: SRE base engine plumbing and custom runtime ABI glue.
-
-### Joint Rights Ownership:
-All rights, titles, and intellectual property over SRE are jointly owned and held exclusively by:
-- **AevoraLabs (prev OpenSwordigo)**: `QuantumCreeper`, `Msinup`, `ManoK`
-- **Lawncher Team**: `Raijin`, `Kiziyon`
-
-**No unauthorized redistribution, modification, sublicensing, decompilation, or public mirroring is permitted without express prior written authorization.**
-See [`src/sre/LICENSE.md`](src/sre/LICENSE.md) for full terms.
-*(Third-party vendored dependencies within `src/sre/base/`—such as upstream Lua 5.1, LuaSocket, LuaFileSystem, toml-c, and RakNet—retain their original open-source licenses).*
+### Third-Party Vendored Dependencies
+Third-party vendored components retain their respective upstream licenses:
+- Standard Lua 5.1, LuaSocket, LuaFileSystem, toml-c, and RakNet in `src/sre/base/` retain their original open-source licenses (MIT, BSD, zlib).
+- ufbx (`src/tools/ufbx/`) is dual-licensed MIT / Public Domain.
 
 ---
 
@@ -78,7 +74,7 @@ See [`src/sre/LICENSE.md`](src/sre/LICENSE.md) for full terms.
 
 | Directory / Component | License | Exclusivity / Copyright Holders |
 | :--- | :--- | :--- |
-| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **All Rights Reserved (ARR)** | **AevoraLabs (prev OpenSwordigo)** (`QuantumCreeper`, `Msinup`, `ManoK`) & **Lawncher Team** (`Raijin`, `Kiziyon`) |
+| `src/sre/` (`sre12`, `sre13`, `extras`, `base`) | **GNU GPLv3** | Jointly held by **Lawncher Team** (`Raijin`, `Kiziyon`) & **AevoraLabs** (`QuantumCreeper`, `Msinup`, `ManoK`) |
 | `src/ruby/` (Ruby, Ruby GG Studio IDE) | **GNU GPLv3** | Exclusively **AevoraLabs** |
 | `src/launcher/`, `src/platform/` (Swordfare UI) | **GNU GPLv3** | Exclusively **AevoraLabs** |
 | `src/tools/`, `tools/` (Converters & Compilers) | **GNU GPLv3** | Exclusively **AevoraLabs** |

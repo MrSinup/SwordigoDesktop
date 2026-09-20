@@ -18,10 +18,10 @@ Before writing or editing code, identify which **licensing tier** your target di
 │       src/sre/        │  src/ruby/, src/launcher/,  │  src/jni/, src/loader │
 │                       │   src/platform/, src/tools/ │   src/android/        │
 ├───────────────────────┼─────────────────────────────┼───────────────────────┤
-│ All Rights Reserved   │       GNU GPLv3             │     MIT License       │
-│ Contributor retains   │ Reciprocal copyleft.        │ Strictly permissive.  │
-│ 50/50 dual ownership; │ Modifications MUST remain   │ General shims and     │
-│ project co-owns.      │ GPLv3 (cannot down-license).│ portable loaders.     │
+│       GNU GPLv3       │       GNU GPLv3             │     MIT License       │
+│ Joint Lawncher Team & │ Reciprocal copyleft.        │ Strictly permissive.  │
+│ AevoraLabs custodians │ Modifications MUST remain   │ General shims and     │
+│ 50/50 dual ownership. │ GPLv3 (cannot down-license).│ portable loaders.     │
 └───────────────────────┴─────────────────────────────┴───────────────────────┘
 ```
 
@@ -95,7 +95,7 @@ Ensure all tests pass with zero warnings or linker errors.
 When submitting your Pull Request, verify that:
 - [ ] Your PR description clearly explains the problem solved or feature added.
 - [ ] Code compiles cleanly without new compiler warnings.
-- [ ] Changes respect the directory licensing tier (ARR in [`../src/sre/`](../src/sre/), GPLv3 in [`../src/ruby/`](../src/ruby/), MIT in [`../src/jni/`](../src/jni/)).
+- [ ] Changes respect the directory licensing tier (GPLv3 in [`../src/sre/`](../src/sre/) and [`../src/ruby/`](../src/ruby/), MIT in [`../src/jni/`](../src/jni/)).
 - [ ] Commit does not mix binary artifacts, `.so` files, zip archives, or `__pycache__` directories.
 - [ ] Automated unit and regression tests in [`../tests/`](../tests/) pass.
 - [ ] You acknowledge and accept the [AevoraLabs CLA](./CLA.md).
