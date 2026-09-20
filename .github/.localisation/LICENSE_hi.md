@@ -2,7 +2,7 @@
 
 **AevoraLabs (prev OpenSwordigo) और Lawncher Team लाइसेंसिंग रूपरेखा (Licensing Framework)**
 
-> **मूल अंग्रेज़ी दस्तावेज़**: [English (LICENSE.md)](LICENSE.md) | [Français (French)](LICENSE_fr.md) | [简体中文 (Chinese)](LICENSE_cn.md)
+> **मूल अंग्रेज़ी दस्तावेज़**: [English (LICENSE.md)](../../LICENSE.md) | [सभी अनुवाद (All Translations)](#translations--localisation)
 
 यह रिपॉजिटरी एक समग्र (composite) ओपन-सोर्स परियोजना है जिसके घटक दो अलग-अलग कानूनी शर्तों के तहत लाइसेंस प्राप्त हैं:
 1. **GNU General Public License v3.0 (GPLv3)** — स्वॉर्डिगो रनटाइम एनवायरनमेंट (SRE), स्वॉर्डिगो-विशिष्ट टूल्स, गेम फ्रंटएंड, और एडिटर्स।
@@ -31,7 +31,7 @@
   - SCL/Scene से ग्राफ कन्वर्टर्स, बोल्डर टेरेन जनरेटर, रूबिमेश फॉर्मेट्स, glTF ब्रिज, और एसेट कम्पाइलर्स।
 
 **कॉपीराइट © 2026 Lawncher Team & AevoraLabs.**
-GPLv3 के तहत लाइसेंस प्राप्त। देखें [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), और [`src/platform/LICENSE.md`](src/platform/LICENSE.md)।
+GPLv3 के तहत लाइसेंस प्राप्त। देखें [`src/sre/LICENSE.md`](../../src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](../../src/ruby/LICENSE.md), और [`src/platform/LICENSE.md`](../../src/platform/LICENSE.md)।
 
 ---
 
@@ -86,7 +86,28 @@ Lawncher Team और AevoraLabs ने संयुक्त रूप से �
 ## 4. सामुदायिक समझौते और शासन नीतियां (Community Agreements & Policies)
 
 परियोजना में सभी योगदान और ऑनलाइन बुनियादी ढांचे का उपयोग निम्नलिखित संबंधित समझौतों के अधीन है:
-- **योगदानकर्ता लाइसेंस समझौता (CLA)**: योगदान की शर्तों और 50/50 कॉपीराइट प्रतिधारण नियमों के लिए [`.github/CLA.md`](.github/CLA.md) देखें।
-- **परियोजना शासन मॉडल (Governance)**: परियोजना प्रबंधन और निर्णय लेने के अधिकार के लिए [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md) देखें।
-- **उपयोग की शर्तें (Terms of Use)**: ऑनलाइन मॉड स्टोर और नेटवर्क बुनियादी ढांचे की उपयोग शर्तों के लिए [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md) देखें।
-- **आचार संहिता (Code of Conduct)**: सामुदायिक मानकों के लिए [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) देखें।
+- **योगदानकर्ता लाइसेंस समझौता (CLA)**: योगदान की शर्तों और 50/50 कॉपीराइट प्रतिधारण नियमों के लिए [`../CLA.md`](../CLA.md) देखें।
+- **परियोजना शासन मॉडल (Governance)**: परियोजना प्रबंधन और निर्णय लेने के अधिकार के लिए [`../GOVERNANCE.md`](../GOVERNANCE.md) देखें।
+- **उपयोग की शर्तें (Terms of Use)**: ऑनलाइन मॉड स्टोर और नेटवर्क बुनियादी ढांचे की उपयोग शर्तों के लिए [`../TERMS_OF_USE.md`](../TERMS_OF_USE.md) देखें।
+- **आचार संहिता (Code of Conduct)**: सामुदायिक मानकों के लिए [`../CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) देखें।
+
+---
+
+## Translations & Localisation
+
+| भाषा (Language) | अनुवाद दस्तावेज़ (Document File) |
+| :--- | :--- |
+| **English (Official)** | [`../../LICENSE.md`](../../LICENSE.md) |
+| **हिन्दी (Hindi)** | [`LICENSE_hi.md`](LICENSE_hi.md) |
+| **বাংলা (Bengali)** | [`LICENSE_bn.md`](LICENSE_bn.md) |
+| **తెలుగు (Telugu)** | [`LICENSE_te.md`](LICENSE_te.md) |
+| **தமிழ் (Tamil)** | [`LICENSE_ta.md`](LICENSE_ta.md) |
+| **मराठी (Marathi)** | [`LICENSE_mr.md`](LICENSE_mr.md) |
+| **ગુજરાતી (Gujarati)** | [`LICENSE_gu.md`](LICENSE_gu.md) |
+| **Español (Spanish)** | [`LICENSE_es.md`](LICENSE_es.md) |
+| **Français (French)** | [`LICENSE_fr.md`](LICENSE_fr.md) |
+| **简体中文 (Chinese)** | [`LICENSE_cn.md`](LICENSE_cn.md) |
+| **Deutsch (German)** | [`LICENSE_de.md`](LICENSE_de.md) |
+| **日本語 (Japanese)** | [`LICENSE_ja.md`](LICENSE_ja.md) |
+| **Русский (Russian)** | [`LICENSE_ru.md`](LICENSE_ru.md) |
+| **Português (Portuguese)** | [`LICENSE_pt.md`](LICENSE_pt.md) |

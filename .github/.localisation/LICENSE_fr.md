@@ -2,7 +2,7 @@
  
 **Cadre de Licence du Projet AevoraLabs (prev OpenSwordigo) & Lawncher Team**
 
-> **Document original en anglais** : [English (LICENSE.md)](LICENSE.md) | [हिन्दी (Hindi)](LICENSE_hi.md) | [简体中文 (Chinese)](LICENSE_cn.md)
+> **Document original en anglais** : [English (LICENSE.md)](../../LICENSE.md) | [Toutes les Traductions (All Translations)](#translations--localisation)
 
 Ce dépôt constitue un projet composite open-source dont les composants sont régis par deux régimes juridiques distincts :
 1. **GNU General Public License v3.0 (GPLv3)** — Swordigo Runtime Environment (SRE), outils spécifiques à Swordigo, interface de jeu et éditeurs.
@@ -27,11 +27,11 @@ Les sous-systèmes et répertoires suivants sont concédés sous les termes de l
   - Éditeur Studio Qt6, éditeur de nœuds visuel `Graphy`, shaders de vue 3D, pipeline d'éclairage et de post-traitement, moteur visuel caver et outils intégrés.
 - **Lanceur Swordfare et Overlay en Jeu** (`src/launcher/`, `src/platform/`) :
   - Overlay HUD en jeu, gestionnaire de mods, interface d'édition de sauvegarde, gestionnaire de profils, lecteur vidéo d'arrière-plan et interface d'exécution.
-- **Outillage et Convertisseurs Swordigo** (`src/tools/`, `tools/` :
+- **Outillage et Convertisseurs Swordigo** (`src/tools/`, `tools/`) :
   - Convertisseurs SCL/Scene vers graphe, générateur de terrain boulder, formats rubymesh, passerelle glTF et compilateurs d'assets.
 
 **Copyright © 2026 Lawncher Team & AevoraLabs.**
-Licencié sous GPLv3. Voir [`src/sre/LICENSE.md`](src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](src/ruby/LICENSE.md), et [`src/platform/LICENSE.md`](src/platform/LICENSE.md).
+Licencié sous GPLv3. Voir [`src/sre/LICENSE.md`](../../src/sre/LICENSE.md), [`src/ruby/LICENSE.md`](../../src/ruby/LICENSE.md), et [`src/platform/LICENSE.md`](../../src/platform/LICENSE.md).
 
 ---
 
@@ -87,7 +87,28 @@ Les dépendances tierces conservent leurs licences open-source d'origine respect
 ## 4. Accords Communautaires et Politiques de Gouvernance
 
 Toutes les contributions et l'utilisation de l'infrastructure en ligne du projet sont soumises aux accords suivants :
-- **Contrat de Licence Contributeur (CLA)** : Voir [`.github/CLA.md`](.github/CLA.md) pour les conditions de contribution.
-- **Gouvernance du Projet** : Voir [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md) pour la structure administrative.
-- **Conditions d'Utilisation** : Voir [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md) pour l'infrastructure réseau et mod store.
-- **Code de Conduite** : Voir [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) pour les normes communautaires.
+- **Contrat de Licence Contributeur (CLA)** : Voir [`../CLA.md`](../CLA.md) pour les conditions de contribution.
+- **Gouvernance du Projet** : Voir [`../GOVERNANCE.md`](../GOVERNANCE.md) pour la structure administrative.
+- **Conditions d'Utilisation** : Voir [`../TERMS_OF_USE.md`](../TERMS_OF_USE.md) pour l'infrastructure réseau et mod store.
+- **Code de Conduite** : Voir [`../CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) pour les normes communautaires.
+
+---
+
+## Translations & Localisation
+
+| Langue (Language) | Fichier de Document (Document File) |
+| :--- | :--- |
+| **English (Official)** | [`../../LICENSE.md`](../../LICENSE.md) |
+| **हिन्दी (Hindi)** | [`LICENSE_hi.md`](LICENSE_hi.md) |
+| **বাংলা (Bengali)** | [`LICENSE_bn.md`](LICENSE_bn.md) |
+| **తెలుగు (Telugu)** | [`LICENSE_te.md`](LICENSE_te.md) |
+| **தமிழ் (Tamil)** | [`LICENSE_ta.md`](LICENSE_ta.md) |
+| **मराठी (Marathi)** | [`LICENSE_mr.md`](LICENSE_mr.md) |
+| **ગુજરાતી (Gujarati)** | [`LICENSE_gu.md`](LICENSE_gu.md) |
+| **Español (Spanish)** | [`LICENSE_es.md`](LICENSE_es.md) |
+| **Français (French)** | [`LICENSE_fr.md`](LICENSE_fr.md) |
+| **简体中文 (Chinese)** | [`LICENSE_cn.md`](LICENSE_cn.md) |
+| **Deutsch (German)** | [`LICENSE_de.md`](LICENSE_de.md) |
+| **日本語 (Japanese)** | [`LICENSE_ja.md`](LICENSE_ja.md) |
+| **Русский (Russian)** | [`LICENSE_ru.md`](LICENSE_ru.md) |
+| **Português (Portuguese)** | [`LICENSE_pt.md`](LICENSE_pt.md) |

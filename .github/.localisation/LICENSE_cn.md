@@ -2,7 +2,7 @@
 
 **AevoraLabs (prev OpenSwordigo) 与 Lawncher Team 许可框架 (Licensing Framework)**
 
-> **英文原版文件**: [English (LICENSE.md)](LICENSE.md) | [हिन्दी (Hindi)](LICENSE_hi.md) | [Français (French)](LICENSE_fr.md)
+> **英文原版文件**: [English (LICENSE.md)](../../LICENSE.md) | [所有翻译版本 (All Translations)](#translations--localisation)
 
 本代码仓库是一个复合型开源项目，各组件分别遵循两类不同的许可条款：
 1. **GNU 通用公共许可证第 3 版 (GPLv3)** — Swordigo 运行时环境 (SRE)、Swordigo 专用工具、游戏前端和关卡编辑器。
@@ -31,7 +31,7 @@
   - SCL/Scene 转图表转换器、boulder 地形生成器、rubymesh 格式、glTF 桥接器及资产编译器。
 
 **版权所有 © 2026 Lawncher Team & AevoraLabs。**
-基于 GPLv3 许可。详见 [`src/sre/LICENSE.md`](src/sre/LICENSE.md)、[`src/ruby/LICENSE.md`](src/ruby/LICENSE.md) 和 [`src/platform/LICENSE.md`](src/platform/LICENSE.md)。
+基于 GPLv3 许可。详见 [`src/sre/LICENSE.md`](../../src/sre/LICENSE.md)、[`src/ruby/LICENSE.md`](../../src/ruby/LICENSE.md) 和 [`src/platform/LICENSE.md`](../../src/platform/LICENSE.md)。
 
 ---
 
@@ -87,7 +87,28 @@ Lawncher Team 与 AevoraLabs 已共同将 Swordigo 运行时环境 (SRE) 及其�
 ## 4. 社区协议与治理政策
 
 所有向本项目提交的贡献以及对在线基础设施的使用均须遵守以下补充协议：
-- **贡献者许可协议 (CLA)**：有关贡献条款及 50/50 版权保留规则，请参见 [`.github/CLA.md`](.github/CLA.md)。
-- **项目治理模型**：有关管理架构与决策权，请参见 [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md)。
-- **使用条款**：有关在线模组商店及网络服务使用规则，请参见 [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md)。
-- **行为准则**：有关社区行为规范，请参见 [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md)。
+- **贡献者许可协议 (CLA)**：有关贡献条款及 50/50 版权保留规则，请参见 [`../CLA.md`](../CLA.md)。
+- **项目治理模型**：有关管理架构与决策权，请参见 [`../GOVERNANCE.md`](../GOVERNANCE.md)。
+- **使用条款**：有关在线模组商店及网络服务使用规则，请参见 [`../TERMS_OF_USE.md`](../TERMS_OF_USE.md)。
+- **行为准则**：有关社区行为规范，请参见 [`../CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md)。
+
+---
+
+## Translations & Localisation
+
+| 语言 (Language) | 翻译文档 (Document File) |
+| :--- | :--- |
+| **English (Official)** | [`../../LICENSE.md`](../../LICENSE.md) |
+| **हिन्दी (Hindi)** | [`LICENSE_hi.md`](LICENSE_hi.md) |
+| **বাংলা (Bengali)** | [`LICENSE_bn.md`](LICENSE_bn.md) |
+| **తెలుగు (Telugu)** | [`LICENSE_te.md`](LICENSE_te.md) |
+| **தமிழ் (Tamil)** | [`LICENSE_ta.md`](LICENSE_ta.md) |
+| **मराठी (Marathi)** | [`LICENSE_mr.md`](LICENSE_mr.md) |
+| **ગુજરાતી (Gujarati)** | [`LICENSE_gu.md`](LICENSE_gu.md) |
+| **Español (Spanish)** | [`LICENSE_es.md`](LICENSE_es.md) |
+| **Français (French)** | [`LICENSE_fr.md`](LICENSE_fr.md) |
+| **简体中文 (Chinese)** | [`LICENSE_cn.md`](LICENSE_cn.md) |
+| **Deutsch (German)** | [`LICENSE_de.md`](LICENSE_de.md) |
+| **日本語 (Japanese)** | [`LICENSE_ja.md`](LICENSE_ja.md) |
+| **Русский (Russian)** | [`LICENSE_ru.md`](LICENSE_ru.md) |
+| **Português (Portuguese)** | [`LICENSE_pt.md`](LICENSE_pt.md) |

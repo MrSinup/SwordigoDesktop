@@ -2,7 +2,7 @@
 
 **AevoraLabs (prev OpenSwordigo) & Lawncher Team Licensing Framework**
 
-> **Translations**: [हिन्दी (Hindi)](LICENSE_hi.md) | [Français (French)](LICENSE_fr.md) | [简体中文 (Chinese)](LICENSE_cn.md)
+> **Translations & Localisation**: [हिन्दी (Hindi)](.github/.localisation/LICENSE_hi.md) | [Español (Spanish)](.github/.localisation/LICENSE_es.md) | [Français (French)](.github/.localisation/LICENSE_fr.md) | [简体中文 (Chinese)](.github/.localisation/LICENSE_cn.md) | [All 13 Languages...](#translations--localisation)
 
 This repository is an open-source composite project consisting of components licensed under two distinct terms:
 1. **GNU General Public License v3.0 (GPLv3)** — Swordigo Runtime Environment (SRE), Swordigo-specific tools, game frontend, and editors.
@@ -91,3 +91,26 @@ All contributions and usage of online project infrastructure are subject to the 
 - **Project Governance**: See [`.github/GOVERNANCE.md`](.github/GOVERNANCE.md) for project stewardship and decision-making authority.
 - **Terms of Use**: See [`.github/TERMS_OF_USE.md`](.github/TERMS_OF_USE.md) for Online Mod Store and network infrastructure terms of use.
 - **Code of Conduct**: See [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) for community standards.
+
+---
+
+## Translations & Localisation
+
+This license agreement is officially localized into multiple Indian and international languages under [`.github/.localisation/`](.github/.localisation/):
+
+| Language Family | Language | Localised Title | Document File |
+| :--- | :--- | :--- | :--- |
+| **Official** | English | Multi-License Notice | [`LICENSE.md`](LICENSE.md) |
+| **Indian Languages** | हिन्दी (Hindi) | बहु-लाइसेंस सूचना | [`.github/.localisation/LICENSE_hi.md`](.github/.localisation/LICENSE_hi.md) |
+| | বাংলা (Bengali) | বহু-লাইসেন্স বিজ্ঞপ্তি | [`.github/.localisation/LICENSE_bn.md`](.github/.localisation/LICENSE_bn.md) |
+| | తెలుగు (Telugu) | బహుళ-లైసెన్స్ ప్రకటన | [`.github/.localisation/LICENSE_te.md`](.github/.localisation/LICENSE_te.md) |
+| | தமிழ் (Tamil) | பல உரிம அறிவிப்பு | [`.github/.localisation/LICENSE_ta.md`](.github/.localisation/LICENSE_ta.md) |
+| | मराठी (Marathi) | बहु-परवाना सूचना | [`.github/.localisation/LICENSE_mr.md`](.github/.localisation/LICENSE_mr.md) |
+| | ગુજરાતી (Gujarati) | મલ્ટી-લાયસન્સ નોટિસ | [`.github/.localisation/LICENSE_gu.md`](.github/.localisation/LICENSE_gu.md) |
+| **International Languages** | Español (Spanish) | Aviso de Licencia Múltiple | [`.github/.localisation/LICENSE_es.md`](.github/.localisation/LICENSE_es.md) |
+| | Français (French) | Avis de Multi-Licence | [`.github/.localisation/LICENSE_fr.md`](.github/.localisation/LICENSE_fr.md) |
+| | 简体中文 (Chinese) | 多重许可声明 | [`.github/.localisation/LICENSE_cn.md`](.github/.localisation/LICENSE_cn.md) |
+| | Deutsch (German) | Multi-Lizenz-Hinweis | [`.github/.localisation/LICENSE_de.md`](.github/.localisation/LICENSE_de.md) |
+| | 日本語 (Japanese) | マルチライセンス通知 | [`.github/.localisation/LICENSE_ja.md`](.github/.localisation/LICENSE_ja.md) |
+| | Русский (Russian) | Уведомление о мульти-лицензировании | [`.github/.localisation/LICENSE_ru.md`](.github/.localisation/LICENSE_ru.md) |
+| | Português (Portuguese) | Aviso de Licença Múltipla | [`.github/.localisation/LICENSE_pt.md`](.github/.localisation/LICENSE_pt.md) |
