@@ -552,20 +552,19 @@ bool install_mod_zip(const std::string& zip_path, const std::string& mods_dir,
     recursive_delete(target);
     fs::create_directories(target, ec);
 
-    fs::path staged_resources = staging / "resources";
-    if (fs::exists(staged_resources, ec)) {
-        if (!recursive_copy(staged_resources, target / "resources")) {
-            recursive_delete(staging); recursive_delete(target);
-            if (err) *err = "failed to copy resources";
-            return false;
+    // Copy all staged content into target: resources/, libraries/ (arm64-v8a .so files), saves/, icon.png, properties.toml, etc.
+    for (const auto& entry : fs::directory_iterator(staging, ec)) {
+        std::string fname = entry.path().filename().string();
+        if (entry.is_directory()) {
+            if (!recursive_copy(entry.path(), target / fname)) {
+                recursive_delete(staging); recursive_delete(target);
+                if (err) *err = "failed to copy " + fname;
+                return false;
+            }
+        } else {
+            fs::copy_file(entry.path(), target / fname, fs::copy_options::overwrite_existing, ec);
         }
     }
-    fs::path staged_icon = staging / "icon.png";
-    if (fs::exists(staged_icon, ec)) {
-        fs::copy_file(staged_icon, target / "icon.png", fs::copy_options::overwrite_existing, ec);
-    }
-    fs::copy_file(staging / "properties.toml", target / "properties.toml",
-                  fs::copy_options::overwrite_existing, ec);
 
     recursive_delete(staging);
 

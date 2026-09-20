@@ -5,7 +5,7 @@
 #include <cstring>
 #include <vector>
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__ANDROID__)
 #include <dlfcn.h>
 #include <fontconfig/fontconfig.h>
 

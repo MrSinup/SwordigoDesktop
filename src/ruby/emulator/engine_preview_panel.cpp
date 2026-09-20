@@ -125,7 +125,7 @@ EnginePreviewPanel::EnginePreviewPanel(QWidget* parent) : QWidget(parent) {
     m_pause_btn->setCheckable(true);
     m_pause_btn->setCursor(Qt::PointingHandCursor);
     m_pause_btn->setToolTip("Freeze / resume the emulator");
-    m_mute_btn = new QPushButton("🔊", transport);
+    m_mute_btn = new QPushButton("Mute", transport);
     m_mute_btn->setCheckable(true);
     m_mute_btn->setCursor(Qt::PointingHandCursor);
     m_mute_btn->setToolTip("Mute / unmute game audio");
@@ -164,7 +164,7 @@ EnginePreviewPanel::EnginePreviewPanel(QWidget* parent) : QWidget(parent) {
     QPushButton* zoom_in = make_btn("+", "Zoom in");
     QPushButton* zoom_fit = make_btn("Fit", "Fit preview to panel");
     QPushButton* assets = make_btn("Assets…", "Choose the Swordigo asset folder (contains resources/)");
-    QPushButton* snap = make_btn("📷", "Save a PNG snapshot of the preview");
+    QPushButton* snap = make_btn("Snap", "Save a PNG snapshot of the preview");
     m_log_btn = make_btn("Log", "Show engine log");
 
     vlay->addWidget(zoom_out);
@@ -393,7 +393,7 @@ void EnginePreviewPanel::on_pause_toggled(bool paused) {
 
 void EnginePreviewPanel::on_mute_toggled(bool muted) {
     m_muted = muted;
-    m_mute_btn->setText(muted ? "🔇" : "🔊");
+    m_mute_btn->setText(muted ? "Unmute" : "Mute");
     if (m_pod->is_alive()) m_pod->send_mute_toggle();
 }
 

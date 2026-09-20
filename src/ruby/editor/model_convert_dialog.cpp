@@ -254,7 +254,7 @@ void ModelConvertDialog::setup_ui() {
     warn_layout->setContentsMargins(6, 4, 6, 4);
     warn_layout->setSpacing(8);
 
-    auto* warn_icon = new QLabel(QStringLiteral("<span style='font-size: 16px;'>⚠️</span>"), m_anim_warning_frame);
+    auto* warn_icon = new QLabel(QStringLiteral("<span style='font-size: 13px; font-weight: bold; color: #e5c07b;'>[!]</span>"), m_anim_warning_frame);
     warn_icon->setFixedWidth(24);
     warn_layout->addWidget(warn_icon);
 
@@ -711,7 +711,7 @@ void ModelConvertDialog::update_anim_ui_and_list() {
             .arg(in_glb_count).arg(json_count));
         m_anim_source_combo->setCurrentIndex(1); // Default to In-GLB when both exist
         m_anim_route_info_label->setText(QString(
-            "<span style='color:#e5c07b;'>⚠️ Conflict: Select between In-GLB (%1 clips), Companion JSON (%2 clips), or None below.</span>")
+            "<span style='color:#e5c07b;'>Conflict: Select between In-GLB (%1 clips), Companion JSON (%2 clips), or None below.</span>")
             .arg(in_glb_count).arg(json_count));
     } else {
         m_anim_warning_frame->setVisible(false);

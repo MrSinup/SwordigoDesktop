@@ -45,7 +45,14 @@ struct so_module_arm64 {
     
     uint64_t init_array_vaddr = 0;
     uint64_t init_array_size = 0;
-    
+
+    // Copy of the section-name string table (SHT_STRTAB / e_shstrndx).  The
+    // loader reads it from the file while loading this module and then drops it,
+    // but the research console needs it to say ".dynsym+0x30D60" rather than
+    // "symbol table+0x30D60" — section names are not recoverable from the loaded
+    // image, so they are kept here instead.  Not part of relocation/execution.
+    std::vector<char> shstrtab;
+
     std::string soname;
 };
 

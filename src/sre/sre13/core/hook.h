@@ -35,6 +35,8 @@ void dl_resolve_all(void);
 
 void init_hooks(void);
 
+#include "Gloss.h"
+
 /* Macro: HOOK_SYMBOL */
 #define HOOK_SYMBOL(name, symbol_str, ret, args)                          \
     typedef ret (*name##_t) args;                                         \

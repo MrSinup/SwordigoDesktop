@@ -81,6 +81,14 @@ struct Menu {
     float x, w; // Position and width in pixels
 };
 
+// ---------------------------------------------------------------------------
+// GuiRenderer — LEGACY bitmap UI (pre-ImGui).
+//
+// DEPRECATED: superseded by the ImGui overlays in src/platform/swordfare_gui.cpp
+// and the Xpera style toolkit in src/platform/xpera/. Kept only for the small
+// set of call sites that still use its toast/speed HUD helpers. Do not extend
+// this — new UI belongs in the Xpera/ImGui layer.
+// ---------------------------------------------------------------------------
 class GuiRenderer {
 public:
     GuiRenderer();

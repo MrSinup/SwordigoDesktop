@@ -229,7 +229,34 @@ void FileRiftHighlighter::clear_diagnostics() {
     set_diagnostics_map({});
 }
 
+void FileRiftHighlighter::set_is_pure_lua(bool pure_lua) {
+    if (m_is_pure_lua != pure_lua) {
+        m_is_pure_lua = pure_lua;
+        rehighlight();
+    }
+}
+
 void FileRiftHighlighter::highlightBlock(const QString& text) {
+    if (m_is_pure_lua) {
+        highlight_lua_line(text);
+        setCurrentBlockState(StateNormal);
+
+        // Apply Diagnostics Squiggles
+        int line_num = currentBlock().blockNumber();
+        auto dit = m_line_diagnostics.find(line_num);
+        if (dit != m_line_diagnostics.end()) {
+            for (const auto& d : dit->second) {
+                if (d.start_col >= 0 && d.start_col + d.length <= text.length()) {
+                    QTextCharFormat error_fmt = format(d.start_col);
+                    error_fmt.setUnderlineStyle(QTextCharFormat::WaveUnderline);
+                    error_fmt.setUnderlineColor(d.severity == Diagnostic::Error ? QColor("#e06c75") : QColor("#e5c07b"));
+                    setFormat(d.start_col, d.length, error_fmt);
+                }
+            }
+        }
+        return;
+    }
+
     int prev_state = previousBlockState();
     if (prev_state == -1) prev_state = StateNormal;
 

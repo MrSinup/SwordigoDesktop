@@ -30,6 +30,7 @@
 #include <thread>
 #include <atomic>
 #include <cstddef>
+#include "game/research/mem_watchpoint.h"
 
 extern uint8_t* g_guest_memory;
 
@@ -196,11 +197,17 @@ public:
         else HandleMemoryFault(vaddr, "MemoryWrite16");
     }
     void MemoryWrite32(Dynarmic::A32::VAddr vaddr, std::uint32_t value) override {
-        if (vaddr + 3 < mem_size) std::memcpy(memory + vaddr, &value, 4);
+        if (vaddr + 3 < mem_size) {
+            std::memcpy(memory + vaddr, &value, 4);
+            swordfare::research::wp_on_write((uint64_t)vaddr, value, 4, 0);
+        }
         else HandleMemoryFault(vaddr, "MemoryWrite32");
     }
     void MemoryWrite64(Dynarmic::A32::VAddr vaddr, std::uint64_t value) override {
-        if (vaddr + 7 < mem_size) std::memcpy(memory + vaddr, &value, 8);
+        if (vaddr + 7 < mem_size) {
+            std::memcpy(memory + vaddr, &value, 8);
+            swordfare::research::wp_on_write((uint64_t)vaddr, value, 8, 0);
+        }
         else HandleMemoryFault(vaddr, "MemoryWrite64");
     }
 

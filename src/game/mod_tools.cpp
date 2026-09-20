@@ -270,11 +270,19 @@ extern float s_vanilla_jump_height;
 
 void mod_apply_frame(uint8_t* guest_mem) {
     // 1. God Mode
+    //    Offsets verified against docs/sre13/HealthComponent.md:
+    //      +0x70 isDead (bool), +0x78 currentHealth (int), +0x7C initialHealth,
+    //      +0x80 maxHealth (int).
+    //    The previous code read +0x88 for "max_hp", but +0x88 is a float
+    //    constant (50.0f), so it was writing garbage and never topped up the
+    //    live currentHealth (+0x78).
     if (g_gui.mod_god_mode && g_hero_health_comp != 0) {
-        int max_hp = *(int*)(guest_mem + g_hero_health_comp + 0x88);
-        if (max_hp > 0) {
-            *(int*)(guest_mem + g_hero_health_comp + 0x7c) = max_hp;
-            *(int*)(guest_mem + g_hero_health_comp + 0x80) = max_hp;
+        const int max_hp = *(int*)(guest_mem + g_hero_health_comp + 0x80);
+        // Sanity-bound the read: a sane max HP keeps us from copying garbage.
+        if (max_hp > 0 && max_hp <= 100000000) {
+            *(int*)(guest_mem + g_hero_health_comp + 0x78) = max_hp;  // currentHealth
+            *(int*)(guest_mem + g_hero_health_comp + 0x7c) = max_hp;  // initialHealth
+            *(uint8_t*)(guest_mem + g_hero_health_comp + 0x70) = 0;   // clear isDead
         }
     }
 

@@ -106,6 +106,11 @@ bool launcher_config_save(const LauncherConfig& cfg) {
     fprintf(f, "# VFS mod load order. Top = highest override priority.\n");
     fprintf(f, "[mods]\n");
     toml_write_string_array(f, "load_order", cfg.mod_load_order);
+    fprintf(f, "\n");
+
+    // [engine]
+    fprintf(f, "[engine]\n");
+    toml_write_str(f, "selected_base_version", cfg.selected_base_version);
 
     fclose(f);
     std::cout << "[LauncherConfig] Saved to " << path << std::endl;
@@ -184,6 +189,8 @@ struct TomlReader {
                     }
                 }
             }
+        } else if (section == "engine") {
+            if (key == "selected_base_version") cfg.selected_base_version = val;
         }
     }
 };
@@ -204,8 +211,6 @@ LauncherConfig launcher_config_load() {
         reader.handle_line(line);
     }
     cfg = reader.cfg;
-    std::cout << "[LauncherConfig] Loaded from " << path
-              << " — mods in load order: " << cfg.mod_load_order.size() << std::endl;
     return cfg;
 }
 

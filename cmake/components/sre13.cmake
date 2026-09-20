@@ -31,6 +31,9 @@ if (SWORDIGO_BUILD_SRE)
             core/assets
             core/saves
             core/toml
+            core/Gloss_compat
+            hooks/BindingValue
+            hooks/Program
             hooks/Camera
             hooks/CameraController
             hooks/CaverShell

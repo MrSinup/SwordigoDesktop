@@ -20,6 +20,8 @@
 // ============================================================================
 
 FastCRuntime64 g_fast_c_runtime_64;
+extern "C" uint64_t elf_lookup_symbol(const char* name);
+std::vector<so_module_arm64*> g_mod_libraries_64;
 
 ElfLoaderArm64::ElfLoaderArm64(uint8_t* guest_mem_base, uint64_t guest_mem_size)
     : guest_base(guest_mem_base), guest_limit(guest_mem_size) {}
@@ -63,28 +65,38 @@ int ElfLoaderArm64::resolve_all_to_bridge(so_module_arm64* mod, JniBridge64* bri
                         continue;
                     }
                     
-                    uint64_t bridge_addr = bridge->get_address(sname.c_str());
-                    if (bridge_addr != 0) {
-                        *ptr = (uint64_t)bridge_addr;
+                    // Check loaded modules (libswordigo.so, libsre13.so, mod libraries) first!
+                    uint64_t mod_sym = elf_lookup_symbol(sname.c_str());
+                    if (mod_sym != 0) {
+                        *ptr = mod_sym;
                         resolved++;
-                        // Debug: log first few resolutions
-                        if (resolved <= 5) {
+                        if (resolved <= 10) {
                             std::cout << "[Resolve/ARM64] " << section << "[" << i << "] " << sname
-                                      << " -> GOT@0x" << std::hex << (mod->base_addr + r->r_offset) 
-                                      << " = 0x" << bridge_addr << std::dec << std::endl;
+                                      << " -> MOD@0x" << std::hex << mod_sym << std::dec << std::endl;
                         }
                     } else {
-                        // Auto-stub: register a dynamic stub bridge so the GOT
-                        // points to valid bridge code instead of dangling at 0.
-                        // The stub logs the call and returns 0.
-                        bridge->register_handler(sname, nullptr);
-                        uint64_t stub_addr = bridge->get_address(sname.c_str());
-                        if (stub_addr != 0) {
-                            *ptr = stub_addr;
+                        uint64_t bridge_addr = bridge->get_address(sname.c_str());
+                        if (bridge_addr != 0) {
+                            *ptr = (uint64_t)bridge_addr;
+                            resolved++;
+                            if (resolved <= 5) {
+                                std::cout << "[Resolve/ARM64] " << section << "[" << i << "] " << sname
+                                          << " -> GOT@0x" << std::hex << (mod->base_addr + r->r_offset) 
+                                          << " = 0x" << bridge_addr << std::dec << std::endl;
+                            }
+                        } else {
+                            // Auto-stub: register a dynamic stub bridge so the GOT
+                            // points to valid bridge code instead of dangling at 0.
+                            // The stub logs the call and returns 0.
+                            bridge->register_handler(sname, nullptr);
+                            uint64_t stub_addr = bridge->get_address(sname.c_str());
+                            if (stub_addr != 0) {
+                                *ptr = stub_addr;
+                            }
+                            unresolved++;
+                            std::cerr << "[Resolve/ARM64] AUTO-STUB: " << name << " -> 0x" 
+                                      << std::hex << stub_addr << std::dec << std::endl;
                         }
-                        unresolved++;
-                        std::cerr << "[Resolve/ARM64] AUTO-STUB: " << name << " -> 0x" 
-                                  << std::hex << stub_addr << std::dec << std::endl;
                     }
                 }
                 sym_count++;
@@ -141,6 +153,19 @@ int ElfLoaderArm64::load(so_module_arm64* mod, const std::string& filename, uint
 
     // Section header string table
     char* shstr = (char*)(buffer.data() + mod->shdr[mod->ehdr->e_shstrndx].sh_offset);
+
+    // Keep a copy of the section-name table: it lives only in `buffer` for the
+    // duration of this call, and section names cannot be reconstructed from the
+    // loaded image.  The research console uses them to describe a static site as
+    // ".dynsym+0x30D60" instead of "module+0x30D60" — see elf_sections.h.  This is
+    // metadata only; nothing about relocation or execution reads it.
+    if (mod->ehdr->e_shstrndx < mod->ehdr->e_shnum) {
+        const uint64_t str_off  = mod->shdr[mod->ehdr->e_shstrndx].sh_offset;
+        const uint64_t str_size = mod->shdr[mod->ehdr->e_shstrndx].sh_size;
+        if (str_off + str_size <= buffer.size()) {
+            mod->shstrtab.assign(buffer.begin() + str_off, buffer.begin() + str_off + str_size);
+        }
+    }
 
     mod->base_addr = load_addr;
     uint64_t max_addr = load_addr;
@@ -384,6 +409,20 @@ extern "C" uint64_t elf_lookup_symbol(const char* name) {
             const char* sym = g_sre_extras_mod.dynstr + g_sre_extras_mod.dynsym[i].st_name;
             if (strcmp(sym, name) == 0) {
                 return g_sre_extras_mod.base_addr + g_sre_extras_mod.dynsym[i].st_value;
+            }
+        }
+    }
+
+    // Fallback: search loaded mod libraries
+    for (auto* m : g_mod_libraries_64) {
+        if (m && m->dynstr && m->dynsym && m->num_dynsym > 0) {
+            for (int i = 0; i < m->num_dynsym; i++) {
+                if (m->dynsym[i].st_name == 0) continue;
+                if (m->dynsym[i].st_value == 0) continue;
+                const char* sym = m->dynstr + m->dynsym[i].st_name;
+                if (strcmp(sym, name) == 0) {
+                    return m->base_addr + m->dynsym[i].st_value;
+                }
             }
         }
     }

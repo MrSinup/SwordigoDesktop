@@ -1,8 +1,11 @@
 <RCC>
     <qresource prefix="/docs">
+        <file>pod_models.md</file>
+        <file>scl_scenes.md</file>
+        <file>pvr_textures.md</file>
+        <file>lua_scripting_api.md</file>
         <file>engine_architecture.md</file>
         <file>components_catalog.md</file>
-        <file>lua_scripting_api.md</file>
         <file>enums_and_constants.md</file>
         <file>filerift_format_specification.md</file>
     </qresource>

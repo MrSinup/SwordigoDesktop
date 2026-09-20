@@ -91,12 +91,12 @@ ImGui edition). Ordered by value. ✅ marks what landed recently.
   (render-tier aware), instead of every ground/background texture.
 
 ## Surface the ImGui-edition tools that are still missing
-- ✅ Audio/SFX preview panel — `AudioViewerPanel` (WAV/MP3/OGG via SDL3 +
+- [x] Audio/SFX preview panel — `AudioViewerPanel` (WAV/MP3/OGG via SDL3 +
   mpg123 + vorbis, streamed playback). Better than both editions.
-- ✅ In-scene ground-mesh editor ("3D projection lock") + animated water /
+- [x] In-scene ground-mesh editor ("3D projection lock") + animated water /
   portal / particle render-effect preview (`[FX]` toolbar toggle).
 - [ ] Texture painter + save-back (`tex_edit_save_png/tex` parity).
-- 🟡 SCL template studio inside Ruby GG — the *inheritance* half is live
+- [ ] SCL template studio inside Ruby GG — the *inheritance* half is live
   (`TemplateInspectorPanel`: retarget / override / unlink & materialize / reset,
   `[local]` vs dimmed `[inherited]`); the `.scl` **file** studio is not
   (`scl_update_template` + `scl_save_to_file` exist with no GUI yet).

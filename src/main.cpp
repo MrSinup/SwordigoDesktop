@@ -19,6 +19,7 @@ namespace fs = std::filesystem;
 #include "loader/elf_loader.h"
 #include "loader/elf_loader_arm64.h"
 #include "loader/arch_detect.h"
+#include "platform/data_path.h"
 #include "jni/jni_layer.h"
 #include "jni/jni_layer_arm64.h"
 #include "jni/jni_bridge.h"
@@ -68,8 +69,11 @@ extern "C" void sre_guest_heap_drain_deferred(void);  // jni_bridge_arm64.cpp �
 #include "platform/srt_overlay.h"
 #include "platform/save_editor.h"
 #include "platform/swordfare_gui.h"  /* Swordfare: ImGui-based in-game overlay */
+#include "game/research/recovery_catalog.h" /* Memory Research embedded DB */
+#include "game/research/instance_registry.h"  /* Memory Research instance tracker */
 #include "platform/loading_screen.h" /* Boot loading screen (hiro POD + progress) */
 #include "platform/crash_dialog.h"   /* Sleek fatal-crash reporting window */
+#include "platform/launcher_config.h"
 #include "imgui/imgui.h"
 
 // Global boot loading screen. Non-null and active only during the boot gap
@@ -493,6 +497,168 @@ JniBridge64 g_bridge_64;
 IEmulatorArm64* g_emulator_64 = nullptr;
 
 // =========================================================================
+// Guest Native Mod Library Loader (Lawncher mod parity)
+// =========================================================================
+struct GuestModInfo {
+    std::string mod_id;
+    std::string filename;
+    std::string full_path;
+    so_module_arm64* mod = nullptr;
+    uint64_t mod_init_addr = 0;
+    uint64_t unload_mod_addr = 0;
+};
+
+static std::vector<GuestModInfo> s_loaded_guest_mods;
+extern std::vector<so_module_arm64*> g_mod_libraries_64;
+
+std::vector<std::string> get_loaded_guest_mod_libs() {
+    std::vector<std::string> res;
+    for (const auto& m : s_loaded_guest_mods) {
+        res.push_back(m.filename);
+    }
+    return res;
+}
+
+void unload_guest_mod_libraries() {
+    if (s_loaded_guest_mods.empty()) return;
+    std::cout << "[ModLoader] Unloading " << s_loaded_guest_mods.size() << " guest mod library(ies)..." << std::endl;
+
+    for (auto it = s_loaded_guest_mods.rbegin(); it != s_loaded_guest_mods.rend(); ++it) {
+        if (it->unload_mod_addr != 0 && g_emulator_64) {
+            std::cout << "[ModLoader] Calling unload_mod() for " << it->filename 
+                      << " at 0x" << std::hex << it->unload_mod_addr << std::dec << std::endl;
+            g_emulator_64->call(it->unload_mod_addr, {});
+        }
+    }
+
+    if (g_loader_64 && g_emulator_64) {
+        uint64_t del_hooks_fn = g_loader_64->get_symbol_vaddr(&g_sre_mod, "hook_delete_mod_hooks");
+        if (del_hooks_fn) {
+            g_emulator_64->call(del_hooks_fn, {});
+        }
+    }
+
+    for (auto& info : s_loaded_guest_mods) {
+        if (info.mod) {
+            delete info.mod;
+            info.mod = nullptr;
+        }
+    }
+    s_loaded_guest_mods.clear();
+    g_mod_libraries_64.clear();
+    std::cout << "[ModLoader] Guest mod libraries unloaded" << std::endl;
+}
+
+extern "C" int swordi_abi;
+
+void load_guest_mod_libraries(const std::string& mod_id) {
+    unload_guest_mod_libraries();
+    if (swordi_abi != 13) {
+        std::cout << "[ModLoader] Native .so mod loading skipped (ABI " << swordi_abi 
+                  << " does not support native guest mods; only ABI 13 / v1.4.13 is supported)" << std::endl;
+        return;
+    }
+    if (mod_id.empty() || !g_loader_64 || !g_emulator_64) return;
+
+    // Synchronize active mod name to guest SRE
+    uint64_t set_mod_fn = g_loader_64->get_symbol_vaddr(&g_sre_mod, "sre13_set_active_mod");
+    if (set_mod_fn) {
+        uint64_t str_buf_g = 0x48f00;
+        strncpy((char*)(g_guest_memory + str_buf_g), mod_id.c_str(), 127);
+        g_guest_memory[str_buf_g + 127] = '\0';
+        g_emulator_64->call(set_mod_fn, {str_buf_g});
+        std::cout << "[ModLoader] Synchronized active mod to guest SRE: \"" << mod_id << "\"" << std::endl;
+    }
+
+    std::string data_dir = get_user_data_dir();
+    std::vector<std::string> search_dirs = {
+        data_dir + "mods/" + mod_id + "/libraries/arm64-v8a",
+        data_dir + "mods/" + mod_id + "/libraries",
+        std::string("mods/") + mod_id + "/libraries/arm64-v8a",
+        std::string("mods/") + mod_id + "/libraries"
+    };
+
+    std::string lib_dir;
+    for (const auto& d : search_dirs) {
+        std::error_code ec;
+        if (fs::exists(d, ec) && fs::is_directory(d, ec)) {
+            lib_dir = d;
+            break;
+        }
+    }
+
+    if (lib_dir.empty()) {
+        std::cout << "[ModLoader] No native libraries directory for mod '" << mod_id << "'" << std::endl;
+        return;
+    }
+
+    std::cout << "[ModLoader] Loading native mod libraries from: " << lib_dir << std::endl;
+    static uint64_t s_next_mod_base = 0x2800000;
+
+    uint64_t hook_begin_fn = g_loader_64->get_symbol_vaddr(&g_sre_mod, "hook_begin_mod_capture");
+    if (hook_begin_fn) {
+        g_emulator_64->call(hook_begin_fn, {});
+    }
+
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(lib_dir, ec)) {
+        if (!entry.is_regular_file(ec)) continue;
+        std::string path = entry.path().string();
+        std::string filename = entry.path().filename().string();
+        if (filename.length() < 4 || filename.substr(filename.length() - 3) != ".so") continue;
+
+        std::cout << "[ModLoader] Loading guest mod library: " << filename << " from " << path << std::endl;
+        so_module_arm64* mod_entry = new so_module_arm64();
+
+        uint64_t load_addr = s_next_mod_base;
+        int ret = g_loader_64->load(mod_entry, path, load_addr);
+        if (ret != 0) {
+            std::cerr << "[ModLoader] Failed to load " << filename << " (error " << ret << ")" << std::endl;
+            delete mod_entry;
+            continue;
+        }
+
+        s_next_mod_base += ((mod_entry->mem_size + 0xFFFF) & ~0xFFFF) + 0x10000;
+
+        g_loader_64->relocate(mod_entry);
+        g_loader_64->resolve_all_to_bridge(mod_entry, &g_bridge_64, GUEST_GLOBALS_BASE);
+        g_mod_libraries_64.push_back(mod_entry);
+
+        if (mod_entry->init_array_vaddr != 0 && mod_entry->init_array_size > 0) {
+            int init_count = (int)(mod_entry->init_array_size / 8);
+            uint64_t* init_array = (uint64_t*)(g_guest_memory + mod_entry->init_array_vaddr);
+            for (int i = 0; i < init_count; i++) {
+                if (init_array[i] != 0) {
+                    g_emulator_64->call(init_array[i], {});
+                }
+            }
+        }
+
+        GuestModInfo info;
+        info.mod_id = mod_id;
+        info.filename = filename;
+        info.full_path = path;
+        info.mod = mod_entry;
+        info.mod_init_addr = g_loader_64->get_symbol_vaddr(mod_entry, "mod_init");
+        info.unload_mod_addr = g_loader_64->get_symbol_vaddr(mod_entry, "unload_mod");
+
+        if (info.mod_init_addr != 0) {
+            std::cout << "[ModLoader] Calling mod_init() for " << filename 
+                      << " at 0x" << std::hex << info.mod_init_addr << std::dec << std::endl;
+            g_emulator_64->call(info.mod_init_addr, {});
+        }
+
+        s_loaded_guest_mods.push_back(info);
+        std::cout << "[ModLoader] Successfully loaded and initialized " << filename << " (mod: " << mod_id << ")" << std::endl;
+    }
+
+    uint64_t hook_end_fn = g_loader_64->get_symbol_vaddr(&g_sre_mod, "hook_end_mod_capture");
+    if (hook_end_fn) {
+        g_emulator_64->call(hook_end_fn, {});
+    }
+}
+
+// =========================================================================
 // Direct pod touch injection (Ruby GG dock)
 //
 // The preview's taps arrive as normalized pod touch messages. We dispatch them
@@ -545,6 +711,13 @@ uint64_t g_sre_profile_addr = 0;
 
 // Global Swordigo ABI version: 12 for 1.4.12, 13 for 1.4.13
 extern "C" int swordi_abi = 12;
+
+// Memory research live root pointers (defined in emulator.cpp)
+extern uint32_t g_game_scene_controller;
+extern uint32_t g_hero_obj;
+extern uint32_t g_hero_char_ctrl_comp;
+extern uint32_t g_hero_health_comp;
+extern uint32_t g_hero_mana_comp;
 
 // =========================================================================
 // Crash-Report-03 Render-Guard Globals
@@ -630,6 +803,7 @@ static bool should_block_keyboard() {
     ImGuiIO& io = ImGui::GetIO();
     return io.WantCaptureKeyboard || 
            g_swordfare_gui.is_mod_overlay_visible() || 
+           g_swordfare_gui.is_research_overlay_visible() ||
            g_swordfare_gui.is_visible() || 
            g_swordfare_gui.is_lua_console_open();
 }
@@ -1887,6 +2061,17 @@ void load_and_boot() {
             }
 
             g_swordfare_gui.update_console_backend();
+            // Update Memory Research live root pointers every frame
+            if (g_swordfare_gui.is_research_ready()) {
+                swordfare::research::InstanceRegistry::instance().tick();
+                swordfare::research::LiveRoots rr;
+                rr.gsc_va       = g_game_scene_controller;
+                rr.hero_va      = g_hero_obj;
+                rr.health_va    = g_hero_health_comp;
+                rr.mana_va      = g_hero_mana_comp;
+                rr.char_ctrl_va = g_hero_char_ctrl_comp;
+                g_swordfare_gui.update_research_roots(rr);
+            }
             // --- Death recovery: execv restart after ~3s ---
             // The death state machine is tied to Android's ad system and can't be
             // replicated (same issue as PS Vita port). Restart the process cleanly.
@@ -2258,6 +2443,8 @@ void load_and_boot() {
                 g_swordfare_gui.draw_lua_script_editor();
                 g_swordfare_gui.draw_lua_script_manager();
                 g_swordfare_gui.draw_mod_overlay(g_save_dir);
+                g_swordfare_gui.draw_research_overlay();
+                g_swordfare_gui.draw_research_hud();
                 g_swordfare_gui.end_frame();
             }
 
@@ -2982,6 +3169,86 @@ void load_and_boot() {
 
 extern "C" void advance_guest_virtual_clock(float dt);
 
+// ===========================================================================
+// ARM64 live-root discovery for the Memory Research inspector
+// ---------------------------------------------------------------------------
+// The ARM32 backends (emulator.cpp, emulator_dynarmic32.cpp) fill the
+// g_game_scene_controller / g_hero_* observer globals from code hooks.  The
+// ARM64 JIT installs no equivalent hooks, so on a SRE13 ARM64 session every
+// root in the Live Inspector read "not yet observed".
+//
+// libsre13 already hooks Caver::GameSceneController::Update and exports the
+// live controller through its gsc_get() accessor.  Rather than duplicating that
+// hook, we ask SRE for the pointer (a trivially-returning call, throttled) and
+// then read the hero component pointers straight out of guest memory at the
+// documented ARM64 offsets — the same offsets the embedded recovery catalog
+// publishes for struct 'GameSceneController'.
+// ===========================================================================
+static uint64_t s_gsc_get_fn = 0;   // libsre13 gsc_get() VA (0 = unavailable)
+
+// Component offsets inside Caver::GameSceneController (ARM64, v1.4.13).
+// Source: docs/sre13/GameSceneController.md and the embedded recovery catalog
+// (struct_fields rows for struct_id = 'GameSceneController').
+static constexpr uint32_t kGscOffHero     = 0xD8;   // SceneObject*
+static constexpr uint32_t kGscOffCharCtrl = 0xE0;   // CharControllerComponent*
+static constexpr uint32_t kGscOffHealth   = 0xF0;   // HealthComponent*
+static constexpr uint32_t kGscOffMana     = 0xF8;   // ManaComponent*
+
+// Bounds-checked 32-bit guest read (returns 0 for anything out of range).
+static uint32_t read_guest_ptr32(uint64_t va) {
+    if (!g_guest_memory || va < 0x10000 || va + 4 > GUEST_MEM_SIZE) return 0;
+    uint32_t v = 0;
+    std::memcpy(&v, g_guest_memory + va, 4);
+    return v;
+}
+
+// Resolve libsre13's gsc_get() once, after the SRE module is loaded.
+static void resolve_arm64_research_symbols() {
+    s_gsc_get_fn = 0;
+    if (swordi_abi >= 13 && g_loader_64)
+        s_gsc_get_fn = g_loader_64->get_symbol_vaddr(&g_sre_mod, "gsc_get");
+    if (s_gsc_get_fn)
+        std::cout << "[Research] ARM64 roots: SRE gsc_get() resolved at 0x"
+                  << std::hex << s_gsc_get_fn << std::dec << std::endl;
+    else
+        std::cout << "[Research] ARM64 roots: gsc_get() unavailable — the Live "
+                     "Inspector will report roots as unobserved" << std::endl;
+}
+
+// Called once per frame from the ARM64 loop (after the frame was run).
+static void update_arm64_research_roots() {
+    if (!g_emulator_64 || !g_guest_memory) return;
+
+    // Poll for the controller while we have none (1 s), then re-validate every
+    // ~5 s at 60 fps — room transitions re-create the controller.
+    if (s_gsc_get_fn != 0) {
+        static int retry_in = 0;
+        if (retry_in > 0) --retry_in;
+        if (g_game_scene_controller == 0 || retry_in <= 0) {
+            retry_in = (g_game_scene_controller == 0) ? 60 : 300;
+            const bool first = (g_game_scene_controller == 0);
+            const uint64_t gsc = g_emulator_64->call(s_gsc_get_fn, {});
+            if (gsc >= 0x10000 && gsc + 0x200 < GUEST_MEM_SIZE) {
+                g_game_scene_controller = static_cast<uint32_t>(gsc);
+                if (first)
+                    std::cout << "[Research] ARM64 roots: GameSceneController @ 0x"
+                              << std::hex << g_game_scene_controller << std::dec
+                              << " (SRE gsc_get)" << std::endl;
+            } else {
+                g_game_scene_controller = 0;   // no level running yet
+            }
+        }
+    }
+
+    const uint32_t gsc = g_game_scene_controller;
+    if (gsc == 0) return;
+    const uint64_t base = static_cast<uint64_t>(gsc);
+    g_hero_obj            = read_guest_ptr32(base + kGscOffHero);
+    g_hero_char_ctrl_comp = read_guest_ptr32(base + kGscOffCharCtrl);
+    g_hero_health_comp    = read_guest_ptr32(base + kGscOffHealth);
+    g_hero_mana_comp      = read_guest_ptr32(base + kGscOffMana);
+}
+
 void load_and_boot_arm64() {
     std::string so_path = get_data_path(g_lib_name);
     std::cout << "[Loader64] Loading: " << so_path << std::endl;
@@ -3563,33 +3830,13 @@ void load_and_boot_arm64() {
 
                     // Activate a mod for the 5-level VFS search hierarchy.
                     // Priority: 1) launcher-selected mod  2) first valid mod in mods/
-                    // BUT: respect launcher config — if load_order is empty, user disabled all mods.
-                    // Only directories with properties.toml, resources/, or mod.json are valid.
+                    // Priority: 1) launcher-selected mod  2) config mod_load_order  3) first valid enabled mod in mods/
+                    // Valid mod directories may contain properties.toml, resources/, mod.json, or libraries/
                     extern std::string g_launcher_selected_mod;
                     std::string mods_dir = data_base + "/mods/";
                     bool mod_found = false;
 
-                    // Check if launcher config explicitly disabled all mods
-                    bool launcher_disabled_all = false;
-                    {
-                        std::string cfg_path = std::string(getenv("HOME") ?: ".") + "/.config/swordigo-desktop/launcher.toml";
-                        std::ifstream cfg_file(cfg_path);
-                        if (cfg_file.is_open()) {
-                            // Quick scan for load_order = []
-                            std::string line;
-                            while (std::getline(cfg_file, line)) {
-                                if (line.find("load_order") != std::string::npos) {
-                                    if (line.find("[]") != std::string::npos ||
-                                        line.find("= []") != std::string::npos) {
-                                        launcher_disabled_all = true;
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Try launcher-selected mod first
+                    // 1. Try launcher-selected mod first
                     if (!g_launcher_selected_mod.empty()) {
                         fs::path mod_path = fs::path(mods_dir) / g_launcher_selected_mod;
                         if (fs::exists(mod_path) && fs::is_directory(mod_path)) {
@@ -3603,9 +3850,24 @@ void load_and_boot_arm64() {
                         }
                     }
 
-                    // Fallback: scan mods/ for first valid mod (only if config doesn't disable all)
-                    if (!mod_found && !launcher_disabled_all && fs::exists(mods_dir) && fs::is_directory(mods_dir)) {
-                        std::cout << "[SRE] VFS fallback: scanning mods/ for first valid mod..." << std::endl;
+                    // 2. Try launcher config mod_load_order
+                    if (!mod_found) {
+                        LauncherConfig lcfg = launcher_config_load();
+                        for (const auto& mid : lcfg.mod_load_order) {
+                            fs::path mod_path = fs::path(mods_dir) / mid;
+                            if (fs::exists(mod_path) && fs::is_directory(mod_path)) {
+                                vfs_write_str("g_sre_vfs_mod_name", mid, 128);
+                                vfs_write_int("g_sre_vfs_hierarchy_enabled", 1);
+                                std::cout << "[SRE] VFS mod (config load order): " << mid << std::endl;
+                                set_active_mod_name(mid);
+                                mod_found = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // 3. Fallback: scan mods/ for first valid enabled mod
+                    if (!mod_found && fs::exists(mods_dir) && fs::is_directory(mods_dir)) {
                         for (const auto& me : fs::directory_iterator(mods_dir)) {
                             if (me.is_directory()) {
                                 std::string mn = me.path().filename().string();
@@ -3613,8 +3875,9 @@ void load_and_boot_arm64() {
                                     bool has_toml  = fs::exists(me.path() / "properties.toml");
                                     bool has_res   = fs::is_directory(me.path() / "resources");
                                     bool has_modjq = fs::exists(me.path() / "mod.json");
-                                    if (!has_toml && !has_res && !has_modjq) {
-                                        std::cout << "[SRE] VFS skipping '" << mn << "' — not a mod (no properties.toml/resources/mod.json)" << std::endl;
+                                    bool has_libs  = fs::is_directory(me.path() / "libraries");
+                                    if (!has_toml && !has_res && !has_modjq && !has_libs) {
+                                        std::cout << "[SRE] VFS skipping '" << mn << "' — not a mod" << std::endl;
                                         continue;
                                     }
                                     vfs_write_str("g_sre_vfs_mod_name", mn, 128);
@@ -3626,8 +3889,9 @@ void load_and_boot_arm64() {
                                 }
                             }
                         }
-                    } else if (!mod_found && launcher_disabled_all) {
-                        std::cout << "[SRE] VFS: all mods disabled by launcher config — vanilla mode" << std::endl;
+                    }
+                    if (!mod_found) {
+                        std::cout << "[SRE] VFS: no active mod found — vanilla mode" << std::endl;
                     }
                     std::cout << "[SRE] VFS pre-init: active=1 data_dir=" << data_base << std::endl;
                 }
@@ -4848,6 +5112,68 @@ void load_and_boot_arm64() {
                     std::cout << "[SRE] Scene Shifter initialized in GUI" << std::endl;
                 }
 
+                // ── Memory Research Tab ────────────────────────────────────
+                // Init after the RecoveryCatalog is ready (called in main()
+                // before load_and_boot_arm64) and g_guest_memory is valid.
+                resolve_arm64_research_symbols();
+                g_swordfare_gui.init_research_tab(g_guest_memory, GUEST_MEM_SIZE);
+                // Tell the research engine where the loaded images live.  Without
+                // this every hit reports "unmapped": true, but useless, because a
+                // runtime address with no static home cannot carry identity.
+                if (g_main_mod_64.base_addr) {
+                    g_swordfare_gui.set_research_module(
+                        "libswordigo.so", g_main_mod_64.base_addr, 0,
+                        g_main_mod_64.mem_size ? g_main_mod_64.mem_size : 0x800000,
+                        "sre13-1.4.13-arm64");
+                    // The image is unstripped (~17.7k dynamic symbols), so hand
+                    // over its symbol table.  This is EVIDENCE for describing a
+                    // static site ("Caver::Update+0x18"), never part of any
+                    // identity: the researcher's handle stays a short, stable
+                    // g_VAR_#### that a rebuild cannot invalidate.
+                    if (g_main_mod_64.dynsym && g_main_mod_64.dynstr &&
+                        g_main_mod_64.num_dynsym > 0) {
+                        g_swordfare_gui.set_research_module_symbols(
+                            "libswordigo.so", g_main_mod_64.dynsym,
+                            (size_t)g_main_mod_64.num_dynsym, g_main_mod_64.dynstr,
+                            g_main_mod_64.dynstr_size, true);
+                    }
+                    // Section headers + the loader's copy of the section-name
+                    // table.  A symbol table has a hole below its lowest symbol,
+                    // and that hole is exactly where a module-scoped scan floods
+                    // (measured: 8 of 12 hits for a common value landed inside
+                    // .dynsym / .rela.plt).  Sections name those blocks, and mark
+                    // them so a scan can skip them.
+                    if (g_main_mod_64.shdr && g_main_mod_64.ehdr &&
+                        g_main_mod_64.ehdr->e_shnum > 0) {
+                        g_swordfare_gui.set_research_module_sections(
+                            "libswordigo.so", g_main_mod_64.shdr,
+                            (size_t)g_main_mod_64.ehdr->e_shnum,
+                            g_main_mod_64.shstrtab.data(), g_main_mod_64.shstrtab.size(),
+                            true);
+                    }
+                }
+                for (so_module_arm64* m : g_mod_libraries_64) {
+                    if (!m || !m->base_addr || !m->ehdr) continue;
+                    g_swordfare_gui.set_research_module(
+                        "libswordigo_dep.so", m->base_addr, 0,
+                        m->mem_size ? m->mem_size : 0x100000, "sre13-1.4.13-arm64");
+                    if (m->dynsym && m->dynstr && m->num_dynsym > 0) {
+                        // Keyed by the image's own soname so the dependency
+                        // modules do not all overwrite one symbol bucket.
+                        const std::string depkey =
+                            m->soname.empty() ? std::string("libswordigo_dep.so") : m->soname;
+                        g_swordfare_gui.set_research_module_symbols(
+                            depkey, m->dynsym, (size_t)m->num_dynsym, m->dynstr,
+                            m->dynstr_size, true);
+                        if (m->shdr && m->ehdr && m->ehdr->e_shnum > 0) {
+                            g_swordfare_gui.set_research_module_sections(
+                                depkey, m->shdr, (size_t)m->ehdr->e_shnum,
+                                m->shstrtab.data(), m->shstrtab.size(), true);
+                        }
+                    }
+                }
+                std::cout << "[Research] Memory Research tab initialized" << std::endl;
+
                 // Mirror the shifter VAs for the engine-pod "Run scene" command
                 // (ruby sends target+spawn over stdin; the same tick performs
                 // the GotoLevel, so the flow is identical to the GUI panel).
@@ -5240,11 +5566,21 @@ void load_and_boot_arm64() {
                                   << " mods, " << music_count << " music replacements"
                                   << std::endl;
                     } else {
-                        std::cout << "[MOD] sre_init_mods not found — mod support disabled"
-                                  << std::endl;
+                        if (swordi_abi == 13) {
+                            std::cout << "[MOD] SRE13 active — using VFS & native modloader" << std::endl;
+                        } else {
+                            std::cout << "[MOD] sre_init_mods not found — mod support disabled"
+                                      << std::endl;
+                        }
                     }
                 }
-                
+
+                // Load native mod libraries for the active mod (e.g. mods/<id>/libraries/arm64-v8a/*.so)
+                if (swordi_abi == 13) {
+                    load_guest_mod_libraries(get_active_mod_name());
+                } else {
+                    std::cout << "[ModLoader] Native .so mod loading disabled for ABI " << swordi_abi << " (requires ABI 13)" << std::endl;
+                }
 
                 // Resolve GUI overlay state addresses
                 static uint64_t gui_overlay_addr = 0;
@@ -5432,25 +5768,6 @@ void load_and_boot_arm64() {
                         std::string mods_dir = data_base + "/mods/";
                         bool mod_found2 = false;
 
-                        // Check launcher config for disabled-all
-                        bool launcher_disabled2 = false;
-                        {
-                            std::string cfg_path = std::string(getenv("HOME") ?: ".") + "/.config/swordigo-desktop/launcher.toml";
-                            std::ifstream cfg_file(cfg_path);
-                            if (cfg_file.is_open()) {
-                                std::string line;
-                                while (std::getline(cfg_file, line)) {
-                                    if (line.find("load_order") != std::string::npos) {
-                                        if (line.find("[]") != std::string::npos ||
-                                            line.find("= []") != std::string::npos) {
-                                            launcher_disabled2 = true;
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
                         if (!g_launcher_selected_mod.empty()) {
                             fs::path mod_path = fs::path(mods_dir) / g_launcher_selected_mod;
                             if (fs::exists(mod_path) && fs::is_directory(mod_path)) {
@@ -5461,7 +5778,21 @@ void load_and_boot_arm64() {
                                 mod_found2 = true;
                             }
                         }
-                        if (!mod_found2 && !launcher_disabled2 && fs::exists(mods_dir) && fs::is_directory(mods_dir)) {
+                        if (!mod_found2) {
+                            LauncherConfig lcfg = launcher_config_load();
+                            for (const auto& mid : lcfg.mod_load_order) {
+                                fs::path mod_path = fs::path(mods_dir) / mid;
+                                if (fs::exists(mod_path) && fs::is_directory(mod_path)) {
+                                    vfs_write_str2("g_sre_vfs_mod_name", mid, 128);
+                                    vfs_write_int2("g_sre_vfs_hierarchy_enabled", 1);
+                                    std::cout << "[SRE] VFS mod (post-init, config): " << mid << std::endl;
+                                    set_active_mod_name(mid);
+                                    mod_found2 = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!mod_found2 && fs::exists(mods_dir) && fs::is_directory(mods_dir)) {
                             for (const auto& me : fs::directory_iterator(mods_dir)) {
                                 if (me.is_directory()) {
                                     std::string mn = me.path().filename().string();
@@ -5469,7 +5800,8 @@ void load_and_boot_arm64() {
                                         bool has_toml  = fs::exists(me.path() / "properties.toml");
                                         bool has_res   = fs::is_directory(me.path() / "resources");
                                         bool has_modjq = fs::exists(me.path() / "mod.json");
-                                        if (!has_toml && !has_res && !has_modjq) continue;
+                                        bool has_libs  = fs::is_directory(me.path() / "libraries");
+                                        if (!has_toml && !has_res && !has_modjq && !has_libs) continue;
                                         vfs_write_str2("g_sre_vfs_mod_name", mn, 128);
                                         vfs_write_int2("g_sre_vfs_hierarchy_enabled", 1);
                                         std::cout << "[SRE] VFS mod (post-init): " << mn << std::endl;
@@ -5479,8 +5811,9 @@ void load_and_boot_arm64() {
                                     }
                                 }
                             }
-                        } else if (!mod_found2 && launcher_disabled2) {
-                            std::cout << "[SRE] VFS post-init: all mods disabled by launcher — vanilla" << std::endl;
+                        }
+                        if (!mod_found2) {
+                            std::cout << "[SRE] VFS post-init: no active mod found — vanilla" << std::endl;
                         }
                     }
                     
@@ -6573,7 +6906,30 @@ void load_and_boot_arm64() {
                 }
             }
             g_swordfare_gui.update_console_backend();
+            // Update Memory Research live root pointers every frame
+            if (g_swordfare_gui.is_research_ready()) {
+                swordfare::research::InstanceRegistry::instance().tick();
+                swordfare::research::LiveRoots rr;
+                rr.gsc_va       = g_game_scene_controller;
+                rr.hero_va      = g_hero_obj;
+                rr.health_va    = g_hero_health_comp;
+                rr.mana_va      = g_hero_mana_comp;
+                rr.char_ctrl_va = g_hero_char_ctrl_comp;
+                g_swordfare_gui.update_research_roots(rr);
+            }
 
+            update_arm64_research_roots();
+
+            // ── Live memory engine tick ────────────────────────────────────
+            // Runs on the EMULATED frame, not on the render frame, so frozen
+            // values are re-applied and tracked objects re-resolved on the
+            // guest's own tick.  A wall-clock thread doing this would race the
+            // game's own writes to the same addresses.
+            if (g_swordfare_gui.is_research_ready() && g_guest_memory) {
+                static uint64_t s_research_frame = 0;
+                g_swordfare_gui.tick_research(++s_research_frame,
+                                              g_guest_memory, GUEST_MEM_SIZE);
+            }
             // ── Auto Console Test (debug) ──────────────────────────────────
             // SWORDIGO_AUTO_CONSOLE=1  submits two console commands headlessly
             // and reports status/result after each (reproduces the
@@ -7562,6 +7918,8 @@ void load_and_boot_arm64() {
                 g_swordfare_gui.draw_lua_script_editor();
                 g_swordfare_gui.draw_lua_script_manager();
                 g_swordfare_gui.draw_mod_overlay(g_save_dir);
+                g_swordfare_gui.draw_research_overlay();
+                g_swordfare_gui.draw_research_hud();
                 g_swordfare_gui.end_frame();
             }
             
@@ -8452,6 +8810,7 @@ int main(int argc, char* argv[]) {
     bool use_openswordigo = false;
     std::string openswordigo_scene = "town_part1.scene";
     std::string openswordigo_library;
+    std::string cli_mod;
 #ifdef HEADLESS_DEFAULT
     headless = true;
 #endif
@@ -8520,6 +8879,18 @@ int main(int argc, char* argv[]) {
         if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
             g_lib_name = argv[++i];
             std::cout << "[Main] Custom lib: " << g_lib_name << std::endl;
+        }
+        if ((strcmp(argv[i], "--mod") == 0 || strcmp(argv[i], "-mod") == 0) && i + 1 < argc) {
+            cli_mod = argv[++i];
+            g_launcher_selected_mod = cli_mod;
+            set_active_mod_name(cli_mod);
+            std::cout << "[Main] Mod specified via CLI: " << cli_mod << std::endl;
+        }
+        if (strncmp(argv[i], "--mod=", 6) == 0) {
+            cli_mod = argv[i] + 6;
+            g_launcher_selected_mod = cli_mod;
+            set_active_mod_name(cli_mod);
+            std::cout << "[Main] Mod specified via CLI: " << cli_mod << std::endl;
         }
         if (strcmp(argv[i], "--assets") == 0 && i + 1 < argc) {
             g_instance_assets_dir = argv[++i];
@@ -8674,6 +9045,10 @@ int main(int argc, char* argv[]) {
              g_use_sre = lconf.use_sre;
              g_advanced_redstell_opts = lconf.advanced_redstell_opts;
              g_launcher_selected_mod = lconf.selected_mod;
+             if (!cli_mod.empty()) {
+                 g_launcher_selected_mod = cli_mod;
+                 set_active_mod_name(cli_mod);
+             }
              // Re-initialize the asset manager with the correct assets directory
              // (asset_manager_init was called at startup with the default "assets" path)
              asset_manager_init(get_data_path(g_instance_assets_dir).c_str());
@@ -8907,6 +9282,18 @@ int main(int argc, char* argv[]) {
     }
 
     init_all();
+
+    // ── Memory Research Catalog — init embedded SQLite3 DB ─────────────────
+    // Called immediately after init_all() (which allocates g_guest_memory).
+    // get_data_path("") gives the writable user data root for user_research.db.
+    {
+        std::string user_data_root = get_data_path("");
+        // Trim trailing separator
+        while (!user_data_root.empty() &&
+               (user_data_root.back() == '/' || user_data_root.back() == '\\'))
+            user_data_root.pop_back();
+        swordfare::research::RecoveryCatalog::instance().init(user_data_root);
+    }
 
     // Detect architecture from binary ELF header
     {

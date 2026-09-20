@@ -45,6 +45,9 @@ struct LauncherConfig {
     //    → com.td.remastered resources override swordiforge,
     //    → both override vanilla.
     std::vector<std::string> mod_load_order;
+
+    // ── Engine / Base Version ───────────────────────────────────────────────
+    std::string selected_base_version = "1.4.13";
 };
 
 // ── Load / Save ────────────────────────────────────────────────────────────

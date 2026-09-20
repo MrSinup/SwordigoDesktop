@@ -51,10 +51,6 @@ void DesktopIntegrationDialog::setup_ui() {
     auto* theme_layout = new QHBoxLayout(group_theme);
     theme_layout->setSpacing(12);
 
-    auto* theme_icon_label = new QLabel(QStringLiteral("🎨"), group_theme);
-    theme_icon_label->setStyleSheet(QStringLiteral("font-size: 16px;"));
-    theme_layout->addWidget(theme_icon_label);
-
     auto* theme_title_label = new QLabel(QStringLiteral("Studio Theme:"), group_theme);
     theme_title_label->setStyleSheet(QStringLiteral("font-weight: 600; font-size: 12px;"));
     theme_layout->addWidget(theme_title_label);

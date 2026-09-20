@@ -23,5 +23,6 @@ struct flock {
 };
 
 int fcntl(int fd, int cmd, ...);
+int open(const char* pathname, int flags, ...);
 
 #endif

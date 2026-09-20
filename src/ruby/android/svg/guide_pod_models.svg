@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 220" width="100%" height="100%">
+  <defs>
+    <linearGradient id="podBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0A1128" />
+      <stop offset="100%" stop-color="#1C1938" />
+    </linearGradient>
+    <linearGradient id="podAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#6366F1" />
+    </linearGradient>
+    <radialGradient id="podGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#0A1128" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="400" height="220" rx="14" fill="url(#podBg)" />
+  <circle cx="200" cy="110" r="90" fill="url(#podGlow)" />
+
+  <!-- Isometric 3D Mesh Wireframe Polyhedron -->
+  <g transform="translate(140, 30)">
+    <!-- Polygons -->
+    <polygon points="60,20 120,50 60,85 0,50" fill="#38BDF8" fill-opacity="0.12" stroke="#38BDF8" stroke-width="1.5" />
+    <polygon points="0,50 60,85 60,150 0,115" fill="#6366F1" fill-opacity="0.18" stroke="#818CF8" stroke-width="1.5" />
+    <polygon points="60,85 120,50 120,115 60,150" fill="#4F46E5" fill-opacity="0.25" stroke="#A5B4FC" stroke-width="1.5" />
+    
+    <!-- Interior Skeletal Bone Rig -->
+    <line x1="60" y1="35" x2="60" y2="85" stroke="#F43F5E" stroke-width="2.5" />
+    <line x1="60" y1="85" x2="25" y2="105" stroke="#F43F5E" stroke-width="2" />
+    <line x1="60" y1="85" x2="95" y2="105" stroke="#F43F5E" stroke-width="2" />
+    <line x1="60" y1="85" x2="60" y2="135" stroke="#F43F5E" stroke-width="2.5" />
+
+    <!-- Joint Spheres -->
+    <circle cx="60" cy="35" r="4" fill="#FDA4AF" />
+    <circle cx="60" cy="85" r="5" fill="#FFF" stroke="#F43F5E" stroke-width="2" />
+    <circle cx="25" cy="105" r="3.5" fill="#FDA4AF" />
+    <circle cx="95" cy="105" r="3.5" fill="#FDA4AF" />
+    <circle cx="60" cy="135" r="4" fill="#FDA4AF" />
+
+    <!-- Outer Vertex Nodes -->
+    <circle cx="60" cy="20" r="3" fill="#BAE6FD" />
+    <circle cx="120" cy="50" r="3" fill="#BAE6FD" />
+    <circle cx="0" cy="50" r="3" fill="#BAE6FD" />
+    <circle cx="60" cy="150" r="3" fill="#BAE6FD" />
+    <circle cx="0" cy="115" r="3" fill="#BAE6FD" />
+    <circle cx="120" cy="115" r="3" fill="#BAE6FD" />
+  </g>
+
+  <!-- Technical Labels & Badges -->
+  <g font-family="monospace" font-size="10" fill="#94A3B8">
+    <rect x="20" y="20" width="110" height="22" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1" />
+    <text x="30" y="35" fill="#38BDF8" font-weight="bold">TAG: 0x3000</text>
+
+    <rect x="270" y="20" width="110" height="22" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1" />
+    <text x="280" y="35" fill="#F43F5E" font-weight="bold">AB.POD.2.0</text>
+
+    <text x="25" y="195" fill="#64748B" font-size="9">VERTEX STREAM: INTERLEAVED</text>
+    <text x="250" y="195" fill="#64748B" font-size="9">MAX BONES: 100</text>
+  </g>
+</svg>

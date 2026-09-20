@@ -273,9 +273,17 @@ void set_active_mod_name(const std::string& name) {
     std::cout << "[VFS/Host] Set active mod: \"" << name << "\"" << std::endl;
 }
 
+std::string get_active_mod_name() {
+    return g_active_mod_name;
+}
+
 void set_active_profile_id(const std::string& id) {
     g_active_profile_id = id;
     std::cout << "[VFS/Host] Set active profile: \"" << id << "\"" << std::endl;
+}
+
+std::string get_active_profile_id() {
+    return g_active_profile_id;
 }
 
 // Helper to check if a file exists, with recursive scene remapping, texture format swaps, and Retina fallback
@@ -467,9 +475,11 @@ extern "C" bool resolve_vfs_path_impl(const char* original_path, char* out_resol
     if (has_mod && has_profile) {
         candidates.push_back(data_dir + "/mods/" + g_active_mod_name + "/resources/" + g_active_profile_id + "/" + path);
     }
-    // 2. mods/<mod>/resources/X
+    // 2. mods/<mod>/resources/X (and assets/ or flat layout)
     if (has_mod) {
         candidates.push_back(data_dir + "/mods/" + g_active_mod_name + "/resources/" + path);
+        candidates.push_back(data_dir + "/mods/" + g_active_mod_name + "/assets/" + path);
+        candidates.push_back(data_dir + "/mods/" + g_active_mod_name + "/" + path);
     }
     // 3. resources/<profile>/X
     if (has_profile) {

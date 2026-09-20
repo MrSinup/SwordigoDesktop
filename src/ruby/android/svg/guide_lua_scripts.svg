@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 220" width="100%" height="100%">
+  <defs>
+    <linearGradient id="luaBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B132B" />
+      <stop offset="100%" stop-color="#1C2541" />
+    </linearGradient>
+    <radialGradient id="luaGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#60A5FA" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#0B132B" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="400" height="220" rx="14" fill="url(#luaBg)" />
+  <circle cx="200" cy="110" r="95" fill="url(#luaGlow)" />
+
+  <!-- Center Lua Symbol with Code Brackets -->
+  <g transform="translate(130, 35)">
+    <!-- Outer Glow Capsule -->
+    <rect x="0" y="0" width="140" height="90" rx="10" fill="#1E293B" stroke="#3B82F6" stroke-width="1.8" />
+    
+    <!-- Code Tokens -->
+    <text x="20" y="32" fill="#93C5FD" font-family="monospace" font-size="12" font-weight="bold">local self, target</text>
+    <text x="20" y="52" fill="#6EE7B7" font-family="monospace" font-size="12"> = ...</text>
+    <text x="20" y="74" fill="#F472B6" font-family="monospace" font-size="11">self:damage(20)</text>
+  </g>
+
+  <!-- Left: Event Hooks -->
+  <g transform="translate(25, 45)">
+    <rect x="0" y="0" width="85" height="22" rx="4" fill="#172554" stroke="#2563EB" stroke-width="1" />
+    <text x="8" y="15" fill="#93C5FD" font-family="monospace" font-size="9">OnTouch()</text>
+
+    <rect x="0" y="35" width="85" height="22" rx="4" fill="#172554" stroke="#2563EB" stroke-width="1" />
+    <text x="8" y="50" fill="#93C5FD" font-family="monospace" font-size="9">OnCollect()</text>
+
+    <path d="M 85 11 L 125 45" stroke="#3B82F6" stroke-width="1.5" stroke-dasharray="3,3" />
+    <path d="M 85 46 L 125 55" stroke="#3B82F6" stroke-width="1.5" stroke-dasharray="3,3" />
+  </g>
+
+  <!-- Right: Static API Modules -->
+  <g transform="translate(290, 45)">
+    <rect x="0" y="0" width="85" height="22" rx="4" fill="#064E3B" stroke="#059669" stroke-width="1" />
+    <text x="10" y="15" fill="#6EE7B7" font-family="monospace" font-size="9">Camera.Focus</text>
+
+    <rect x="0" y="35" width="85" height="22" rx="4" fill="#064E3B" stroke="#059669" stroke-width="1" />
+    <text x="10" y="50" fill="#6EE7B7" font-family="monospace" font-size="9">Sound.Play</text>
+
+    <path d="M -15 50 L 0 11" stroke="#10B981" stroke-width="1.5" stroke-dasharray="3,3" />
+    <path d="M -15 65 L 0 46" stroke="#10B981" stroke-width="1.5" stroke-dasharray="3,3" />
+  </g>
+
+  <!-- Bottom Labels -->
+  <g font-family="monospace" font-size="10" fill="#94A3B8">
+    <rect x="25" y="170" width="130" height="24" rx="6" fill="#0F172A" stroke="#334155" stroke-width="1" />
+    <text x="35" y="186" fill="#60A5FA" font-weight="bold">LUA 5.1 COROUTINES</text>
+
+    <rect x="240" y="170" width="135" height="24" rx="6" fill="#0F172A" stroke="#334155" stroke-width="1" />
+    <text x="250" y="186" fill="#34D399">STATE ISOLATION</text>
+  </g>
+</svg>

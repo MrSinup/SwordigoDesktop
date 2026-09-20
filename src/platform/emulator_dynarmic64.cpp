@@ -18,6 +18,7 @@
 #include <chrono>
 #include <iomanip>
 #include <thread>   // std::this_thread::yield() for LEGACY spinloop cooperative yield
+#include "game/research/mem_watchpoint.h"
 
 extern uint8_t* g_guest_memory;
 /* MAGIC_LR: sentinel return address (0xE0000000). When the JIT hits this PC,
@@ -63,8 +64,8 @@ static inline bool is_known_executable_pc(uint64_t pc) {
         pc >= g_sre_text_base && pc < g_sre_text_end) return true;
     if (g_sre_runtime_text_base && g_sre_runtime_text_end &&
         pc >= g_sre_runtime_text_base && pc < g_sre_runtime_text_end) return true;
-    /* libsre-extras.so (loaded at ~0x2400000, spans < 0x2600000) */
-    if (pc >= 0x2400000ULL && pc < 0x2600000ULL) return true;
+    /* libsre-extras.so + mod libraries (spans up to 0x3000000) */
+    if (pc >= 0x2400000ULL && pc < 0x3000000ULL) return true;
     if (pc >= 0x3000000ULL && pc < 0x3100000ULL) return true;
     return false;
 }
@@ -80,8 +81,8 @@ static inline bool is_valid_exec_pc(uint64_t pc) {
         pc >= g_sre_text_base && pc < g_sre_text_end) return true;
     // TrampolineMgr cave arena
     if (pc >= 0x3000000ULL && pc < 0x3100000ULL) return true;
-    // libsre.so + libsre-extras.so guest range
-    if (pc >= 0x2000000ULL && pc < 0x2600000ULL) return true;
+    // libsre.so + libsre-extras.so + mod libraries guest range
+    if (pc >= 0x2000000ULL && pc < 0x3000000ULL) return true;
     // Fallback: old broad range check (for symbols outside .text e.g. PLT stubs)
     if (pc >= 0x1000000ULL && pc < 0x3000000ULL) return true;
     return false;
@@ -420,12 +421,20 @@ public:
     }
 
     void MemoryWrite32(Dynarmic::A64::VAddr vaddr, std::uint32_t value) override {
-        if (vaddr + 4 <= mem_size) std::memcpy(memory + vaddr, &value, 4);
+        if (vaddr + 4 <= mem_size) {
+            std::memcpy(memory + vaddr, &value, 4);
+            swordfare::research::wp_on_write(vaddr, value, 4,
+                emu->get_jit() ? emu->get_jit()->GetPC() : 0);
+        }
         else if (vaddr < 0x0000800000000000ULL) HandleMemoryFault(vaddr, "MemoryWrite32");
     }
 
     void MemoryWrite64(Dynarmic::A64::VAddr vaddr, std::uint64_t value) override {
-        if (vaddr + 8 <= mem_size) std::memcpy(memory + vaddr, &value, 8);
+        if (vaddr + 8 <= mem_size) {
+            std::memcpy(memory + vaddr, &value, 8);
+            swordfare::research::wp_on_write(vaddr, value, 8,
+                emu->get_jit() ? emu->get_jit()->GetPC() : 0);
+        }
         else if (vaddr < 0x0000800000000000ULL) HandleMemoryFault(vaddr, "MemoryWrite64");
     }
 
@@ -577,8 +586,8 @@ public:
             bool bad_align = (vaddr & 3u) != 0;
             bool bad_range = g_sre_text_base && g_sre_text_end &&
                              (vaddr < g_sre_text_base || vaddr >= g_sre_text_end) &&
-                             // Don't flag TrampolineMgr caves or libsre.so/libsre-extras.so
-                             !(vaddr >= 0x2000000ULL && vaddr < 0x2600000ULL) &&
+                             // Don't flag TrampolineMgr caves or libsre.so/libsre-extras.so/mod libraries
+                             !(vaddr >= 0x2000000ULL && vaddr < 0x3000000ULL) &&
                              !(vaddr >= 0x3000000ULL && vaddr < 0x3100000ULL);
             if (bad_align || bad_range) {
                 static int render_guard_log = 0;
@@ -743,8 +752,8 @@ public:
                 emu->get_jit()->HaltExecution(Dynarmic::HaltReason::UserDefined1);
                 return;
             }
-            // BRK in SRE / libsre-extras (C++ exception recovery)
-            if (pc >= 0x2000000 && pc < 0x2600000) {
+            // BRK in SRE / libsre-extras / mod libraries (C++ exception recovery)
+            if (pc >= 0x2000000 && pc < 0x3000000) {
                 emu->bridge_halt_requested = true;
                 emu->bridge_halt_address = pc;
                 emu->get_jit()->HaltExecution(Dynarmic::HaltReason::UserDefined2);

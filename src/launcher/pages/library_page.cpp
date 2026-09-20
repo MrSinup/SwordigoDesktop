@@ -6,7 +6,9 @@
 #include "launcher/launcher_theme.h"
 #include "platform/data_path.h"
 #include "platform/launcher_config.h"
+#include "platform/mod_manager.h"
 
+#include <filesystem>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -535,6 +537,26 @@ void LibraryPage::on_launch_clicked() {
     }
     cfg.advanced_redstell_opts = false;
     cfg.should_launch = true;
+
+    // Resolve active mod (prioritizing LauncherConfig load order, then first enabled mod on disk)
+    LauncherConfig lcfg = launcher_config_load();
+    std::string data_dir = get_user_data_dir();
+    for (const auto& mod_id : lcfg.mod_load_order) {
+        std::string mod_dir = data_dir + "mods/" + mod_id;
+        if (std::filesystem::exists(mod_dir) && std::filesystem::is_directory(mod_dir)) {
+            cfg.selected_mod = mod_id;
+            break;
+        }
+    }
+    if (cfg.selected_mod.empty()) {
+        auto mods = modman::list_mods(data_dir + "mods");
+        for (const auto& m : mods) {
+            if (m.enabled) {
+                cfg.selected_mod = m.id;
+                break;
+            }
+        }
+    }
 
     emit launchRequested(cfg);
 }

@@ -136,7 +136,7 @@ void TextureViewerPanel::export_pvr() {
     auto* w_spin = new QSpinBox(&dlg);
     auto* h_spin = new QSpinBox(&dlg);
     auto* lock_btn = new QToolButton(&dlg);
-    lock_btn->setText("🔒");
+    lock_btn->setText("Lock");
     lock_btn->setCheckable(true);
     lock_btn->setChecked(true);
     lock_btn->setToolTip("Lock aspect ratio");

@@ -31,6 +31,9 @@ public:
     // Remove all squiggle formatting without a full-document re-highlight.
     void clear_diagnostics();
 
+    void set_is_pure_lua(bool pure_lua);
+    bool is_pure_lua() const { return m_is_pure_lua; }
+
 protected:
     void highlightBlock(const QString& text) override;
 
@@ -67,6 +70,7 @@ private:
 
     // Diagnostics squiggles by line
     std::unordered_map<int, std::vector<Diagnostic>> m_line_diagnostics;
+    bool m_is_pure_lua = false;
 };
 
 } // namespace ruby::filerift

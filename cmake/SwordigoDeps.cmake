@@ -86,3 +86,52 @@ else()
         message(STATUS "libwebp not found — EXT_texture_webp textures will be skipped")
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# SQLite3 — used by the Memory Research subsystem (embedded recovery catalog).
+#
+# Strategy:
+#   1. Look for a bundled amalgamation at third_party/sqlite3/sqlite3.{c,h}.
+#      If present, we compile it directly (no external package needed).
+#   2. Fall back to find_package / pkg-config for the system SQLite3 library.
+#
+# In both cases we expose:
+#   SWORDIGO_SQLITE3_INCLUDE_DIRS  — path(s) containing sqlite3.h
+#   SWORDIGO_SQLITE3_LIBRARIES     — link target(s)
+# ---------------------------------------------------------------------------
+set(_sw_sqlite3_bundle "${CMAKE_SOURCE_DIR}/third_party/sqlite3")
+if (EXISTS "${_sw_sqlite3_bundle}/sqlite3.c" AND EXISTS "${_sw_sqlite3_bundle}/sqlite3.h")
+    message(STATUS "SQLite3: using bundled amalgamation at ${_sw_sqlite3_bundle}")
+    add_library(sqlite3_bundled STATIC "${_sw_sqlite3_bundle}/sqlite3.c")
+    target_include_directories(sqlite3_bundled PUBLIC "${_sw_sqlite3_bundle}")
+    # Silence SQLite's self-promotion commentary and enable WAL extension
+    target_compile_definitions(sqlite3_bundled PRIVATE
+        SQLITE_OMIT_LOAD_EXTENSION
+        SQLITE_ENABLE_DESERIALIZE
+        SQLITE_THREADSAFE=1)
+    set(SWORDIGO_SQLITE3_INCLUDE_DIRS "${_sw_sqlite3_bundle}")
+    set(SWORDIGO_SQLITE3_LIBRARIES    sqlite3_bundled)
+    set(SWORDIGO_HAVE_SQLITE3 TRUE)
+else()
+    find_package(SQLite3 QUIET)
+    if (SQLite3_FOUND)
+        message(STATUS "SQLite3 ${SQLite3_VERSION} — system library")
+        set(SWORDIGO_SQLITE3_INCLUDE_DIRS ${SQLite3_INCLUDE_DIRS})
+        set(SWORDIGO_SQLITE3_LIBRARIES    SQLite::SQLite3)
+        set(SWORDIGO_HAVE_SQLITE3 TRUE)
+    elseif (NOT WIN32)
+        pkg_check_modules(SQLITE3_PKG QUIET sqlite3)
+        if (SQLITE3_PKG_FOUND)
+            message(STATUS "SQLite3 ${SQLITE3_PKG_VERSION} — pkg-config")
+            set(SWORDIGO_SQLITE3_INCLUDE_DIRS ${SQLITE3_PKG_INCLUDE_DIRS})
+            set(SWORDIGO_SQLITE3_LIBRARIES    ${SQLITE3_PKG_LIBRARIES})
+            set(SWORDIGO_HAVE_SQLITE3 TRUE)
+        else()
+            message(WARNING "SQLite3 not found — Memory Research catalog will be disabled")
+            set(SWORDIGO_HAVE_SQLITE3 FALSE)
+        endif()
+    else()
+        message(WARNING "SQLite3 not found — Memory Research catalog will be disabled")
+        set(SWORDIGO_HAVE_SQLITE3 FALSE)
+    endif()
+endif()

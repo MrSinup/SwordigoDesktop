@@ -42,6 +42,7 @@ extern "C" const char* sre_resolve_symbol(uint64_t addr);
 #include <map>
 #include <sstream>
 #include <mutex>
+#include <atomic>
 #include <sys/stat.h>
 #ifndef _WIN32
 #include <dirent.h>
@@ -5409,6 +5410,191 @@ static void bridge_alcGetCurrentContext(void* emu_ptr) {
 
 // --- Missing libc/Android bridges ---
 
+static void bridge_open(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint64_t path_g = emu->get_reg(0);
+    int flags = (int)emu->get_reg(1);
+    mode_t mode = (mode_t)emu->get_reg(2);
+    if (!path_g) {
+        emu->set_reg(0, (uint64_t)(int64_t)-1);
+        return;
+    }
+    const char* path = (const char*)(memory + path_g);
+
+    std::string resolved_path = path;
+    char resolved[512];
+    if (resolve_vfs_path(path, resolved, sizeof(resolved))) {
+        resolved_path = resolved;
+    } else if (path[0] != '/' && (strncmp(path, "resources/", 10) == 0 || strncmp(path, "assets/", 7) == 0)) {
+        resolved_path = std::string(get_assets_base_path()) + "/" + path;
+    }
+
+    bool is_write = (flags & (O_WRONLY | O_RDWR | O_CREAT));
+    if (is_write) {
+        try {
+            fs::create_directories(fs::path(resolved_path).parent_path());
+        } catch (...) {}
+    }
+
+    int fd = open(resolved_path.c_str(), flags, mode);
+
+    if (fd < 0 && !is_write) {
+        const char* rel = path;
+        if (strncmp(rel, "assets/resources/", 17) == 0)      rel += 17;
+        else if (strncmp(rel, "resources/", 10) == 0)        rel += 10;
+        else if (rel[0] == '/') {
+            const char* slash = strrchr(rel, '/');
+            if (slash) rel = slash + 1;
+        }
+        const char* base = get_assets_base_path();
+        if (base && base[0] && rel && rel[0]) {
+            char basepath[640];
+            snprintf(basepath, sizeof(basepath), "%s/resources/%s", base, rel);
+            fd = open(basepath, flags, mode);
+            if (fd >= 0) {
+                resolved_path = basepath;
+            }
+        }
+    }
+
+    if (fd >= 0) {
+        rgc_note_asset_open(resolved_path.c_str());
+    }
+
+    emu->set_reg(0, (uint64_t)(int64_t)fd);
+}
+
+// --- ARM64 LSE atomic helpers (libgcc runtime) ---
+static void bridge_aarch64_swp1_acq(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint8_t val = (uint8_t)emu->get_reg(0);
+    uint64_t ptr_g = emu->get_reg(1);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint8_t>*>(memory + ptr_g);
+        uint8_t old_val = target->exchange(val, std::memory_order_acquire);
+        emu->set_reg(0, old_val);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_swp1_rel(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint8_t val = (uint8_t)emu->get_reg(0);
+    uint64_t ptr_g = emu->get_reg(1);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint8_t>*>(memory + ptr_g);
+        uint8_t old_val = target->exchange(val, std::memory_order_release);
+        emu->set_reg(0, old_val);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_swp4_acq(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint32_t val = (uint32_t)emu->get_reg(0);
+    uint64_t ptr_g = emu->get_reg(1);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint32_t>*>(memory + ptr_g);
+        uint32_t old_val = target->exchange(val, std::memory_order_acquire);
+        emu->set_reg(0, old_val);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_swp8_acq(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint64_t val = emu->get_reg(0);
+    uint64_t ptr_g = emu->get_reg(1);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint64_t>*>(memory + ptr_g);
+        uint64_t old_val = target->exchange(val, std::memory_order_acquire);
+        emu->set_reg(0, old_val);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_ldadd4_relax(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint32_t val = (uint32_t)emu->get_reg(0);
+    uint64_t ptr_g = emu->get_reg(1);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint32_t>*>(memory + ptr_g);
+        uint32_t old_val = target->fetch_add(val, std::memory_order_relaxed);
+        emu->set_reg(0, old_val);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_ldadd8_relax(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint64_t val = emu->get_reg(0);
+    uint64_t ptr_g = emu->get_reg(1);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint64_t>*>(memory + ptr_g);
+        uint64_t old_val = target->fetch_add(val, std::memory_order_relaxed);
+        emu->set_reg(0, old_val);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_cas1_acq(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint8_t expected = (uint8_t)emu->get_reg(0);
+    uint8_t desired = (uint8_t)emu->get_reg(1);
+    uint64_t ptr_g = emu->get_reg(2);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint8_t>*>(memory + ptr_g);
+        target->compare_exchange_strong(expected, desired, std::memory_order_acquire);
+        emu->set_reg(0, expected);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_cas4_acq(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint32_t expected = (uint32_t)emu->get_reg(0);
+    uint32_t desired = (uint32_t)emu->get_reg(1);
+    uint64_t ptr_g = emu->get_reg(2);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint32_t>*>(memory + ptr_g);
+        target->compare_exchange_strong(expected, desired, std::memory_order_acquire);
+        emu->set_reg(0, expected);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_aarch64_cas8_acq(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint64_t expected = emu->get_reg(0);
+    uint64_t desired = emu->get_reg(1);
+    uint64_t ptr_g = emu->get_reg(2);
+    if (ptr_g != 0) {
+        auto* target = reinterpret_cast<std::atomic<uint64_t>*>(memory + ptr_g);
+        target->compare_exchange_strong(expected, desired, std::memory_order_acquire);
+        emu->set_reg(0, expected);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
 static void bridge_exit(void* emu_ptr) {
     IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
     int code = (int)emu->get_reg(0);
@@ -9589,10 +9775,59 @@ static void bridge_sre_resolve_symbol(void* emu_ptr) {
     }
 }
 
+extern "C" uint64_t elf_lookup_symbol(const char* name);
+extern JniBridge64 g_bridge_64;
+
+static void bridge_dlopen(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint64_t name_g = emu->get_reg(0);
+    const char* name = name_g ? (const char*)(memory + name_g) : nullptr;
+    std::cout << "[Bridge/dlopen] guest requested \"" << (name ? name : "NULL") << "\"\n";
+    // Return dummy handle 1 (representing process guest namespace)
+    emu->set_reg(0, 1);
+}
+
+static void bridge_dlsym(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    uint8_t* memory = emu->get_memory_base();
+    uint64_t sym_g = emu->get_reg(1);
+    const char* sym = sym_g ? (const char*)(memory + sym_g) : nullptr;
+    
+    if (sym && *sym) {
+        uint64_t addr = elf_lookup_symbol(sym);
+        if (!addr) {
+            addr = g_bridge_64.lookup_proc_address(sym);
+        }
+        if (addr) {
+            std::cout << "[Bridge/dlsym] symbol \"" << sym << "\" -> 0x" << std::hex << addr << std::dec << "\n";
+        } else {
+            std::cout << "[Bridge/dlsym] symbol \"" << sym << "\" -> NOT FOUND (0)\n";
+        }
+        emu->set_reg(0, addr);
+    } else {
+        emu->set_reg(0, 0);
+    }
+}
+
+static void bridge_dlclose(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    emu->set_reg(0, 0);
+}
+
+static void bridge_dlerror(void* emu_ptr) {
+    IEmulatorArm64* emu = (IEmulatorArm64*)emu_ptr;
+    emu->set_reg(0, 0);
+}
 
 void JniBridge64::init_standard_bridges() {
     register_handler("sre_resolve_address", bridge_sre_resolve_address);
     register_handler("sre_resolve_symbol", bridge_sre_resolve_symbol);
+
+    register_handler("dlopen", bridge_dlopen);
+    register_handler("dlsym", bridge_dlsym);
+    register_handler("dlclose", bridge_dlclose);
+    register_handler("dlerror", bridge_dlerror);
 
     register_handler("malloc", bridge_malloc);
     register_handler("calloc", bridge_calloc);
@@ -9937,6 +10172,41 @@ void JniBridge64::init_standard_bridges() {
 
     // libc / Android
     register_handler("exit", bridge_exit);
+    register_handler("open", bridge_open);
+    register_handler("open64", bridge_open);
+
+    // ARM64 LSE atomic helpers
+    register_handler("__aarch64_swp1_acq", bridge_aarch64_swp1_acq);
+    register_handler("__aarch64_swp1_rel", bridge_aarch64_swp1_rel);
+    register_handler("__aarch64_swp1_acq_rel", bridge_aarch64_swp1_acq);
+    register_handler("__aarch64_swp1_relax", bridge_aarch64_swp1_acq);
+    register_handler("__aarch64_swp4_acq", bridge_aarch64_swp4_acq);
+    register_handler("__aarch64_swp4_rel", bridge_aarch64_swp4_acq);
+    register_handler("__aarch64_swp8_acq", bridge_aarch64_swp8_acq);
+    register_handler("__aarch64_swp8_rel", bridge_aarch64_swp8_acq);
+
+    register_handler("__aarch64_ldadd4_relax", bridge_aarch64_ldadd4_relax);
+    register_handler("__aarch64_ldadd4_acq", bridge_aarch64_ldadd4_relax);
+    register_handler("__aarch64_ldadd4_rel", bridge_aarch64_ldadd4_relax);
+    register_handler("__aarch64_ldadd4_acq_rel", bridge_aarch64_ldadd4_relax);
+    register_handler("__aarch64_ldadd8_relax", bridge_aarch64_ldadd8_relax);
+    register_handler("__aarch64_ldadd8_acq", bridge_aarch64_ldadd8_relax);
+    register_handler("__aarch64_ldadd8_rel", bridge_aarch64_ldadd8_relax);
+    register_handler("__aarch64_ldadd8_acq_rel", bridge_aarch64_ldadd8_relax);
+
+    register_handler("__aarch64_cas1_acq", bridge_aarch64_cas1_acq);
+    register_handler("__aarch64_cas1_rel", bridge_aarch64_cas1_acq);
+    register_handler("__aarch64_cas1_acq_rel", bridge_aarch64_cas1_acq);
+    register_handler("__aarch64_cas1_relax", bridge_aarch64_cas1_acq);
+    register_handler("__aarch64_cas4_acq", bridge_aarch64_cas4_acq);
+    register_handler("__aarch64_cas4_rel", bridge_aarch64_cas4_acq);
+    register_handler("__aarch64_cas4_acq_rel", bridge_aarch64_cas4_acq);
+    register_handler("__aarch64_cas4_relax", bridge_aarch64_cas4_acq);
+    register_handler("__aarch64_cas8_acq", bridge_aarch64_cas8_acq);
+    register_handler("__aarch64_cas8_rel", bridge_aarch64_cas8_acq);
+    register_handler("__aarch64_cas8_acq_rel", bridge_aarch64_cas8_acq);
+    register_handler("__aarch64_cas8_relax", bridge_aarch64_cas8_acq);
+
     register_handler("read", bridge_read);
     register_handler("write", bridge_write);
     register_handler("writev", bridge_writev);

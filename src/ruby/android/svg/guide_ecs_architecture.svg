@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 220" width="100%" height="100%">
+  <defs>
+    <linearGradient id="ecsBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#190B14" />
+      <stop offset="100%" stop-color="#111827" />
+    </linearGradient>
+    <radialGradient id="ecsGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#F43F5E" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#190B14" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="400" height="220" rx="14" fill="url(#ecsBg)" />
+  <circle cx="200" cy="110" r="95" fill="url(#ecsGlow)" />
+
+  <!-- Center Entity Archetype Core -->
+  <g transform="translate(150, 70)">
+    <circle cx="50" cy="40" r="34" fill="#881337" stroke="#F43F5E" stroke-width="2" />
+    <text x="32" y="37" fill="#FFF" font-family="monospace" font-size="11" font-weight="bold">ENTITY</text>
+    <text x="34" y="50" fill="#FDA4AF" font-family="monospace" font-size="8">ID: 101</text>
+  </g>
+
+  <!-- Top-Left Component: Health -->
+  <g transform="translate(30, 25)">
+    <rect x="0" y="0" width="105" height="30" rx="6" fill="#1E293B" stroke="#EF4444" stroke-width="1.2" />
+    <text x="10" y="19" fill="#FCA5A5" font-family="monospace" font-size="10">HealthComponent</text>
+    <line x1="105" y1="15" x2="165" y2="85" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="3,3" />
+  </g>
+
+  <!-- Bottom-Left Component: Physics -->
+  <g transform="translate(30, 135)">
+    <rect x="0" y="0" width="105" height="30" rx="6" fill="#1E293B" stroke="#3B82F6" stroke-width="1.2" />
+    <text x="10" y="19" fill="#93C5FD" font-family="monospace" font-size="10">PhysicsComponent</text>
+    <line x1="105" y1="15" x2="165" y2="125" stroke="#3B82F6" stroke-width="1.5" stroke-dasharray="3,3" />
+  </g>
+
+  <!-- Top-Right Component: Model -->
+  <g transform="translate(265, 25)">
+    <rect x="0" y="0" width="105" height="30" rx="6" fill="#1E293B" stroke="#10B981" stroke-width="1.2" />
+    <text x="12" y="19" fill="#6EE7B7" font-family="monospace" font-size="10">ModelComponent</text>
+    <line x1="0" y1="15" x2="-35" y2="85" stroke="#10B981" stroke-width="1.5" stroke-dasharray="3,3" />
+  </g>
+
+  <!-- Bottom-Right Component: Program (Lua) -->
+  <g transform="translate(265, 135)">
+    <rect x="0" y="0" width="105" height="30" rx="6" fill="#1E293B" stroke="#F59E0B" stroke-width="1.2" />
+    <text x="10" y="19" fill="#FCD34D" font-family="monospace" font-size="10">ProgramComponent</text>
+    <line x1="0" y1="15" x2="-35" y2="125" stroke="#F59E0B" stroke-width="1.5" stroke-dasharray="3,3" />
+  </g>
+
+  <!-- Footer Tag -->
+  <g font-family="monospace" font-size="10" fill="#94A3B8">
+    <rect x="135" y="180" width="130" height="22" rx="6" fill="#0F172A" stroke="#334155" stroke-width="1" />
+    <text x="145" y="195" fill="#FDA4AF" font-weight="bold">76 CORE COMPONENTS</text>
+  </g>
+</svg>

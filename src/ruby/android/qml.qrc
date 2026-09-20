@@ -1,0 +1,60 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/qmldir</file>
+        <file>qml/Theme.qml</file>
+        <file>qml/Icons.qml</file>
+        <file>qml/Main.qml</file>
+
+        <file>qml/components/Icon.qml</file>
+        <file>qml/components/IconButton.qml</file>
+        <file>qml/components/TopBar.qml</file>
+        <file>qml/components/SectionCard.qml</file>
+        <file>qml/components/Chip.qml</file>
+        <file>qml/components/ActionTile.qml</file>
+        <file>qml/components/SettingRow.qml</file>
+        <file>qml/components/MenuRow.qml</file>
+        <file>qml/components/ConfirmDialog.qml</file>
+        <file>qml/components/TextInputDialog.qml</file>
+        <file>qml/components/FieldLabel.qml</file>
+        <file>qml/components/ThemedField.qml</file>
+        <file>qml/components/KeypadField.qml</file>
+        <file>qml/components/NumericKeypad.qml</file>
+        <file>qml/components/PrimaryButton.qml</file>
+        <file>qml/components/StatusLine.qml</file>
+        <file>qml/components/NavPad.qml</file>
+        <file>qml/components/GizmoPad.qml</file>
+        <file>qml/components/HierarchyDrawer.qml</file>
+        <file>qml/components/InspectorPanel.qml</file>
+        <file>qml/components/OrientationGate.qml</file>
+        <file>qml/components/SceneLoadingOverlay.qml</file>
+        <file>qml/components/NewFileDialog.qml</file>
+        <file>qml/components/PodConvertDialog.qml</file>
+        <file>qml/components/IdentityHeader.qml</file>
+        <file>qml/components/GuideCard.qml</file>
+        <file>qml/components/GuideReaderView.qml</file>
+        <file>qml/components/GroundMeshStudioView.qml</file>
+        <file>svg/banner_hero_modding.svg</file>
+        <file>svg/guide_pod_models.svg</file>
+        <file>svg/guide_scl_scenes.svg</file>
+        <file>svg/guide_pvr_textures.svg</file>
+        <file>svg/guide_lua_scripts.svg</file>
+        <file>svg/guide_ecs_architecture.svg</file>
+
+        <file>qml/components/BottomNavBar.qml</file>
+        <file>qml/components/BreadcrumbHeader.qml</file>
+        <file>qml/components/FileRowDelegate.qml</file>
+        <file>qml/components/SpeedDialFab.qml</file>
+        <file>qml/components/BottomSheet.qml</file>
+        <file>qml/components/KeyboardAccessoryBar.qml</file>
+        <file>qml/components/GlassmorphicOverlay.qml</file>
+
+        <file>qml/views/HomeView.qml</file>
+        <file>qml/views/FilesView.qml</file>
+        <file>qml/views/TextureViewerView.qml</file>
+        <file>qml/views/AudioViewerView.qml</file>
+        <file>qml/views/SceneViewportView.qml</file>
+        <file>qml/views/CodeEditorView.qml</file>
+        <file>qml/views/ToolsView.qml</file>
+        <file>qml/views/SettingsView.qml</file>
+    </qresource>
+</RCC>

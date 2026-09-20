@@ -5820,6 +5820,14 @@ void sre13_inject_rbmath(lua_State* L) {
         return;
     }
 
+    lua_getfield(L, LUA_GLOBALSINDEX, "setmetatable");
+    int has_setmetatable = (lua_type(L, -1) == LUA_TFUNCTION);
+    lua_pop(L, 1);
+    if (!has_setmetatable) {
+        lua_settop(L, top);
+        return;
+    }
+
     if (luaL_loadbuffer(L, (const char*)s_rbmath_lua, s_rbmath_lua_len, "rbmath.lua") == 0) {
         if (lua_pcall(L, 0, 0, 0) != 0) {
             const char* err = lua_tostring(L, -1);

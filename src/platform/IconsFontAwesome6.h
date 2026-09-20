@@ -122,4 +122,9 @@
 #define ICON_FA_MAP              "\xef\x89\xb9"  // U+F279
 #define ICON_FA_LOCATION_DOT     "\xef\x8f\x85"  // U+F3C5
 #define ICON_FA_MAP_LOCATION_DOT "\xef\x96\x9f"  // U+F59F
+#define ICON_FA_FLASK            "\xef\x83\x83"  // U+F0C3
+#define ICON_FA_BOOK_OPEN        "\xef\x94\x98"  // U+F518
+#define ICON_FA_CROSSHAIRS       "\xef\x81\x9b"  // U+F05B
+#define ICON_FA_DATABASE         "\xef\x87\x80"  // U+F1C0
+#define ICON_FA_CIRCLE_DOT       "\xef\x86\x92"  // U+F192
 

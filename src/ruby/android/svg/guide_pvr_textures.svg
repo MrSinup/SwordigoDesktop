@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 220" width="100%" height="100%">
+  <defs>
+    <linearGradient id="pvrBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E102E" />
+      <stop offset="100%" stop-color="#0E071A" />
+    </linearGradient>
+    <radialGradient id="pvrGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#C084FC" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#1E102E" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="400" height="220" rx="14" fill="url(#pvrBg)" />
+  <circle cx="200" cy="110" r="95" fill="url(#pvrGlow)" />
+
+  <!-- Isometric Texture Atlas Grid (Power-of-Two 512x512) -->
+  <g transform="translate(130, 25)">
+    <!-- Base Board -->
+    <polygon points="70,10 140,50 70,90 0,50" fill="#2E1065" stroke="#7C3AED" stroke-width="1.8" />
+    
+    <!-- 4 Sub-blocks inside atlas -->
+    <polygon points="70,10 105,30 70,50 35,30" fill="#9333EA" fill-opacity="0.3" stroke="#A855F7" stroke-width="1" />
+    <polygon points="105,30 140,50 105,70 70,50" fill="#7E22CE" fill-opacity="0.4" stroke="#C084FC" stroke-width="1" />
+    <polygon points="35,30 70,50 35,70 0,50" fill="#6B21A8" fill-opacity="0.35" stroke="#A855F7" stroke-width="1" />
+    <polygon points="70,50 105,70 70,90 35,70" fill="#581C87" fill-opacity="0.5" stroke="#E9D5FF" stroke-width="1" />
+
+    <!-- UV Orientation Axes -->
+    <g transform="translate(-10, 45)">
+      <line x1="10" y1="20" x2="10" y2="-15" stroke="#38BDF8" stroke-width="2" />
+      <polygon points="7,-15 10,-22 13,-15" fill="#38BDF8" />
+      <text x="-8" y="-2" fill="#38BDF8" font-family="monospace" font-size="9" font-weight="bold">V (Y)</text>
+
+      <line x1="10" y1="20" x2="45" y2="40" stroke="#F43F5E" stroke-width="2" />
+      <polygon points="45,35 52,44 42,43" fill="#F43F5E" />
+      <text x="50" y="55" fill="#F43F5E" font-family="monospace" font-size="9" font-weight="bold">U (X)</text>
+    </g>
+
+    <!-- Block Compression Zoom -->
+    <g transform="translate(10, 105)">
+      <rect x="0" y="0" width="120" height="24" rx="4" fill="#3B0764" stroke="#A855F7" stroke-width="1" />
+      <text x="12" y="16" fill="#F3E8FF" font-family="monospace" font-size="10">4bpp 4x4 Block</text>
+    </g>
+  </g>
+
+  <!-- Side Badges -->
+  <g font-family="monospace" font-size="10" fill="#94A3B8">
+    <rect x="25" y="25" width="85" height="22" rx="6" fill="#2E1065" stroke="#7C3AED" stroke-width="1" />
+    <text x="35" y="40" fill="#C084FC" font-weight="bold">PVRTC 4B</text>
+
+    <rect x="290" y="25" width="85" height="22" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1" />
+    <text x="303" y="40" fill="#38BDF8" font-weight="bold">ETC1 RGB</text>
+
+    <text x="25" y="195" fill="#A855F7" font-size="9">RULE: POWER-OF-TWO (POT)</text>
+    <text x="250" y="195" fill="#38BDF8" font-size="9">OPENGL UV FLIP: V=1-Y</text>
+  </g>
+</svg>

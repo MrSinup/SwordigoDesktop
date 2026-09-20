@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 
 // Resolve a relative path to the game data directory.
 // Priority: 
@@ -27,7 +28,10 @@ bool ensure_user_data();
 
 #ifdef __cplusplus
 void set_active_mod_name(const std::string& name);
+std::string get_active_mod_name();
 void set_active_profile_id(const std::string& id);
+std::string get_active_profile_id();
+std::vector<std::string> get_loaded_guest_mod_libs();
 #endif
 
 #ifdef __cplusplus

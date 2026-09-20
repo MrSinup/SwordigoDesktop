@@ -302,11 +302,41 @@ void sre13_ensure_injected(lua_State* L) {
     if (!L) return;
     int top = lua_gettop(L);
 
+    /* Open standard Lua 5.1 base library if not present */
+    lua_getfield(L, LUA_GLOBALSINDEX, "setmetatable");
+    if (lua_type(L, -1) == LUA_TNIL) {
+        lua_settop(L, top);
+        luaopen_base(L);
+        lua_settop(L, top);
+    } else {
+        lua_settop(L, top);
+    }
+
     /* Open standard Lua 5.1 math library if not present */
     lua_getfield(L, LUA_GLOBALSINDEX, "math");
     if (lua_type(L, -1) == LUA_TNIL) {
         lua_settop(L, top);
         luaopen_math(L);
+        lua_settop(L, top);
+    } else {
+        lua_settop(L, top);
+    }
+
+    /* Open standard Lua 5.1 table library if not present */
+    lua_getfield(L, LUA_GLOBALSINDEX, "table");
+    if (lua_type(L, -1) == LUA_TNIL) {
+        lua_settop(L, top);
+        luaopen_table(L);
+        lua_settop(L, top);
+    } else {
+        lua_settop(L, top);
+    }
+
+    /* Open standard Lua 5.1 debug library if not present */
+    lua_getfield(L, LUA_GLOBALSINDEX, "debug");
+    if (lua_type(L, -1) == LUA_TNIL) {
+        lua_settop(L, top);
+        luaopen_debug(L);
         lua_settop(L, top);
     } else {
         lua_settop(L, top);

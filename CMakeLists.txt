@@ -225,6 +225,123 @@ if (BUILD_TESTING)
     target_link_libraries(scene_scale_payload_test PRIVATE swpod swcore)
     add_test(NAME scene_scale_payload_test COMMAND scene_scale_payload_test)
 
+    # Memory Research catalog schema contract.  The embedded recovery DB keys
+    # its tables by TEXT ids with snake_case columns while RecoveryCatalog
+    # exposes dense int ids; a mismatch makes every getter return an empty
+    # vector silently (blank Catalog tab).  Pins the struct/field/relationship/
+    # vtable/proto mapping, the GameSceneController offsets the Live Inspector
+    # reads, and the shipped row counts.  Pure RAM test, no Qt/GL.
+    if (SWORDIGO_HAVE_SQLITE3)
+        add_executable(recovery_catalog_test tests/recovery_catalog_test.cpp
+            ${SRC_DIR}/game/research/recovery_catalog.cpp
+            ${SRC_DIR}/game/research/embedded_recovery_db.cpp)
+        target_include_directories(recovery_catalog_test PRIVATE
+            ${SRC_DIR} ${SWORDIGO_SQLITE3_INCLUDE_DIRS})
+        target_link_libraries(recovery_catalog_test PRIVATE
+            ${SWORDIGO_SQLITE3_LIBRARIES} Threads::Threads)
+        add_test(NAME recovery_catalog_test COMMAND recovery_catalog_test)
+    endif()
+
+    # Object classification address-space contract.  A live object's vptr is a
+    # relocated VA (libswordigo is mapped at 0x1000000) while every known-vtable
+    # key is a module-relative RVA; classify() used to compare them directly, so
+    # nothing could ever be classified.  Also covers the RTTI strategy, which
+    # classifies an object from its type_info name with no table entry at all.
+    # Pure RAM test (synthetic guest memory), no Qt/GL.
+    if (SWORDIGO_HAVE_SQLITE3)
+        add_executable(vtable_classifier_test tests/vtable_classifier_test.cpp
+            ${SRC_DIR}/game/research/vtable_classifier.cpp
+            ${SRC_DIR}/game/research/recovery_catalog.cpp
+            ${SRC_DIR}/game/research/embedded_recovery_db.cpp)
+        target_include_directories(vtable_classifier_test PRIVATE
+            ${SRC_DIR} ${SWORDIGO_SQLITE3_INCLUDE_DIRS})
+        target_link_libraries(vtable_classifier_test PRIVATE
+            ${SWORDIGO_SQLITE3_LIBRARIES} Threads::Threads)
+        add_test(NAME vtable_classifier_test COMMAND vtable_classifier_test)
+    endif()
+
+    # Deterministic memory identity for the live inspector.  Identity must never
+    # depend on a runtime address, so it is derived only from static facts
+    # (build + module + kind + container + offset + type): two separate boots
+    # must produce the identical base name, while the live *instances* of one
+    # static site stay distinguishable.  Covers the VAR naming rules, stack-local
+    # naming, provenance-anchored vs session tags, multi-instance handling and
+    # the persistence store.  Pure RAM test, no Qt/GL/SQLite.
+    add_executable(mem_identity_test tests/mem_identity_test.cpp
+        ${SRC_DIR}/game/research/mem_identity.cpp)
+    target_include_directories(mem_identity_test PRIVATE ${SRC_DIR})
+    target_link_libraries(mem_identity_test PRIVATE Threads::Threads)
+    add_test(NAME mem_identity_test COMMAND mem_identity_test)
+
+    # The loaded image's dynamic symbol table, used as static-site evidence.
+    # Pins the mangled-name transform against real symbols copied out of the
+    # shipped libswordigo.so 1.4.13 .dynsym, the floor/ceil lookup semantics
+    # (including that an address *between* symbols is never claimed as belonging
+    # to one), the raw Elf64/Elf32 array build, and — most importantly — that
+    # symbol evidence cannot move any identity.  Pure RAM test.
+    add_executable(elf_symbols_test tests/elf_symbols_test.cpp
+        ${SRC_DIR}/game/research/elf_symbols.cpp
+        ${SRC_DIR}/game/research/mem_identity.cpp)
+    target_include_directories(elf_symbols_test PRIVATE ${SRC_DIR})
+    target_link_libraries(elf_symbols_test PRIVATE Threads::Threads)
+    add_test(NAME elf_symbols_test COMMAND elf_symbols_test)
+
+    # Sections — the coarse half of "where is this address?".  Needed because a
+    # symbol table has a hole below its lowest symbol, and that hole is exactly
+    # where a module-scoped scan floods: measured on the shipped image, 8 of 12
+    # hits for a common 4-byte value were inside .dynsym and .rela.plt.  Pins the
+    # classification, the containment rules (a zero-size section matches nothing),
+    # the metadata ranges a scan can skip, and the nameless-image fallback.
+    add_executable(elf_sections_test tests/elf_sections_test.cpp
+        ${SRC_DIR}/game/research/elf_sections.cpp)
+    target_include_directories(elf_sections_test PRIVATE ${SRC_DIR})
+    target_link_libraries(elf_sections_test PRIVATE Threads::Threads)
+    add_test(NAME elf_sections_test COMMAND elf_sections_test)
+
+    # The scan engine (Cheat Engine / GameGuardian class) and the identity-routed
+    # address list.  Pins the whole scan matrix (exact/changed/increased-by/
+    # between/AoB/string/unknown-initial/max-results/alignment), the bounds and
+    # field-spill write rules, freeze-from-tick, rename-preserves-identity, and
+    # the categorisation filters.  Runs over a synthetic flat guest buffer.
+    add_executable(mem_scanner_test tests/mem_scanner_test.cpp
+        ${SRC_DIR}/game/research/mem_scanner.cpp
+        ${SRC_DIR}/game/research/mem_address_list.cpp
+        ${SRC_DIR}/game/research/mem_identity.cpp)
+    target_include_directories(mem_scanner_test PRIVATE ${SRC_DIR})
+    target_link_libraries(mem_scanner_test PRIVATE Threads::Threads)
+    add_test(NAME mem_scanner_test COMMAND mem_scanner_test)
+
+    # The Live Object Map (static->runtime->object->struct, with pointer
+    # re-resolution), the AArch64 access decoder + access trace (instruction
+    # evidence, never proof), and the .swordfare workspace (research survives a
+    # crash because it is keyed by identity, not by address).  Runs over a
+    # synthetic guest plus a temp directory.
+    add_executable(live_memory_engine_test tests/live_memory_engine_test.cpp
+        ${SRC_DIR}/game/research/live_object_map.cpp
+        ${SRC_DIR}/game/research/mem_access_trace.cpp
+        ${SRC_DIR}/game/research/research_workspace.cpp
+        ${SRC_DIR}/game/research/mem_identity.cpp
+        ${SRC_DIR}/game/research/mem_scanner.cpp
+        ${SRC_DIR}/game/research/mem_address_list.cpp)
+    target_include_directories(live_memory_engine_test PRIVATE ${SRC_DIR})
+    target_link_libraries(live_memory_engine_test PRIVATE Threads::Threads)
+    add_test(NAME live_memory_engine_test COMMAND live_memory_engine_test)
+
+    # The unclaimed memory explorer: ranks the memory NOT covered by any known
+    # field by how it moves relative to scene changes and object rebuilds.  Pins
+    # the properties that make it trustworthy — claimed ranges are skipped, a
+    # pass is bounded so it can never block a frame, static memory is never
+    # tracked, scene-correlated movers outrank mere churn, adjacent movers are
+    # reported as one probable struct, and a lead is never presented as proven.
+    add_executable(unclaimed_explorer_test tests/unclaimed_explorer_test.cpp
+        ${SRC_DIR}/game/research/unclaimed_explorer.cpp
+        ${SRC_DIR}/game/research/live_object_map.cpp
+        ${SRC_DIR}/game/research/mem_identity.cpp
+        ${SRC_DIR}/game/research/mem_scanner.cpp)
+    target_include_directories(unclaimed_explorer_test PRIVATE ${SRC_DIR})
+    target_link_libraries(unclaimed_explorer_test PRIVATE Threads::Threads)
+    add_test(NAME unclaimed_explorer_test COMMAND unclaimed_explorer_test)
+
     # Schema-driven component field editors (master TODO 2.1): the inspector's
     # field-editor path (scene_component_fields + scene_set_component_field)
     # must round-trip every wire type — VARINT, I32 float, printable LEN,

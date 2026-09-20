@@ -1581,9 +1581,11 @@ GizmoResult RubyGizmo::draw(Mode mode,
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glDisable(GL_CULL_FACE);
+#if !defined(SWORDIGO_MOBILE_PORT) && !defined(__ANDROID__)
     glEnable(GL_LINE_SMOOTH);
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
     if (m_gl_ok) glDisable(GL_LIGHTING);  // keep compat pipeline quiet
+#endif
 
     reset_geometry();
     int hot = m_dragging ? m_drag_axis : m_hover_axis;
@@ -1603,9 +1605,11 @@ GizmoResult RubyGizmo::draw(Mode mode,
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
+#if !defined(SWORDIGO_MOBILE_PORT) && !defined(__ANDROID__)
     glDisable(GL_LINE_SMOOTH);
     glEnable(GL_LIGHTING);
     glColor3f(1.0f, 1.0f, 1.0f);
+#endif
 
     return result;
 }

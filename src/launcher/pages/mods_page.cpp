@@ -250,6 +250,11 @@ void ModsPage::refresh_mods() {
     m_mods = modman::list_mods(get_mods_dir());
 
     if (m_mods.empty()) {
+        LauncherConfig lcfg = launcher_config_load();
+        if (!lcfg.mod_load_order.empty()) {
+            lcfg.mod_load_order.clear();
+            launcher_config_save(lcfg);
+        }
         auto* item = new QListWidgetItem("No mods installed. Click '+ Install Mod (.zip)' or download from Mod Browser.");
         item->setFlags(Qt::NoItemFlags);
         m_list->addItem(item);
@@ -263,6 +268,46 @@ void ModsPage::refresh_mods() {
         m_txt_desc->setPlainText("No mods installed. You can install mods via zip packages or through the online Mod Browser.");
         return;
     }
+
+    // Synchronize with LauncherConfig::mod_load_order
+    LauncherConfig lcfg = launcher_config_load();
+    std::vector<std::string> valid_order;
+    for (const auto& id : lcfg.mod_load_order) {
+        for (const auto& m : m_mods) {
+            if (m.id == id && m.enabled) {
+                if (std::find(valid_order.begin(), valid_order.end(), id) == valid_order.end()) {
+                    valid_order.push_back(id);
+                }
+                break;
+            }
+        }
+    }
+    for (const auto& m : m_mods) {
+        if (m.enabled) {
+            if (std::find(valid_order.begin(), valid_order.end(), m.id) == valid_order.end()) {
+                valid_order.push_back(m.id);
+            }
+        }
+    }
+    lcfg.mod_load_order = valid_order;
+    launcher_config_save(lcfg);
+
+    // Sort m_mods so enabled mods appear in load_order priority, followed by disabled mods
+    std::vector<modman::ModMeta> sorted_mods;
+    for (const auto& id : valid_order) {
+        for (const auto& m : m_mods) {
+            if (m.id == id) {
+                sorted_mods.push_back(m);
+                break;
+            }
+        }
+    }
+    for (const auto& m : m_mods) {
+        if (!m.enabled) {
+            sorted_mods.push_back(m);
+        }
+    }
+    m_mods = sorted_mods;
 
     m_btn_toggle->setEnabled(true);
     m_btn_delete->setEnabled(true);
@@ -325,8 +370,19 @@ void ModsPage::on_selection_changed(int row) {
 void ModsPage::on_toggle_mod(int row) {
     if (row < 0 || row >= static_cast<int>(m_mods.size())) return;
     auto& m = m_mods[row];
-    modman::set_mod_enabled(m.dir_path, !m.enabled);
+    bool will_enable = !m.enabled;
+    modman::set_mod_enabled(m.dir_path, will_enable);
+    LauncherConfig lcfg = launcher_config_load();
+    if (will_enable) {
+        launcher_config_enable_mod(lcfg, m.id);
+    } else {
+        launcher_config_disable_mod(lcfg, m.id);
+    }
+    launcher_config_save(lcfg);
     refresh_mods();
+    if (row < static_cast<int>(m_mods.size())) {
+        m_list->setCurrentRow(row);
+    }
 }
 
 void ModsPage::on_delete_mod_clicked() {
@@ -342,6 +398,9 @@ void ModsPage::on_delete_mod_clicked() {
     );
 
     if (reply == QMessageBox::Yes) {
+        LauncherConfig lcfg = launcher_config_load();
+        launcher_config_disable_mod(lcfg, m.id);
+        launcher_config_save(lcfg);
         modman::delete_mod(m);
         refresh_mods();
     }
@@ -350,7 +409,14 @@ void ModsPage::on_delete_mod_clicked() {
 void ModsPage::on_move_up_clicked() {
     int row = m_list->currentRow();
     if (row <= 0 || row >= static_cast<int>(m_mods.size())) return;
+    if (!m_mods[row].enabled || !m_mods[row - 1].enabled) return;
     std::swap(m_mods[row], m_mods[row - 1]);
+    LauncherConfig lcfg = launcher_config_load();
+    lcfg.mod_load_order.clear();
+    for (const auto& m : m_mods) {
+        if (m.enabled) lcfg.mod_load_order.push_back(m.id);
+    }
+    launcher_config_save(lcfg);
     refresh_mods();
     m_list->setCurrentRow(row - 1);
 }
@@ -358,7 +424,14 @@ void ModsPage::on_move_up_clicked() {
 void ModsPage::on_move_down_clicked() {
     int row = m_list->currentRow();
     if (row < 0 || row >= static_cast<int>(m_mods.size()) - 1) return;
+    if (!m_mods[row].enabled || !m_mods[row + 1].enabled) return;
     std::swap(m_mods[row], m_mods[row + 1]);
+    LauncherConfig lcfg = launcher_config_load();
+    lcfg.mod_load_order.clear();
+    for (const auto& m : m_mods) {
+        if (m.enabled) lcfg.mod_load_order.push_back(m.id);
+    }
+    launcher_config_save(lcfg);
     refresh_mods();
     m_list->setCurrentRow(row + 1);
 }

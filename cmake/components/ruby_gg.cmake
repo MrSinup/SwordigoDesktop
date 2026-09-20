@@ -258,4 +258,110 @@ if (SWORDIGO_BUILD_RUBY_GG)
         Qt6::Gui
         Qt6::Widgets
     )
+
+    # ========================================================================
+    # Component: ruby_gg_mobile — Modular Mobile-First Ruby GG Port (Qt6)
+    # ========================================================================
+    set(RUBY_GG_MOBILE_SOURCES
+        ${SRC_DIR}/ruby/android/main_mobile.cpp
+        ${SRC_DIR}/ruby/android/mobile_main_window.cpp
+        ${SRC_DIR}/ruby/android/mobile_viewport_widget.cpp
+        ${SRC_DIR}/ruby/android/mobile_dpad_widget.cpp
+        ${SRC_DIR}/ruby/android/mobile_hierarchy_drawer.cpp
+        ${SRC_DIR}/ruby/android/mobile_inspector_drawer.cpp
+        ${SRC_DIR}/ruby/android/mobile_code_editor.cpp
+        ${SRC_DIR}/ruby/android/mobile_asset_browser.cpp
+        ${SRC_DIR}/ruby/android/gles_shaders.cpp
+        ${SRC_DIR}/ruby/viewport/ruby_gizmo.cpp
+        ${SRC_DIR}/ruby/viewport/ruby_picking.cpp
+        ${SRC_DIR}/ruby/viewport/camera_bounds_gizmo.cpp
+        ${SRC_DIR}/ruby/core/project_context.cpp
+        ${SRC_DIR}/tools/pod_loader.cpp
+        ${SRC_DIR}/tools/pod_writer.cpp
+        ${SRC_DIR}/tools/pod_convert.cpp
+        ${SRC_DIR}/tools/pod_stamp.cpp
+        ${SRC_DIR}/tools/image_decode.cpp
+        ${SRC_DIR}/tools/scene_schemas.cpp
+        ${SRC_DIR}/tools/scene_loader.cpp
+        ${SRC_DIR}/tools/filerift.cpp
+        ${SRC_DIR}/tools/boulder.cpp
+        ${SRC_DIR}/tools/boulderx.cpp
+        ${SRC_DIR}/tools/rubymesh.cpp
+        ${SRC_DIR}/tools/scene_asset_resolver.cpp
+        ${SRC_DIR}/tools/scene_entity.cpp
+        ${SRC_DIR}/tools/scene_physics.cpp
+        ${SRC_DIR}/tools/scene_collision.cpp
+        ${SRC_DIR}/tools/scene_terrain.cpp
+        ${SRC_DIR}/tools/scene_lua.cpp
+        ${SRC_DIR}/tools/scene_game.cpp
+        ${SRC_DIR}/tools/scene_creator.cpp
+        ${SRC_DIR}/tools/scene_program.cpp
+        ${SRC_DIR}/tools/obj_loader.cpp
+        ${SRC_DIR}/tools/ani_loader.cpp
+        ${SRC_DIR}/tools/scn_loader.cpp
+        ${SRC_DIR}/tools/map_loader.cpp
+        ${SRC_DIR}/tools/gltf_export.cpp
+        ${SRC_DIR}/tools/gltf_import.cpp
+        ${SRC_DIR}/tools/gltf_bridge.cpp
+        ${SRC_DIR}/tools/fbx_import.cpp
+        ${SRC_DIR}/tools/ufbx/ufbx.c
+        ${SRC_DIR}/tools/tiny_gltf_v3.c
+        ${SRC_DIR}/stb/stb_image_write_impl.c
+        ${SRC_DIR}/platform/pvr_loader.cpp
+        ${SRC_DIR}/platform/pvrtc_decoder.cpp
+        ${SRC_DIR}/platform/astc_decoder.cpp
+        ${SRC_DIR}/platform/zip_archive.cpp
+        ${SRC_DIR}/platform/data_path.cpp
+        ${SRC_DIR}/platform/font_fallback.cpp
+        ${SRC_DIR}/platform/gdb_compat.cpp
+        ${SRC_DIR}/platform/io_thread.cpp
+        ${SRC_DIR}/platform/embedded_assets.cpp
+        ${SRC_DIR}/platform/os_external.cpp
+        ${SRC_DIR}/android/log.c
+        ${HOST_LUA_SRCS}
+    )
+
+    if (ANDROID)
+        add_library(ruby_gg_mobile SHARED ${RUBY_GG_MOBILE_SOURCES})
+    else()
+        add_executable(ruby_gg_mobile EXCLUDE_FROM_ALL ${RUBY_GG_MOBILE_SOURCES})
+    endif()
+
+    set_target_properties(ruby_gg_mobile PROPERTIES
+        EXCLUDE_FROM_ALL TRUE
+        AUTOMOC ON
+        AUTORCC ON
+        AUTOUIC ON
+    )
+    target_compile_definitions(ruby_gg_mobile PRIVATE
+        SWORDIGO_NO_IMGUI
+        SWORDIGO_MOBILE_PORT
+        BATCH_CONVERTER_NO_UI
+        "LUAI_FUNC=extern __attribute__((visibility(\"default\")))"
+    )
+    target_include_directories(ruby_gg_mobile PRIVATE
+        ${SRC_DIR}
+        ${SRC_DIR}/ruby
+        ${SRC_DIR}/ruby/android
+        ${SRC_DIR}/tools
+        ${SRC_DIR}/tools/ufbx
+        ${SRC_DIR}/stb
+        ${SRC_DIR}/platform
+        ${SRC_DIR}/sre/base/lua/src
+    )
+    target_link_libraries(ruby_gg_mobile PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::OpenGLWidgets
+        Qt6::Network
+        ZLIB::ZLIB
+        Threads::Threads
+        m
+    )
+    if (ANDROID)
+        target_link_libraries(ruby_gg_mobile PRIVATE GLESv3 EGL log android)
+    else()
+        target_link_libraries(ruby_gg_mobile PRIVATE OpenGL::GL)
+    endif()
 endif()

@@ -126,9 +126,19 @@ static FILE* try_mod_overlay(const char* filename) {
     struct dirent* de; FILE* f = NULL;
     while ((de = readdir(d)) != NULL) {
         if (de->d_name[0] == '.') continue;
-        char c[512]; snprintf(c, sizeof(c), "%s/%s/assets/%s", mods, de->d_name, filename);
+        char c[512];
+        /* 1. resources/<filename> */
+        snprintf(c, sizeof(c), "%s/%s/resources/%s", mods, de->d_name, filename);
         f = try_open(c);
-        if (f) { printf("[AssetMgr] MOD: %s -> %s\n", filename, c); break; }
+        if (f) { printf("[AssetMgr] MOD(res): %s -> %s\n", filename, c); break; }
+        /* 2. assets/<filename> */
+        snprintf(c, sizeof(c), "%s/%s/assets/%s", mods, de->d_name, filename);
+        f = try_open(c);
+        if (f) { printf("[AssetMgr] MOD(assets): %s -> %s\n", filename, c); break; }
+        /* 3. flat <filename> */
+        snprintf(c, sizeof(c), "%s/%s/%s", mods, de->d_name, filename);
+        f = try_open(c);
+        if (f) { printf("[AssetMgr] MOD(flat): %s -> %s\n", filename, c); break; }
     }
     closedir(d);
     return f;

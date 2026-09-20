@@ -5,6 +5,7 @@
 #include "pod_stamp.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -688,9 +689,11 @@ static PODMesh readMeshBlock(const uint8_t* data, size_t size, size_t& off) {
         // anything, so the GAME cannot load this — while this loader happily
         // falls back to an identity slot->bone mapping, which is exactly why
         // such a file looked fine in ruby_gg and broken in the game.  Say so.
-        static bool warned_missing_bone_batches = false;
-        if (!warned_missing_bone_batches) {
-            warned_missing_bone_batches = true;
+        // Atomic because pod_load() is now called from several loader threads at
+        // once.  A plain bool here would be a data race, benign in effect but not
+        // in the memory model.
+        static std::atomic<bool> warned_missing_bone_batches{false};
+        if (!warned_missing_bone_batches.exchange(true)) {
             std::fprintf(stderr,
                          "[POD] skinned mesh without a bone-batch table "
                          "(6015/6016/6018); the shipped runtime dereferences "

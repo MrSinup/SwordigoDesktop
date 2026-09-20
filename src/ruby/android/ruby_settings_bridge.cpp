@@ -1,0 +1,340 @@
+#include "ruby_settings_bridge.h"
+
+#include <QSettings>
+#include <QRandomGenerator>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+
+namespace ruby::android {
+static const char* s_names200[] = {
+
+    "Hiro", "Kane", "Rook", "Ash", "Milo",
+    "Ren", "Kai", "Noah", "Leo", "Niko",
+
+    "Ari", "Ezra", "Luca", "Finn", "Jude",
+    "Rowan", "Eli", "Theo", "Cole", "Nate",
+
+    "Sam", "Max", "Alex", "Jamie", "Ryan",
+    "Dylan", "Evan", "Owen", "Lucas", "Adam",
+
+    "Arin", "Rin", "Kiro", "Sora", "Yuki",
+    "Haru", "Akio", "Kenji", "Taro", "Shin",
+
+    "Mika", "Nori", "Riku", "Kota", "Aki",
+    "Rei", "Yuto", "Renji", "Hiroki", "Daichi",
+
+    "Raven", "Rook", "Ghost", "Shade", "Drift",
+    "Frost", "Ember", "Flint", "Wisp", "Echo",
+
+    "Moss", "Oak", "Pine", "Ashen", "Cinder",
+    "Rain", "Storm", "Dusk", "Dawn", "Vale",
+
+    "North", "West", "River", "Stone", "Cedar",
+    "Silver", "Grey", "Red", "Blue", "Gold",
+
+    "Wanderer", "Nomad", "Ranger", "Scout", "Rider",
+    "Keeper", "Hunter", "Seeker", "Traveler", "Drifter",
+
+    "Rookie", "Runner", "Climber", "Diver", "Builder",
+    "Miner", "Smith", "Farmer", "Fisher", "Merchant",
+
+    "OldFox", "YoungFox", "QuietOne", "NightOwl", "LoneWolf",
+    "WildCard", "LuckyOne", "LostBoy", "LastOne", "FirstTry",
+
+    "Pixel", "Byte", "Hex", "Cache", "Root",
+    "Stack", "Pointer", "Kernel", "Daemon", "Proxy",
+
+    "Null", "Void", "Zero", "One", "Seven",
+    "Delta", "Vector", "Matrix", "Static", "Signal",
+
+    "Cobalt", "Indigo", "Crimson", "Maroon", "Olive",
+    "Amber", "Jade", "Onyx", "Ivory", "Copper",
+
+    "Atlas", "Orion", "Nova", "Cosmo", "Vega",
+    "Sol", "Luna", "Aster", "Comet", "Polaris",
+
+    "HiroK", "KaneR", "Rook7", "Ashen", "Renko",
+    "Kairo", "NikoR", "Riven", "Kael", "Arlo",
+
+    "RedFox", "GreyFox", "NightFox", "BlackBird", "BlueJay",
+    "RavenK", "LittleRook", "WildRin", "StoneFox", "RiverRat",
+
+    "Ace", "ZeroCool", "Sidekick", "Wildcard", "Outsider",
+    "Backpacker", "Freebird", "Daywalker", "Nightshift", "Waypoint",
+
+    "Copperhead", "Ironwood", "Blackwood", "Redwood", "Greyrock",
+    "Stonewall", "Highland", "Lowland", "Crosswind", "Longshot",
+
+    "Marble", "Clover", "Rusty", "Lucky", "Dusty",
+    "Sunny", "Cloudy", "Sleepy", "Mellow", "Bramble",
+
+    "Casual", "Offline", "Unknown", "Nobody", "Somebody",
+    "PlayerOne", "PlayerTwo", "Guest", "Visitor", "NewGuy",
+
+    "HiroPrime", "Kiro", "Rook", "Ash", "Ren",
+    "Kai", "Milo", "Sora", "Rin", "Kane"
+
+};
+
+RubySettingsBridge::RubySettingsBridge(QObject* parent)
+    : QObject(parent)
+{
+    // Ensure initial default username is set if none exists
+    QSettings s;
+    if (s.value(QStringLiteral("ruby_mobile/user_name")).toString().trimmed().isEmpty()) {
+        randomizeUserName();
+    }
+}
+
+int RubySettingsBridge::nameDatabaseCount() const {
+    return int(sizeof(s_names200) / sizeof(s_names200[0]));
+}
+
+QString RubySettingsBridge::userName() const {
+    QSettings s;
+    QString name = s.value(QStringLiteral("ruby_mobile/user_name")).toString().trimmed();
+    if (name.isEmpty()) {
+        return const_cast<RubySettingsBridge*>(this)->randomizeUserName();
+    }
+    return name;
+}
+
+void RubySettingsBridge::setUserName(const QString& name) {
+    QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) return;
+    QSettings s;
+    if (s.value(QStringLiteral("ruby_mobile/user_name")).toString() != trimmed) {
+        s.setValue(QStringLiteral("ruby_mobile/user_name"), trimmed);
+        emit userNameChanged(trimmed);
+    }
+}
+
+QString RubySettingsBridge::userTitle() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/user_title"), QStringLiteral("Swordigo Modder")).toString();
+}
+
+void RubySettingsBridge::setUserTitle(const QString& title) {
+    QString trimmed = title.trimmed();
+    if (trimmed.isEmpty()) return;
+    QSettings s;
+    if (s.value(QStringLiteral("ruby_mobile/user_title")).toString() != trimmed) {
+        s.setValue(QStringLiteral("ruby_mobile/user_title"), trimmed);
+        emit userTitleChanged(trimmed);
+    }
+}
+
+QString RubySettingsBridge::getRandomName() const {
+    int count = int(sizeof(s_names200) / sizeof(s_names200[0]));
+    int idx = QRandomGenerator::global()->bounded(count);
+    return QString::fromUtf8(s_names200[idx]);
+}
+
+QString RubySettingsBridge::randomizeUserName() {
+    QString name = getRandomName();
+    setUserName(name);
+    return name;
+}
+
+QStringList RubySettingsBridge::getPresetNames() const {
+    QStringList list;
+    int count = int(sizeof(s_names200) / sizeof(s_names200[0]));
+    list.reserve(count);
+    for (int i = 0; i < count; ++i) {
+        list.append(QString::fromUtf8(s_names200[i]));
+    }
+    return list;
+}
+
+bool RubySettingsBridge::showGrid() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/show_grid"), true).toBool();
+}
+
+void RubySettingsBridge::setShowGrid(bool val) {
+    QSettings s;
+    if (showGrid() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/show_grid"), val);
+        emit showGridChanged(val);
+    }
+}
+
+bool RubySettingsBridge::msaaEnabled() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/msaa"), true).toBool();
+}
+
+void RubySettingsBridge::setMsaaEnabled(bool val) {
+    QSettings s;
+    if (msaaEnabled() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/msaa"), val);
+        emit msaaEnabledChanged(val);
+    }
+}
+
+bool RubySettingsBridge::wireframeMode() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/wireframe"), false).toBool();
+}
+
+void RubySettingsBridge::setWireframeMode(bool val) {
+    QSettings s;
+    if (wireframeMode() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/wireframe"), val);
+        emit wireframeModeChanged(val);
+    }
+}
+
+bool RubySettingsBridge::snapCamera() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/snap_camera"), true).toBool();
+}
+
+void RubySettingsBridge::setSnapCamera(bool val) {
+    QSettings s;
+    if (snapCamera() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/snap_camera"), val);
+        emit snapCameraChanged(val);
+    }
+}
+
+bool RubySettingsBridge::autoCompileProtobuf() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/auto_protobuf"), true).toBool();
+}
+
+void RubySettingsBridge::setAutoCompileProtobuf(bool val) {
+    QSettings s;
+    if (autoCompileProtobuf() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/auto_protobuf"), val);
+        emit autoCompileProtobufChanged(val);
+    }
+}
+
+bool RubySettingsBridge::flipUvOnExport() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/flip_uv"), true).toBool();
+}
+
+void RubySettingsBridge::setFlipUvOnExport(bool val) {
+    QSettings s;
+    if (flipUvOnExport() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/flip_uv"), val);
+        emit flipUvOnExportChanged(val);
+    }
+}
+
+bool RubySettingsBridge::lineNumbers() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/line_numbers"), true).toBool();
+}
+
+void RubySettingsBridge::setLineNumbers(bool val) {
+    QSettings s;
+    if (lineNumbers() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/line_numbers"), val);
+        emit lineNumbersChanged(val);
+    }
+}
+
+bool RubySettingsBridge::syntaxHighlighting() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/syntax_hl"), true).toBool();
+}
+
+void RubySettingsBridge::setSyntaxHighlighting(bool val) {
+    QSettings s;
+    if (syntaxHighlighting() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/syntax_hl"), val);
+        emit syntaxHighlightingChanged(val);
+    }
+}
+
+int RubySettingsBridge::editorFontSize() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/font_size"), 13).toInt();
+}
+
+void RubySettingsBridge::setEditorFontSize(int size) {
+    if (size < 9 || size > 24) return;
+    QSettings s;
+    if (editorFontSize() != size) {
+        s.setValue(QStringLiteral("ruby_mobile/font_size"), size);
+        emit editorFontSizeChanged(size);
+    }
+}
+
+bool RubySettingsBridge::hapticsEnabled() const {
+    QSettings s;
+    return s.value(QStringLiteral("ruby_mobile/haptics"), true).toBool();
+}
+
+void RubySettingsBridge::setHapticsEnabled(bool val) {
+    QSettings s;
+    if (hapticsEnabled() != val) {
+        s.setValue(QStringLiteral("ruby_mobile/haptics"), val);
+        emit hapticsEnabledChanged(val);
+    }
+}
+
+void RubySettingsBridge::resetToDefaults() {
+    setShowGrid(true);
+    setMsaaEnabled(true);
+    setWireframeMode(false);
+    setSnapCamera(true);
+    setAutoCompileProtobuf(true);
+    setFlipUvOnExport(true);
+    setLineNumbers(true);
+    setSyntaxHighlighting(true);
+    setEditorFontSize(13);
+    setHapticsEnabled(true);
+    setUserTitle(QStringLiteral("Swordigo Modder"));
+}
+
+QVariantList RubySettingsBridge::customMeshPresets() const {
+    QSettings s;
+    QByteArray data = s.value(QStringLiteral("ruby_mobile/custom_mesh_presets")).toByteArray();
+    if (data.isEmpty()) return QVariantList();
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    return doc.array().toVariantList();
+}
+
+void RubySettingsBridge::saveCustomMeshPreset(const QString& name, const QString& topTex, const QString& groundTex) {
+    QVariantList list = customMeshPresets();
+    // Check if duplicate exists with same top & ground, if so replace name
+    bool found = false;
+    for (int i = 0; i < list.size(); ++i) {
+        QVariantMap m = list[i].toMap();
+        if (m.value("top").toString() == topTex && m.value("ground").toString() == groundTex) {
+            m["name"] = name.isEmpty() ? (topTex + " / " + groundTex) : name;
+            list[i] = m;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        QVariantMap item;
+        item["name"] = name.isEmpty() ? (topTex + " / " + groundTex) : name;
+        item["top"] = topTex;
+        item["ground"] = groundTex;
+        list.append(item);
+    }
+    QJsonArray arr = QJsonArray::fromVariantList(list);
+    QSettings s;
+    s.setValue(QStringLiteral("ruby_mobile/custom_mesh_presets"), QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    emit customMeshPresetsChanged();
+}
+
+void RubySettingsBridge::deleteCustomMeshPreset(int index) {
+    QVariantList list = customMeshPresets();
+    if (index >= 0 && index < list.size()) {
+        list.removeAt(index);
+        QJsonArray arr = QJsonArray::fromVariantList(list);
+        QSettings s;
+        s.setValue(QStringLiteral("ruby_mobile/custom_mesh_presets"), QJsonDocument(arr).toJson(QJsonDocument::Compact));
+        emit customMeshPresetsChanged();
+    }
+}
+
+} // namespace ruby::android

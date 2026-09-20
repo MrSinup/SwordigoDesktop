@@ -38,6 +38,7 @@ typedef struct VkDescriptorPool_T* VkDescriptorPool;
 
 #include "platform/srt_overlay.h"
 #include "platform/gui.h"
+#include "game/research/memory_research_tab.h"
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -46,6 +47,7 @@ typedef struct VkDescriptorPool_T* VkDescriptorPool;
 #include <mutex>
 #include <deque>
 #include <condition_variable>
+#include <memory>
 
 // ---------------------------------------------------------------------------
 // Debug stats snapshot (passed to draw_debug each frame)
@@ -129,6 +131,22 @@ public:
         m_overlay_forced_tab = 2;
     }
 
+    // ---- Memory Research console (standalone, opened with the [Insert] key) ----
+    // Moved out of the F11 toolbox into its own full-window overlay.
+    void toggle_research_overlay() {
+        m_research_overlay_visible = !m_research_overlay_visible;
+    }
+    bool is_research_overlay_visible() const { return m_research_overlay_visible; }
+    void set_research_overlay_visible(bool v) { m_research_overlay_visible = v; }
+    // Renders the Memory Research console when visible. Call between
+    // begin_frame()/end_frame() every frame (same timing as draw_mod_overlay).
+    void draw_research_overlay();
+
+    // The in-game mini bar.  Drawn every frame (not only while the console is
+    // open), because the whole point is to poke values while the console is
+    // closed and the game is running.
+    void draw_research_hud();
+
     // Draw the debug panel — call between begin_frame()/end_frame() when visible
     void draw_debug(const SwordfareDebugStats& stats);
 
@@ -154,6 +172,44 @@ public:
     GuiAction draw_settings_panel(bool* p_open);
     bool m_show_about = false;
     bool m_show_help  = false;
+
+    // ---- Memory Research Tab ----
+    //
+    // Call init_research_tab() once after RecoveryCatalog::instance().init()
+    // and g_guest_memory is valid (same timing as init_lua_console).
+    // draw_research_tab() is called from draw_mod_overlay() automatically.
+    //
+    void init_research_tab(const uint8_t* guest_memory, uint64_t guest_mem_size);
+    void update_research_roots(const swordfare::research::LiveRoots& roots);
+    bool is_research_ready() const;
+
+    // Called once per EMULATED frame, from the emulator thread.  Applies frozen
+    // values and re-resolves every tracked object against the guest's own tick,
+    // so there is no wall-clock race between the editor and the game.
+    void tick_research(uint64_t frame, uint8_t* guest_memory, uint64_t guest_mem_size);
+
+    // Tell the research engine where the loaded image is.  Until this is called
+    // the engine reports "0 modules mapped" rather than pretending every
+    // address has a static home.
+    void set_research_module(const std::string& name, uint64_t base_va,
+                             uint64_t rva_begin, uint64_t rva_end,
+                             const std::string& build_id);
+
+    // Hand the research engine a loaded image's dynamic symbol table.  The
+    // pointers come from the ELF loader's own module struct (dynsym / dynstr /
+    // num_dynsym) and point into the guest image, so nothing is re-read from disk.
+    void set_research_module_symbols(const std::string& name,
+                                     const void* symtab, size_t count,
+                                     const char* strtab, size_t strtab_size,
+                                     bool is_64);
+
+    // Hand the research engine a loaded image's section headers, plus the
+    // loader's copy of the section-name table when it kept one.  Lets a site be
+    // described by its section (and the image's own metadata blocks be skipped).
+    void set_research_module_sections(const std::string& name,
+                                      const void* shdrs, size_t count,
+                                      const char* names, size_t names_size,
+                                      bool is_64);
 
     // ---- Lua Console (ImGui-native, replaces old bitmap console) ----
     //
@@ -219,21 +275,38 @@ private:
 
     SDL_Window*   m_window   = nullptr;
     SDL_GLContext m_gl_ctx   = nullptr;
+    // ---- Memory Research Tab ----
+    std::unique_ptr<swordfare::research::MemoryResearchTab> m_research_tab;
+
+public:
+    // Hand the tool fonts to a surface that draws outside this class's own
+    // layout (the research console).  void* rather than ImFont* so the header
+    // stays free of an ImGui dependency.
+    void* tool_font_ui() const   { return m_font_ui; }
+    void* tool_font_mono() const { return m_font_mono; }
+private:
+
     class VulkanBackend* m_vk_backend = nullptr;
     bool                 m_vulkan_active = false;
     VkDescriptorPool     m_imgui_vk_descriptor_pool = VK_NULL_HANDLE;
     void*         m_imgui_ctx = nullptr;   // ImGuiContext*
     void*         m_font_main = nullptr;   // ImFont*
-    void*         m_font_button = nullptr; // ImFont*
-    void*         m_font_mono = nullptr;   // ImFont* (monospace for console)
+    void*         m_font_button = nullptr; // ImFont* (display face — dialogs only)
+    // ImFont*.  Tool surfaces: `ui` is a proportional UI face (Space Grotesk),
+    // `mono` is fixed-width (JetBrains Mono) for addresses / hex / values.  Both
+    // were previously unassigned, which silently left every PushFont site dead.
+    void*         m_font_ui = nullptr;
+    void*         m_font_mono = nullptr;
 
     bool          m_initialized = false;
     bool          m_visible     = false;
     bool          m_mod_overlay_visible = false;
     bool          m_f11_overlay_active = false;
+    bool          m_research_overlay_visible = false;
     bool          m_buttons_globally_hidden = false;
 
-    int m_overlay_forced_tab = -1;   // -1 = none; 1 = Options; 2 = Scene Shifter
+    int m_overlay_forced_tab = -1;   // -1 = none; 0=Home 1=Display 2=Scene 3=Diagnostics
+    int m_overlay_tab        = 0;    // active nav-rail item in the toolbox
 
     // ── Remaster textures (OpenGL path only; Vulkan falls back to vector UI) ──
     GLuint m_tex_overlay_bg     = 0;   // launcher_bg.png / ui_panel.png backdrop

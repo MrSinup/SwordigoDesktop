@@ -7,7 +7,9 @@
 #include "launcher/profile_manager.h"
 #include "platform/data_path.h"
 #include "platform/launcher_config.h"
+#include "platform/mod_manager.h"
 
+#include <filesystem>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -210,6 +212,11 @@ void PlayPage::setup_ui() {
         "QComboBox:hover { border-color: #58A6FF; }"
     );
     connect(m_combo_base_engine, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        if (m_combo_base_engine && m_combo_base_engine->currentIndex() >= 0) {
+            LauncherConfig lcfg = launcher_config_load();
+            lcfg.selected_base_version = m_combo_base_engine->currentData().toString().toStdString();
+            launcher_config_save(lcfg);
+        }
         update_featured_card();
     });
     base_engine_box->addWidget(m_combo_base_engine);
@@ -331,10 +338,17 @@ void PlayPage::refresh_instances() {
     m_combo_base_engine->addItem("Swordigo v1.4.12 (SRE12)", "1.4.12");
     m_combo_base_engine->addItem("Swordigo v1.4.13 (SRE13)", "1.4.13");
 
-    int default_idx = 0;
-    std::string def_path = m_selector.get_default();
-    if (def_path.find("1.4.13") != std::string::npos) {
+    LauncherConfig lcfg = launcher_config_load();
+    int default_idx = 1; // Default to 1.4.13
+    if (lcfg.selected_base_version == "1.4.12") {
+        default_idx = 0;
+    } else if (lcfg.selected_base_version == "1.4.13") {
         default_idx = 1;
+    } else {
+        std::string def_path = m_selector.get_default();
+        if (def_path.find("1.4.12") != std::string::npos && def_path.find("1.4.13") == std::string::npos) {
+            default_idx = 0;
+        }
     }
 
     m_combo_base_engine->setCurrentIndex(default_idx);
@@ -344,11 +358,11 @@ void PlayPage::refresh_instances() {
 }
 
 void PlayPage::update_featured_card() {
-    std::string sel_ver;
+    LauncherConfig lcfg = launcher_config_load();
+    std::string sel_ver = lcfg.selected_base_version.empty() ? "1.4.13" : lcfg.selected_base_version;
     if (m_combo_base_engine && m_combo_base_engine->currentIndex() >= 0) {
         sel_ver = m_combo_base_engine->currentData().toString().toStdString();
     }
-    if (sel_ver.empty()) sel_ver = "1.4.12";
 
     m_lbl_feat_title->setText("Swordigo");
 
@@ -374,7 +388,8 @@ void PlayPage::update_stats() {
 LaunchConfig PlayPage::get_launch_config() const {
     LaunchConfig cfg;
 
-    std::string sel_ver = "1.4.12";
+    LauncherConfig lcfg = launcher_config_load();
+    std::string sel_ver = lcfg.selected_base_version.empty() ? "1.4.13" : lcfg.selected_base_version;
     if (m_combo_base_engine && m_combo_base_engine->currentIndex() >= 0) {
         sel_ver = m_combo_base_engine->currentData().toString().toStdString();
     }
@@ -395,6 +410,26 @@ LaunchConfig PlayPage::get_launch_config() const {
     cfg.use_sre = m_chk_sre->isChecked();
     cfg.advanced_redstell_opts = m_chk_redstell->isChecked();
     cfg.should_launch = true;
+
+    // Resolve active mod (prioritizing LauncherConfig load order, then first enabled mod on disk)
+    std::string data_dir = get_user_data_dir();
+    for (const auto& mod_id : lcfg.mod_load_order) {
+        std::string mod_dir = data_dir + "mods/" + mod_id;
+        if (std::filesystem::exists(mod_dir) && std::filesystem::is_directory(mod_dir)) {
+            cfg.selected_mod = mod_id;
+            break;
+        }
+    }
+    if (cfg.selected_mod.empty()) {
+        auto mods = modman::list_mods(data_dir + "mods");
+        for (const auto& m : mods) {
+            if (m.enabled) {
+                cfg.selected_mod = m.id;
+                break;
+            }
+        }
+    }
+
     return cfg;
 }
 

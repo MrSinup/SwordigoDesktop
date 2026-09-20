@@ -28,6 +28,8 @@
 #include "platform/IconsFontAwesome6.h"
 #include "platform/embedded_assets.h"
 #include "platform/swordfare_theme.h"
+#include "platform/xpera/xpera_style.h"
+#include "platform/xpera/xpera_gui.h"
 #include "imgui/imgui.h"
 #include "imgui/backends/imgui_impl_sdl3.h"
 #include "imgui/backends/imgui_impl_opengl3.h"
@@ -45,6 +47,8 @@
 #include "input_config.h"
 #include "data_path.h"
 #include "fbo_scaler.h"
+#include "platform/launcher_config.h"
+#include "platform/mod_manager.h"
 
 #include <iostream>
 #include <fstream>
@@ -208,6 +212,13 @@ void SwordfareGUI::apply_swordfare_theme() {
     c[ImGuiCol_PlotLinesHovered]  = ImVec4(0.914f, 0.271f, 0.376f, 1.00f);
     c[ImGuiCol_PlotHistogram]     = ImVec4(0.35f,  0.65f,  1.00f,  0.80f);
     c[ImGuiCol_PlotHistogramHovered] = ImVec4(0.914f, 0.271f, 0.376f, 1.00f);
+
+    // ── Xpera skin (opt-out via SWORDFARE_XPERA_UI=0) ─────────────────────
+    // When enabled this fully overrides the Swordfare palette/metrics above.
+    // The original theme is intentionally kept intact as the fallback.
+    if (xpera::ui_enabled()) {
+        xpera::apply_style();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -497,6 +508,79 @@ void SwordfareGUI::init(SDL_Window* window, SDL_GLContext gl_ctx) {
         m_font_button = io.Fonts->AddFontDefault();
     }
 
+    // ── Tool typography: a real UI face + a real monospace face ─────────────
+    //
+    // m_font_mono was DECLARED but never assigned, so every `if (m_font_mono)
+    // PushFont(...)` in the codebase was dead code and the console fell back to
+    // m_font_main — which is Megalopolis Extra, Swordigo's display lettering
+    // font.  A research tool rendering addresses and hex in a comic font is not
+    // just ugly: fixed-width alignment is a correctness property for a hex dump.
+    //
+    // Space Grotesk for chrome and labels, JetBrains Mono for anything numeric.
+    {
+        // Local picker: this path does not have the find_font() helper the
+        // Vulkan loader defines later in its own scope.
+        auto pick_font = [](const char* const* names, size_t count) -> std::string {
+            for (size_t i = 0; i < count; ++i)
+                if (std::filesystem::exists(names[i])) return names[i];
+            return {};
+        };
+        const char* ui_candidates[] = {
+            "src/assets/fonts/SpaceGrotesk-VariableFont_wght.ttf",
+            "src/assets/fonts/static/SpaceGrotesk-Regular.ttf",
+            "src/assets/fonts/Inter-Regular.ttf",
+            "/usr/share/swordigo-desktop/launcher/fonts/Inter-Regular.ttf"
+        };
+        const char* mono_candidates[] = {
+            "src/assets/fonts/JetBrainsMono-VariableFont_wght.ttf",
+            "src/assets/fonts/static/JetBrainsMono-Regular.ttf",
+            "/usr/share/swordigo-desktop/launcher/fonts/JetBrainsMono-Regular.ttf"
+        };
+        std::string ui_font_path   = pick_font(ui_candidates,   4);
+        std::string mono_font_path = pick_font(mono_candidates, 3);
+        const unsigned char* emb_ui = nullptr;    size_t emb_ui_size = 0;
+        const unsigned char* emb_mono = nullptr;  size_t emb_mono_size = 0;
+        for (const char* n : { "fonts/SpaceGrotesk-VariableFont_wght.ttf",
+                               "fonts/Inter-Regular.ttf" })
+            if (embedded_asset(n, &emb_ui, &emb_ui_size)) break;
+        if (!embedded_asset("fonts/JetBrainsMono-VariableFont_wght.ttf", &emb_mono, &emb_mono_size))
+            embedded_asset("fonts/JetBrainsMono-Italic-VariableFont_wght.ttf", &emb_mono, &emb_mono_size);
+
+        const float ui_sz   = 15.0f * dpi_scale;
+        const float mono_sz = 14.0f * dpi_scale;
+        ImFontConfig emb_ui_cfg;   emb_ui_cfg.FontDataOwnedByAtlas = false;
+        ImFontConfig emb_mono_cfg; emb_mono_cfg.FontDataOwnedByAtlas = false;
+        auto merge_fa_into = [&](float size) {
+            static const ImWchar icon_ranges[] = { ICON_FA_MIN, ICON_FA_MAX, 0 };
+            ImFontConfig cfg;
+            cfg.MergeMode = true; cfg.PixelSnapH = true;
+            cfg.GlyphMinAdvanceX = size; cfg.GlyphOffset = ImVec2(0, 1);
+            cfg.FontDataOwnedByAtlas = false;
+            if (emb_fa && emb_fa_size > 0)
+                io.Fonts->AddFontFromMemoryTTF((void*)emb_fa, (int)emb_fa_size,
+                                               size * 0.85f, &cfg, icon_ranges);
+            else if (!fa_path.empty())
+                io.Fonts->AddFontFromFileTTF(fa_path.c_str(), size * 0.85f, &cfg, icon_ranges);
+        };
+
+        m_font_ui = (emb_ui && emb_ui_size > 0)
+            ? io.Fonts->AddFontFromMemoryTTF((void*)emb_ui, (int)emb_ui_size, ui_sz, &emb_ui_cfg)
+            : (!ui_font_path.empty()
+                   ? io.Fonts->AddFontFromFileTTF(ui_font_path.c_str(), ui_sz)
+                   : io.Fonts->AddFontDefault());
+        if (m_font_ui) merge_fa_into(ui_sz);
+
+        m_font_mono = (emb_mono && emb_mono_size > 0)
+            ? io.Fonts->AddFontFromMemoryTTF((void*)emb_mono, (int)emb_mono_size, mono_sz, &emb_mono_cfg)
+            : (!mono_font_path.empty()
+                   ? io.Fonts->AddFontFromFileTTF(mono_font_path.c_str(), mono_sz)
+                   : io.Fonts->AddFontDefault());
+        if (m_font_mono) merge_fa_into(mono_sz);
+
+        std::cout << "[SwordfareGUI] Tool fonts: ui=" << (m_font_ui ? "ok" : "default")
+                  << " mono=" << (m_font_mono ? "ok" : "default") << std::endl;
+    }
+
     apply_swordfare_theme();
 
     // Scale ImGui styles according to layout scale rather than full physical DPI scale
@@ -664,6 +748,48 @@ void SwordfareGUI::init_vulkan(SDL_Window* window, VulkanBackend* vk_backend) {
                             : io.Fonts->AddFontDefault());
     if (m_font_button) merge_fa(button_sz);
 
+    // ── Tool typography (same rationale as the GL path above) ───────────────
+    // Kept in step with the first loader: a font slot that is only populated on
+    // one of two paths is how m_font_mono ended up permanently null.
+    std::string ui_font_path = find_font({
+        "src/assets/fonts/SpaceGrotesk-VariableFont_wght.ttf",
+        "src/assets/fonts/static/SpaceGrotesk-Regular.ttf",
+        "src/assets/fonts/Inter-Regular.ttf",
+        "/usr/share/swordigo-desktop/launcher/fonts/Inter-Regular.ttf"
+    });
+    std::string mono_font_path = find_font({
+        "src/assets/fonts/JetBrainsMono-VariableFont_wght.ttf",
+        "src/assets/fonts/static/JetBrainsMono-Regular.ttf",
+        "/usr/share/swordigo-desktop/launcher/fonts/JetBrainsMono-Regular.ttf"
+    });
+    const unsigned char* emb_ui = nullptr;    size_t emb_ui_size = 0;
+    const unsigned char* emb_mono = nullptr;  size_t emb_mono_size = 0;
+    for (const char* n : { "fonts/SpaceGrotesk-VariableFont_wght.ttf",
+                           "fonts/Inter-Regular.ttf" })
+        if (embedded_asset(n, &emb_ui, &emb_ui_size)) break;
+    if (!embedded_asset("fonts/JetBrainsMono-VariableFont_wght.ttf", &emb_mono, &emb_mono_size))
+        embedded_asset("fonts/JetBrainsMono-Italic-VariableFont_wght.ttf", &emb_mono, &emb_mono_size);
+    {
+        const float ui_sz   = 15.0f * dpi_scale;
+        const float mono_sz = 14.0f * dpi_scale;
+        ImFontConfig emb_ui_cfg;   emb_ui_cfg.FontDataOwnedByAtlas = false;
+        ImFontConfig emb_mono_cfg; emb_mono_cfg.FontDataOwnedByAtlas = false;
+        m_font_ui = (emb_ui && emb_ui_size > 0)
+            ? io.Fonts->AddFontFromMemoryTTF((void*)emb_ui, (int)emb_ui_size, ui_sz, &emb_ui_cfg)
+            : (!ui_font_path.empty()
+                   ? io.Fonts->AddFontFromFileTTF(ui_font_path.c_str(), ui_sz)
+                   : io.Fonts->AddFontDefault());
+        if (m_font_ui) merge_fa(ui_sz);
+        m_font_mono = (emb_mono && emb_mono_size > 0)
+            ? io.Fonts->AddFontFromMemoryTTF((void*)emb_mono, (int)emb_mono_size, mono_sz, &emb_mono_cfg)
+            : (!mono_font_path.empty()
+                   ? io.Fonts->AddFontFromFileTTF(mono_font_path.c_str(), mono_sz)
+                   : io.Fonts->AddFontDefault());
+        if (m_font_mono) merge_fa(mono_sz);
+        std::cout << "[SwordfareGUI] Tool fonts: ui=" << (m_font_ui ? "ok" : "default")
+                  << " mono=" << (m_font_mono ? "ok" : "default") << std::endl;
+    }
+
     apply_swordfare_theme();
     ImGui::GetStyle().ScaleAllSizes(layout_scale);
     io.FontGlobalScale = layout_scale / dpi_scale;
@@ -773,6 +899,23 @@ bool SwordfareGUI::process_event(const SDL_Event& event) {
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
         event.key.key == SDLK_F11) {
         toggle_scene_toolbox();
+        return true;
+    }
+
+    // [Insert] opens the standalone Memory Research console (moved out of the
+    // F11 toolbox). [Tab] cannot be used here: it is the game's "Open" virtual
+    // key and is also forwarded to the guest FWKeyboard, so it stays reserved.
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+        event.key.key == SDLK_INSERT) {
+        toggle_research_overlay();
+        return true;
+    }
+    // Escape closes the research console, but not while a text field inside it
+    // has keyboard focus (otherwise it would swallow typed input).
+    if (m_research_overlay_visible && event.type == SDL_EVENT_KEY_DOWN &&
+        !event.key.repeat && event.key.key == SDLK_ESCAPE &&
+        !ImGui::GetIO().WantTextInput) {
+        m_research_overlay_visible = false;
         return true;
     }
 
@@ -964,283 +1107,362 @@ void SwordfareGUI::draw_debug(const SwordfareDebugStats& st) {
     // -- Update FPS ring buffer --
     swardfare_push_fps(m_fps_history, m_fps_idx, st.fps, FPS_HISTORY);
 
-    static bool expanded = false;
+    ImGuiIO& io = ImGui::GetIO();
+    float screen_w = io.DisplaySize.x;
+    float screen_h = io.DisplaySize.y;
 
-    // Intelligent layout scaling relative to window size
-    float layout_scale = 1.0f;
-    if (st.win_h >= 1440) {
-        layout_scale = 1.5f;
-    } else if (st.win_h >= 1080) {
-        layout_scale = 1.25f;
-    } else {
-        layout_scale = 1.0f;
-    }
-
-    // -- Window position (top-left, draggable) --
-    ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2((expanded ? 410 : 200) * layout_scale, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.85f);
+    // Unbound fullscreen overlay (no rigid borders, no clamping box, completely transparent canvas)
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(screen_w, screen_h), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
 
     ImGuiWindowFlags wflags =
-        ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoResize   |
-        ImGuiWindowFlags_NoScrollbar;
+        ImGuiWindowFlags_NoTitleBar            |
+        ImGuiWindowFlags_NoResize              |
+        ImGuiWindowFlags_NoMove                |
+        ImGuiWindowFlags_NoScrollbar           |
+        ImGuiWindowFlags_NoScrollWithMouse     |
+        ImGuiWindowFlags_NoCollapse            |
+        ImGuiWindowFlags_NoNav                 |
+        ImGuiWindowFlags_NoSavedSettings       |
+        ImGuiWindowFlags_NoFocusOnAppearing    |
+        ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    if (!ImGui::Begin(ICON_FA_GAUGE_HIGH "  Performance  [F3]", nullptr, wflags)) {
+    if (!ImGui::Begin("##MinecraftF3DebugOverlay", nullptr, wflags)) {
         ImGui::End();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
         return;
     }
 
-    // ── Remaster: game icon badge next to the debug title ──
-    if (m_tex_swordigo_icon) {
-        ImVec2 p0 = ImGui::GetCursorScreenPos();
-        float badge = 20.0f;
-        ImGui::GetWindowDrawList()->AddImage(
-            (ImTextureID)(intptr_t)m_tex_swordigo_icon,
-            p0, ImVec2(p0.x + badge, p0.y + badge),
-            ImVec2(0, 0), ImVec2(1, 1));
-        ImGui::Dummy(ImVec2(badge + 6.0f, badge));
-        ImGui::SameLine();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float font_size = ImGui::GetFontSize();
+    float line_height = font_size + 3.0f;
+
+    // Subtle top accent band so the HUD reads as a designed surface, not raw text.
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(screen_w, 24.0f),
+                                IM_COL32(20, 40, 60, 110), IM_COL32(50, 22, 34, 110),
+                                IM_COL32(50, 22, 34, 0),   IM_COL32(20, 40, 60, 0));
+
+    // Helper to draw a left-aligned line: rounded dark badge + cyan accent stripe.
+    float left_x = 10.0f;
+    float left_y = 10.0f;
+    auto draw_left = [&](const char* text, ImU32 text_col = IM_COL32(224, 224, 224, 255)) {
+        if (!text || !text[0]) {
+            left_y += 5.0f;
+            return;
+        }
+        ImVec2 tsz = ImGui::CalcTextSize(text);
+        dl->AddRectFilled(
+            ImVec2(left_x - 5.0f, left_y - 1.0f),
+            ImVec2(left_x + tsz.x + 5.0f, left_y + tsz.y + 1.0f),
+            IM_COL32(12, 14, 18, 170), 3.0f
+        );
+        dl->AddRectFilled(
+            ImVec2(left_x - 5.0f, left_y - 1.0f),
+            ImVec2(left_x - 3.0f, left_y + tsz.y + 1.0f),
+            IM_COL32(0, 170, 220, 170), 1.0f
+        );
+        dl->AddText(ImVec2(left_x + 1.0f, left_y + 1.0f), IM_COL32(20, 20, 20, 220), text);
+        dl->AddText(ImVec2(left_x, left_y), text_col, text);
+        left_y += line_height;
+    };
+
+    // Helper to draw a Minecraft-style right-aligned line with semi-transparent badge & text shadow
+    float right_margin = 10.0f;
+    float right_y = 10.0f;
+    auto draw_right = [&](const char* text, ImU32 text_col = IM_COL32(224, 224, 224, 255)) {
+        if (!text || !text[0]) {
+            right_y += 5.0f;
+            return;
+        }
+        ImVec2 tsz = ImGui::CalcTextSize(text);
+        float rx = screen_w - right_margin - tsz.x;
+        dl->AddRectFilled(
+            ImVec2(rx - 5.0f, right_y - 1.0f),
+            ImVec2(rx + tsz.x + 5.0f, right_y + tsz.y + 1.0f),
+            IM_COL32(12, 14, 18, 170), 3.0f
+        );
+        dl->AddRectFilled(
+            ImVec2(rx + tsz.x + 3.0f, right_y - 1.0f),
+            ImVec2(rx + tsz.x + 5.0f, right_y + tsz.y + 1.0f),
+            IM_COL32(139, 61, 255, 170), 1.0f
+        );
+        dl->AddText(ImVec2(rx + 1.0f, right_y + 1.0f), IM_COL32(20, 20, 20, 220), text);
+        dl->AddText(ImVec2(rx, right_y), text_col, text);
+        right_y += line_height;
+    };
+
+    char buf[512];
+
+    // ── LEFT SIDE (Minecraft F3 style) ───────────────────────────────────────
+    // 1. Version header
+    bool is_v13 = (strstr(st.binary_name, "1.4.13") != nullptr);
+    snprintf(buf, sizeof(buf), "Swordigo %s (%s / x86_64 host)",
+             (is_v13 ? "1.4.13" : "1.4.12"), "swordfare_boot");
+    draw_left(buf, IM_COL32(255, 255, 255, 255));
+
+    // 2. FPS line (coloured by performance: green >= 55, amber >= 30, red < 30)
+    ImU32 fps_col = (st.fps >= 55.0f) ? IM_COL32(85, 255, 85, 255)
+                  : (st.fps >= 30.0f) ? IM_COL32(255, 200, 50, 255)
+                                      : IM_COL32(255, 85, 85, 255);
+    snprintf(buf, sizeof(buf), "%.1f fps (%.2f ms) T: 60 vsync, speed: %s%s",
+             st.fps, (st.fps > 0.0f ? 1000.0f / st.fps : 0.0f),
+             st.speed_label, st.game_paused ? " [PAUSED]" : "");
+    draw_left(buf, fps_col);
+
+    // 3. Engine & Runtime details
+    snprintf(buf, sizeof(buf), "Engine: ARM64 Dynarmic JIT | RenderGuard: 0x0 - 0x3000000");
+    draw_left(buf, IM_COL32(210, 210, 210, 255));
+
+    snprintf(buf, sizeof(buf), "Runtime: %s @ 0x2000000 | ABI %d | API: %s",
+             (is_v13 ? "libsre13.so" : "libsre12.so"),
+             (is_v13 ? 13 : 12),
+             st.graphics_api);
+    draw_left(buf, IM_COL32(210, 210, 210, 255));
+
+    draw_left(""); // spacer
+
+    // 4. LOADED MOD INFOS (user-requested)
+    std::string active_mod = get_active_mod_name();
+    if (!active_mod.empty()) {
+        snprintf(buf, sizeof(buf), "[Active Mod] %s", active_mod.c_str());
+        draw_left(buf, IM_COL32(255, 170, 0, 255)); // Gold / amber header
+
+        std::string mods_dir = get_user_data_dir() + "mods";
+        auto mods = modman::list_mods(mods_dir);
+        const modman::ModMeta* meta = nullptr;
+        for (const auto& m : mods) {
+            if (m.id == active_mod) {
+                meta = &m;
+                break;
+            }
+        }
+        if (meta) {
+            snprintf(buf, sizeof(buf), "  Name: %s (v%s)",
+                     meta->name.c_str(),
+                     meta->version.empty() ? "1.0" : meta->version.c_str());
+            draw_left(buf, IM_COL32(85, 255, 255, 255)); // Cyan
+
+            snprintf(buf, sizeof(buf), "  Author: %s | Category: %s",
+                     meta->author.empty() ? "Community" : meta->author.c_str(),
+                     meta->category.empty() ? "General" : meta->category.c_str());
+            draw_left(buf, IM_COL32(180, 220, 240, 255));
+        }
+
+        // Native mod libraries
+        auto mod_libs = get_loaded_guest_mod_libs();
+        if (!mod_libs.empty()) {
+            std::string libs_str;
+            for (size_t i = 0; i < mod_libs.size(); ++i) {
+                if (i > 0) libs_str += ", ";
+                libs_str += mod_libs[i];
+            }
+            snprintf(buf, sizeof(buf), "  Native Libs: %s (ARM64 .so injected)", libs_str.c_str());
+            draw_left(buf, IM_COL32(85, 255, 85, 255)); // Green
+        } else {
+            draw_left("  Native Libs: None (Resource-only mod)", IM_COL32(160, 160, 160, 255));
+        }
+
+        // VFS Hierarchy status
+        snprintf(buf, sizeof(buf), "  VFS Hierarchy: Active (mods/%s/resources -> base)", active_mod.c_str());
+        draw_left(buf, IM_COL32(180, 220, 240, 255));
+
+        // Mod Load Order list from launcher.toml (cached, refreshed at most every 2s)
+        static LauncherConfig s_cached_lcfg;
+        static double s_last_lcfg_check = -10.0;
+        double cur_time = ImGui::GetTime();
+        if (cur_time - s_last_lcfg_check > 2.0) {
+            s_cached_lcfg = launcher_config_load();
+            s_last_lcfg_check = cur_time;
+        }
+        const LauncherConfig& lcfg = s_cached_lcfg;
+
+        if (!lcfg.mod_load_order.empty()) {
+            std::string order_str = "[";
+            for (size_t i = 0; i < lcfg.mod_load_order.size(); ++i) {
+                if (i > 0) order_str += ", ";
+                order_str += lcfg.mod_load_order[i];
+            }
+            order_str += "]";
+            snprintf(buf, sizeof(buf), "  Load Order: %s", order_str.c_str());
+            draw_left(buf, IM_COL32(180, 180, 180, 255));
+        }
+    } else {
+        draw_left("[Active Mod] None (Vanilla base mode)", IM_COL32(255, 170, 0, 255));
+        static LauncherConfig s_cached_vanilla_lcfg;
+        static double s_last_vanilla_check = -10.0;
+        double cur_time = ImGui::GetTime();
+        if (cur_time - s_last_vanilla_check > 2.0) {
+            s_cached_vanilla_lcfg = launcher_config_load();
+            s_last_vanilla_check = cur_time;
+        }
+        const LauncherConfig& lcfg = s_cached_vanilla_lcfg;
+        if (!lcfg.mod_load_order.empty()) {
+            std::string order_str = "[";
+            for (size_t i = 0; i < lcfg.mod_load_order.size(); ++i) {
+                if (i > 0) order_str += ", ";
+                order_str += lcfg.mod_load_order[i];
+            }
+            order_str += "]";
+            snprintf(buf, sizeof(buf), "  Config Order: %s (inactive)", order_str.c_str());
+            draw_left(buf, IM_COL32(160, 160, 160, 255));
+        }
     }
 
-    // -- Mini Header: FPS + Expand Button --
+    draw_left(""); // spacer
+
+    // 5. XYZ & Block position (Minecraft style)
+    snprintf(buf, sizeof(buf), "XYZ: %.3f / %.3f / %.3f", st.hero_x, st.hero_y, st.hero_z);
+    draw_left(buf, IM_COL32(255, 255, 255, 255));
+
+    snprintf(buf, sizeof(buf), "Block: %d  %d  %d", (int)st.hero_x, (int)st.hero_y, (int)st.hero_z);
+    draw_left(buf, IM_COL32(210, 210, 210, 255));
+
+    snprintf(buf, sizeof(buf), "Camera: (%.1f, %.1f, %.1f) zoom: %.2fx  focus: %s",
+             st.cam_x, st.cam_y, st.cam_z, st.cam_zoom,
+             st.cam_active ? "Overridden" : "Hero Follow");
+    draw_left(buf, IM_COL32(210, 210, 210, 255));
+
+    // 6. Draw statistics & PostFX
+    snprintf(buf, sizeof(buf), "Draw Calls: %d | Vertices: %d | Tex Binds: %d | States: %d",
+             st.draw_calls, st.vertices, st.tex_binds, st.state_changes);
+    draw_left(buf, IM_COL32(180, 220, 240, 255));
+
+    snprintf(buf, sizeof(buf), "PostFX: %s (%s) | Scaling: %s",
+             st.postfx_on ? "ON" : "OFF", st.postfx_preset, st.scale_mode);
+    draw_left(buf, st.postfx_on ? IM_COL32(255, 200, 85, 255) : IM_COL32(160, 160, 160, 255));
+
+    // ── RIGHT SIDE (Minecraft F3 style, right-aligned) ────────────────────────
+    // 1. GPU & Hardware
+    static std::string s_gl_renderer;
+    static std::string s_gl_version;
+    if (s_gl_renderer.empty() && !m_vulkan_active) {
+        const char* rend = (const char*)glGetString(GL_RENDERER);
+        if (rend) s_gl_renderer = rend;
+        const char* ver = (const char*)glGetString(GL_VERSION);
+        if (ver) s_gl_version = ver;
+    }
+
+    if (!s_gl_renderer.empty()) {
+        snprintf(buf, sizeof(buf), "%s", s_gl_renderer.c_str());
+        draw_right(buf, IM_COL32(255, 255, 255, 255));
+    } else {
+        snprintf(buf, sizeof(buf), "Graphics: %s", st.graphics_api);
+        draw_right(buf, IM_COL32(255, 255, 255, 255));
+    }
+    if (!s_gl_version.empty()) {
+        snprintf(buf, sizeof(buf), "GL: %s", s_gl_version.c_str());
+        draw_right(buf, IM_COL32(200, 200, 200, 255));
+    }
+
+    // 2. Display Resolution
+    snprintf(buf, sizeof(buf), "Display: %dx%d (Draw: %dx%d)",
+             st.win_w, st.win_h, st.draw_w, st.draw_h);
+    draw_right(buf, IM_COL32(200, 200, 200, 255));
+
+    draw_right(""); // spacer
+
+    // 3. Memory & GC (Minecraft style: "Mem: XX% XXX/XXXMB")
+    auto& rgc = RedstellGC::instance();
+    uint32_t ghs64 = get_guest_heap_size_64();
+    uint32_t ghs32 = get_guest_heap_size_32();
+    uint32_t guest_heap = ghs64 + ghs32;
+    float guest_heap_mb = (float)guest_heap / (1024.0f * 1024.0f);
+    float host_ram_mb = (float)rgc.get_current_ram() / (1024.0f * 1024.0f);
+    float peak_ram_mb = (float)rgc.get_peak_ram() / (1024.0f * 1024.0f);
+
+    int guest_pct = (int)((guest_heap_mb / 128.0f) * 100.0f);
+    if (guest_pct > 100) guest_pct = 100;
+    snprintf(buf, sizeof(buf), "Guest Heap: %d%%  %.1f/128MB", guest_pct, guest_heap_mb);
+    draw_right(buf, IM_COL32(85, 255, 85, 255)); // Green
+
+    snprintf(buf, sizeof(buf), "Host RAM: %.1f MB (Peak: %.1f MB)", host_ram_mb, peak_ram_mb);
+    draw_right(buf, IM_COL32(200, 200, 200, 255));
+
+    snprintf(buf, sizeof(buf), "RGC: %.1f%% frag | Alloc: %lu/s | Free: %lu/s",
+             rgc.get_fragmentation_estimate() * 100.0f,
+             (unsigned long)rgc.get_alloc_rate(),
+             (unsigned long)rgc.get_free_rate());
+    draw_right(buf, IM_COL32(180, 220, 240, 255));
+
+    snprintf(buf, sizeof(buf), "Resources: %lu (Tex: %u, POD: %u)",
+             (unsigned long)rgc.get_resource_count(),
+             rgc.get_texture_count(), rgc.get_pod_count());
+    draw_right(buf, IM_COL32(180, 220, 240, 255));
+
+    draw_right(""); // spacer
+
+    // 4. Subsystems
+    snprintf(buf, sizeof(buf), "OpenAL Channels: %u | Open Files: %u",
+             rgc.get_openal_count(), rgc.get_open_file_count());
+    draw_right(buf, IM_COL32(180, 180, 180, 255));
+
+    snprintf(buf, sizeof(buf), "Mouse: %d, %d | Frame: %d",
+             st.mouse_x, st.mouse_y, st.frame_count);
+    draw_right(buf, IM_COL32(180, 180, 180, 255));
+
+    if (st.typing_mode) {
+        draw_right("[TYPING MODE ACTIVE]", IM_COL32(255, 85, 85, 255));
+    }
+
+    // ── BOTTOM-LEFT: Minecraft-style Frame Time Sparkline ────────────────────
+    float graph_w = 240.0f;
+    float graph_h = 42.0f;
+    float graph_x = 10.0f;
+    float graph_y = screen_h - graph_h - 24.0f;
+
+    if (graph_y > left_y + 10.0f) {
+        // Dark background plate
+        dl->AddRectFilled(
+            ImVec2(graph_x - 3.0f, graph_y - 14.0f),
+            ImVec2(graph_x + graph_w + 3.0f, graph_y + graph_h + 3.0f),
+            IM_COL32(0, 0, 0, 150)
+        );
+        dl->AddText(ImVec2(graph_x, graph_y - 13.0f), IM_COL32(200, 200, 200, 255), "Frame Time (Target: 60 fps / 16.6ms)");
+
+        // 60fps guide line
+        float line_60_y = graph_y + graph_h * (1.0f - (60.0f / 80.0f));
+        dl->AddLine(ImVec2(graph_x, line_60_y), ImVec2(graph_x + graph_w, line_60_y), IM_COL32(85, 255, 85, 120), 1.0f);
+
+        // Frame bars
+        float bar_w = graph_w / (float)FPS_HISTORY;
+        for (int i = 0; i < FPS_HISTORY; ++i) {
+            int idx = (m_fps_idx + i) % FPS_HISTORY;
+            float f = m_fps_history[idx];
+            if (f < 0.0f) f = 0.0f;
+            if (f > 80.0f) f = 80.0f;
+            float bar_h = (f / 80.0f) * graph_h;
+            ImU32 bcol = (f >= 55.0f) ? IM_COL32(85, 255, 85, 200)
+                       : (f >= 30.0f) ? IM_COL32(255, 200, 50, 200)
+                                      : IM_COL32(255, 85, 85, 200);
+            dl->AddRectFilled(
+                ImVec2(graph_x + i * bar_w, graph_y + graph_h - bar_h),
+                ImVec2(graph_x + (i + 1) * bar_w - 1.0f, graph_y + graph_h),
+                bcol
+            );
+        }
+    }
+
+    // Bottom-center quick keybind reminder
     {
-        // FPS badge — coloured by performance
-        ImVec4 fps_col = (st.fps >= 55.0f) ? ImVec4(0.30f, 0.90f, 0.50f, 1.0f)   // green
-                       : (st.fps >= 30.0f) ? ImVec4(1.00f, 0.78f, 0.20f, 1.0f)   // amber
-                                             : ImVec4(0.91f, 0.27f, 0.38f, 1.0f);  // red
-
-        ImGui::PushStyleColor(ImGuiCol_Text, fps_col);
-        char fps_label[32];
-        snprintf(fps_label, sizeof(fps_label), "%.1f FPS", st.fps);
-        ImGui::Text("%s", fps_label);
-        ImGui::PopStyleColor();
-
-        ImGui::SameLine((expanded ? 355 : 155) * layout_scale);
-        if (ImGui::Button(expanded ? " < ##exp" : " > ##exp", ImVec2(30 * layout_scale, 20 * layout_scale))) {
-            expanded = !expanded;
-        }
-    }
-
-    // -- Expanded Panel System --
-    if (expanded) {
-        ImGui::Separator();
-        
-        // Frame Sparkline
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.07f, 0.09f, 0.12f, 1.0f));
-        ImGui::PlotLines("##fps_graph", m_fps_history, FPS_HISTORY, m_fps_idx,
-                         nullptr, 0.0f, 75.0f, ImVec2(-1, 42));
-        ImGui::PopStyleColor();
-
-        ImGui::Separator();
-
-        // -- Render stats table --
-        if (ImGui::CollapsingHeader("Render Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (ImGui::BeginTable("rendertable", 2, ImGuiTableFlags_None)) {
-                ImGui::TableSetupColumn("Key",   ImGuiTableColumnFlags_WidthFixed, 140 * layout_scale);
-                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-                auto row = [](const char* key, const char* fmt, ...) {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.60f, 0.68f, 1.0f));
-                    ImGui::TextUnformatted(key);
-                    ImGui::PopStyleColor();
-                    ImGui::TableSetColumnIndex(1);
-                    char buf[128];
-                    va_list args;
-                    va_start(args, fmt);
-                    vsnprintf(buf, sizeof(buf), fmt, args);
-                    va_end(args);
-                    ImGui::TextUnformatted(buf);
-                };
-
-                row("Internal Res",  "%d\xc3\x97%d", st.draw_w, st.draw_h);
-                row("Window Size",   "%d\xc3\x97%d", st.win_w, st.win_h);
-                row("Draw Calls",    "%d",  st.draw_calls);
-                row("Tex Binds",     "%d",  st.tex_binds);
-                row("Vertices",      "%d",  st.vertices);
-                row("State Changes", "%d",  st.state_changes);
-                row("Tex Uploads",   "%d",  st.tex_uploads);
-                row("Frame Delta",   "%.4f s", st.dt_seconds);
-                row("Mouse Coordinates", "%d, %d", st.mouse_x, st.mouse_y);
-
-                ImGui::EndTable();
-            }
-        }
-
-        ImGui::Spacing();
-
-        // -- System info --
-        if (ImGui::CollapsingHeader("System & Modding", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (ImGui::BeginTable("systable", 2, ImGuiTableFlags_None)) {
-                ImGui::TableSetupColumn("Key",   ImGuiTableColumnFlags_WidthFixed, 140 * layout_scale);
-                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-                auto row = [](const char* key, const char* fmt, ...) {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.60f, 0.68f, 1.0f));
-                    ImGui::TextUnformatted(key);
-                    ImGui::PopStyleColor();
-                    ImGui::TableSetColumnIndex(1);
-                    char buf[256];
-                    va_list args;
-                    va_start(args, fmt);
-                    vsnprintf(buf, sizeof(buf), fmt, args);
-                    va_end(args);
-                    ImGui::TextUnformatted(buf);
-                };
-
-                row("Engine Binary",  "%s", st.binary_name);
-                row("Graphics API",   "%s", st.graphics_api);
-                row("Scaling Mode",   "%s", st.scale_mode);
-
-                // PostFX with coloured badge
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.60f, 0.68f, 1.0f));
-                ImGui::TextUnformatted("PostFX Mode");
-                ImGui::PopStyleColor();
-                ImGui::TableSetColumnIndex(1);
-                if (st.postfx_on) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.72f, 0.30f, 1.0f));
-                    ImGui::Text("ON (%s)", st.postfx_preset);
-                    ImGui::PopStyleColor();
-                } else {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.54f, 0.58f, 0.62f, 1.0f));
-                    ImGui::TextUnformatted("Disabled");
-                    ImGui::PopStyleColor();
-                }
-
-                row("Game Instance",  "%s%s",
-                    st.speed_label,
-                    st.game_paused ? "  (PAUSED)" : "");
-
-                // Camera
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.60f, 0.68f, 1.0f));
-                ImGui::TextUnformatted("Camera Focus");
-                ImGui::PopStyleColor();
-                ImGui::TableSetColumnIndex(1);
-                if (st.cam_active) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.90f, 0.50f, 1.0f));
-                    ImGui::Text("Overridden  (%.1f, %.1f, %.1f)",
-                                 st.cam_x, st.cam_y, st.cam_z);
-                    ImGui::PopStyleColor();
-                } else {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.54f, 0.58f, 0.62f, 1.0f));
-                    ImGui::TextUnformatted("Hero Follow");
-                    ImGui::PopStyleColor();
-                }
-
-                row("Hero Coords", "%.1f, %.1f, %.1f", st.hero_x, st.hero_y, st.hero_z);
-
-                ImGui::EndTable();
-            }
-        }
-
-        ImGui::Spacing();
-
-        // -- Redstell GC Panel --
-        if (ImGui::CollapsingHeader("Redstell Garbage Collector", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (ImGui::BeginTable("rgctable", 2, ImGuiTableFlags_None)) {
-                ImGui::TableSetupColumn("Key",   ImGuiTableColumnFlags_WidthFixed, 140 * layout_scale);
-                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-                auto row = [](const char* key, const char* fmt, ...) {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.60f, 0.68f, 1.0f));
-                    ImGui::TextUnformatted(key);
-                    ImGui::PopStyleColor();
-                    ImGui::TableSetColumnIndex(1);
-                    char buf[256];
-                    va_list args;
-                    va_start(args, fmt);
-                    vsnprintf(buf, sizeof(buf), fmt, args);
-                    va_end(args);
-                    ImGui::TextUnformatted(buf);
-                };
-
-                auto& rgc = RedstellGC::instance();
-
-                // Guest heap: pages actually accessed in the mmap'd guest address space
-                uint32_t ghs64 = get_guest_heap_size_64();
-                uint32_t ghs32 = get_guest_heap_size_32();
-                uint32_t guest_heap_total = ghs64 + ghs32;
-                row("Guest Heap Used", "%.2f MB", (float)guest_heap_total / (1024.0f * 1024.0f));
-                row("Current RAM", "%.2f MB", (float)rgc.get_current_ram() / (1024.0f * 1024.0f));
-                row("Peak RAM", "%.2f MB", (float)rgc.get_peak_ram() / (1024.0f * 1024.0f));
-                row("Largest Alloc", "%.2f MB", (float)rgc.get_largest_allocation() / (1024.0f * 1024.0f));
-                row("Fragmentation", "%.1f%%", rgc.get_fragmentation_estimate() * 100.0f);
-                row("Alloc / Free Rate", "%lu / %lu per sec", (unsigned long)rgc.get_alloc_rate(), (unsigned long)rgc.get_free_rate());
-                row("Live Resources", "%lu", (unsigned long)rgc.get_resource_count());
-                row("Optimizations Done", "%lu", (unsigned long)rgc.get_optimizations_performed());
-                row("Pending Cleanups", "%u items", rgc.get_cleanup_queue_size());
-                row("Last GC Duration", "%.2f ms", rgc.get_last_cleanup_duration());
-
-                ImGui::EndTable();
-            }
-
-            ImGui::Spacing();
-            if (ImGui::Button("Generate Allocation Report", ImVec2(-1, 0))) {
-                RedstellGC::instance().generate_allocation_report();
-            }
-
-            // Resource Breakdown Sub-Header
-            if (ImGui::TreeNode("Resource Breakdown")) {
-                auto& rgc = RedstellGC::instance();
-                ImGui::BulletText("Textures: %u", rgc.get_texture_count());
-                ImGui::BulletText("POD Models: %u", rgc.get_pod_count());
-                ImGui::BulletText("Lua States/Objects: %u", rgc.get_lua_object_count());
-                ImGui::BulletText("OpenGL Handles: %u", rgc.get_opengl_count());
-                ImGui::BulletText("Audio Channels: %u", rgc.get_openal_count());
-                ImGui::BulletText("VFS File Handles: %u", rgc.get_open_file_count());
-                ImGui::TreePop();
-            }
-
-            // Recent Logs Sub-Header
-            if (ImGui::TreeNode("Subsystem Diagnostics")) {
-                auto logs = RedstellGC::instance().get_logs();
-                ImGui::BeginChild("RgcLogChild", ImVec2(0, 100 * layout_scale), true, ImGuiWindowFlags_HorizontalScrollbar);
-                for (int i = (int)logs.size() - 1; i >= 0; i--) {
-                    ImGui::TextColored(ImVec4(0.7f, 0.75f, 0.8f, 1.0f), "[%lu ms] %s", 
-                        (unsigned long)logs[i].timestamp, logs[i].message.c_str());
-                }
-                ImGui::EndChild();
-                ImGui::TreePop();
-            }
-        }
-
-        ImGui::Spacing();
-
-        // -- Status flags row --
-        {
-            if (st.typing_mode) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.91f, 0.27f, 0.38f, 1.0f));
-                ImGui::Bullet();
-                ImGui::SameLine();
-                ImGui::TextUnformatted("TYPING MODE ACTIVE");
-                ImGui::PopStyleColor();
-            }
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-
-        // -- Keybind hint (compact) --
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.38f, 0.43f, 1.0f));
-            ImGui::SetWindowFontScale(0.88f);
-            ImGui::TextWrapped("F1:GUI  F2:Ctrl  F3:Debug  F4:Scale  F5:Cam  F6:PostFX  F7:Video  \\:Type  F10:HUD");
-            ImGui::SetWindowFontScale(1.0f);
-            ImGui::PopStyleColor();
-        }
+        const char* hint = "F1:GUI  F2:Controls  F3:Debug  F4:Scale  F5:Cam  F6:PostFX  F7:Video  \\:Type  F10:HUD";
+        ImVec2 hsz = ImGui::CalcTextSize(hint);
+        float hx = (screen_w - hsz.x) * 0.5f;
+        float hy = screen_h - hsz.y - 8.0f;
+        dl->AddRectFilled(
+            ImVec2(hx - 4.0f, hy - 2.0f),
+            ImVec2(hx + hsz.x + 4.0f, hy + hsz.y + 2.0f),
+            IM_COL32(0, 0, 0, 130)
+        );
+        dl->AddText(ImVec2(hx, hy), IM_COL32(180, 180, 180, 220), hint);
     }
 
     ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
 }
 
 // ---------------------------------------------------------------------------
@@ -1684,153 +1906,231 @@ void SwordfareGUI::draw_buttons(void* guest_buttons_ptr, void* guest_overlays_pt
 }
 
 
+// ---------------------------------------------------------------------------
+// Memory Research console (standalone overlay, [Insert])
+// ---------------------------------------------------------------------------
+void SwordfareGUI::draw_research_overlay() {
+    if (!m_initialized || !m_research_overlay_visible) return;
+    ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui_ctx));
+
+    // ── Xpera shell ──────────────────────────────────────────────────────
+    xpera::WindowSpec spec;
+    spec.mode       = xpera::WindowMode::Fullscreen;
+    spec.eyebrow    = "RESEARCH";
+    spec.title      = "Memory Research";
+    spec.subtitle   = "Live guest-memory console \u2014 catalog, decoder, watchpoints, DB";
+    spec.close_hint = "Insert";
+
+    bool open = true;
+    if (xpera::begin_window("##xpera_research", spec, &open)) {
+        if (!m_research_tab || !m_research_tab->is_ready()) {
+            ImGui::Spacing();
+            xpera::accent_rule();
+            ImGui::Spacing();
+            ImGui::TextColored(xpera::palette.warning,
+                ICON_FA_TRIANGLE_EXCLAMATION "  Memory Research is not initialised.");
+            ImGui::Spacing();
+            ImGui::TextWrapped(
+                "The embedded recovery catalog is only loaded by the ARM64 + SRE boot path. "
+                "Launch with SRE enabled (not --no-sre, not --openswordigo, not ARM32) and the "
+                "catalog will be available here.");
+        } else {
+            m_research_tab->draw();
+        }
+    }
+    xpera::end_window();
+
+    if (!open) m_research_overlay_visible = false;
+}
+
+void SwordfareGUI::draw_research_hud() {
+    if (!m_initialized || !m_research_tab) return;
+    if (!m_research_tab->hud_enabled()) return;
+    ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui_ctx));
+
+    // "full screen" in the bar returns to the console, on the section the bar was
+    // operating on.  Closing the console does not close the bar.
+    if (m_research_tab->draw_hud()) m_research_overlay_visible = true;
+}
+
 void SwordfareGUI::draw_mod_overlay(const std::string& save_dir) {
     if (!m_initialized || !m_mod_overlay_visible) return;
     ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui_ctx));
 
     ImGuiIO& io = ImGui::GetIO();
-    float win_w = io.DisplaySize.x;
-    float win_h = io.DisplaySize.y;
 
-    float panel_w = std::min(win_w - 32.0f, 1120.0f);
-    float panel_h = std::min(win_h - 32.0f, 760.0f);
+    extern const char* mod_speed_label();
 
-    ImGui::SetNextWindowPos(ImVec2((win_w - panel_w) / 2.0f, (win_h - panel_h) / 2.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h), ImGuiCond_Always);
+    // Forced-nav requests (from the F1 menu / Home dashboard) select a rail item.
+    if (m_overlay_forced_tab >= 0) {
+        m_overlay_tab        = m_overlay_forced_tab;
+        m_overlay_forced_tab = -1;
+    }
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.086f, 0.106f, 0.133f, 0.96f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.914f, 0.271f, 0.376f, 0.60f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.086f, 0.106f, 0.133f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.086f, 0.106f, 0.133f, 1.0f));
-
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | 
-                             ImGuiWindowFlags_NoSavedSettings;
+    // ── Xpera shell: frameless chrome, no game art, no chunky close button ──
+    xpera::WindowSpec spec;
+    spec.mode      = xpera::WindowMode::Fullscreen;
+    spec.eyebrow   = "SWORDFARE";
+    spec.title     = m_f11_overlay_active ? "Scene & Display" : "Mod Hub";
+    spec.subtitle  = m_f11_overlay_active
+        ? "Scene teleport, render resolution, output, upscaling and post-processing"
+        : "SRE runtime, Lua tooling, diagnostics and mod compatibility";
+    spec.close_hint = m_f11_overlay_active ? "F11" : "F4";
 
     bool open = true;
-    const char* window_title = m_f11_overlay_active
-        ? ICON_FA_MAP "  Swordfare Scene & Display Toolbox  [F11]"
-        : ICON_FA_CUBE "  Swordfare Mod Hub  [F4]";
-    if (ImGui::Begin(window_title, &open, flags)) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 wpos = ImGui::GetWindowPos();
-        ImVec2 wsz = ImGui::GetWindowSize();
+    if (xpera::begin_window("##swordfare_center", spec, &open)) {
+        if (m_status_timer > 0.0f) m_status_timer -= io.DeltaTime;
 
-        // ── Remaster: backdrop artwork + readability fade ──
-        if (m_tex_overlay_bg) {
-            dl->AddImage((ImTextureID)(intptr_t)m_tex_overlay_bg,
-                         wpos, ImVec2(wpos.x + wsz.x, wpos.y + wsz.y),
-                         ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 16));
-            dl->AddRectFilledMultiColor(wpos, ImVec2(wpos.x + wsz.x, wpos.y + wsz.y),
-                                        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
-                                        IM_COL32(22, 27, 34, 240), IM_COL32(22, 27, 34, 240));
-        }
+        const float rail_h = ImGui::GetContentRegionAvail().y;
 
-        // ── Remaster: header banner with launcher icon artwork ──
-        {
-            const float banner_h = 66.0f;
-            const ImVec2 b0 = wpos;
-            const ImVec2 b1(wpos.x + wsz.x, wpos.y + banner_h);
-            dl->AddRectFilledMultiColor(b0, b1,
-                                        IM_COL32(28, 36, 50, 255), IM_COL32(52, 26, 36, 255),
-                                        IM_COL32(52, 26, 36, 255), IM_COL32(28, 36, 50, 255));
-            dl->AddLine(ImVec2(b0.x, b1.y - 1), ImVec2(b1.x, b1.y - 1),
-                        IM_COL32(233, 69, 96, 110), 1.5f);
-
-            const float icon_size = 42.0f;
-            ImVec2 icon_pos(b0.x + 18.0f, b0.y + (banner_h - icon_size) * 0.5f);
-            if (m_tex_swordigo_icon) {
-                dl->AddImage((ImTextureID)(intptr_t)m_tex_swordigo_icon,
-                             icon_pos, ImVec2(icon_pos.x + icon_size, icon_pos.y + icon_size));
-            } else {
-                dl->AddText(static_cast<ImFont*>(m_font_button), 20.0f,
-                            ImVec2(icon_pos.x + 6, icon_pos.y + 8),
-                            IM_COL32(233, 69, 96, 255), ICON_FA_CUBE);
-            }
-
-            ImFont* title_font = static_cast<ImFont*>(m_font_button);
-            const float title_size = title_font ? ImGui::GetFontSize() : 20.0f;
-            dl->AddText(title_font, title_size,
-                        ImVec2(b0.x + 76.0f, b0.y + 12.0f), IM_COL32(82, 206, 255, 255),
-                        m_f11_overlay_active ? "SCENE & DISPLAY TOOLBOX" : "SWORDFARE MOD HUB");
-            dl->AddText(ImVec2(b0.x + 78.0f, b0.y + 41.0f), IM_COL32(172, 182, 197, 220),
-                        m_f11_overlay_active
-                            ? "Scene Shifter, render resolution, output and post-processing"
-                            : "SRE runtime, saves, diagnostics and mod compatibility");
-            ImGui::SetCursorPos(ImVec2(0, banner_h + 6));
-        }
+        // ── Left nav rail (replaces the old tab bar) ─────────────────────
+        ImGui::BeginChild("##sf_nav", ImVec2(198.0f, rail_h), ImGuiChildFlags_None);
+        if (xpera::nav_item(ICON_FA_HOUSE "  Home", nullptr, m_overlay_tab == 0)) m_overlay_tab = 0;
+        if (xpera::nav_item(ICON_FA_DISPLAY "  Scene & Display", nullptr, m_overlay_tab == 1)) m_overlay_tab = 1;
+        if (xpera::nav_item(ICON_FA_MAP "  Scene Shifter", nullptr, m_overlay_tab == 2)) m_overlay_tab = 2;
+        if (xpera::nav_item(ICON_FA_TERMINAL "  Diagnostics", nullptr, m_overlay_tab == 3)) m_overlay_tab = 3;
         ImGui::Spacing();
-
-        if (m_status_timer > 0.0f) {
-            m_status_timer -= ImGui::GetIO().DeltaTime;
+        xpera::divider();
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, xpera::palette.text_lo);
+        ImGui::TextUnformatted("RESEARCH");
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, xpera::palette.text_mid);
+        ImGui::TextWrapped("Live guest memory console (own window).");
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+        if (xpera::toolbar_button(ICON_FA_FLASK "  Open  [Insert]", false, ImVec2(-1, 32))) {
+            m_research_overlay_visible = true;
+            m_mod_overlay_visible = false;
+            m_f11_overlay_active = false;
         }
+        ImGui::EndChild();
 
-        if (ImGui::BeginTabBar("##mod_overlay_tabs")) {
-            if (ImGui::BeginTabItem("Readme")) {
+        ImGui::SameLine(0.0f, 16.0f);
+
+        // ── Content surface ──────────────────────────────────────────────
+        ImGui::BeginChild("##sf_content", ImVec2(0.0f, rail_h), ImGuiChildFlags_None);
+        if (m_overlay_tab == 0) {
                 ImGui::Spacing();
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.125f, 0.150f, 0.190f, 0.3f));
-                if (ImGui::BeginChild("##readme_child", ImVec2(0, 0), true)) {
-                    ImGui::PushTextWrapPos(0.0f);
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Overview:");
-                    ImGui::Text("This companion overlay provides seamless JNI-compatibility with the Swordigo SwKiwi Android mod loader ecosystem.");
-                    ImGui::Text("It translates Java bridge callbacks, redirects on-screen touch commands, handles LNI native requests (speed hack, clipboard actions, etc.), and renders UI extensions natively on PC.");
-                    ImGui::Spacing();
-                    ImGui::Separator();
-                    ImGui::Spacing();
-                    ImGui::TextColored(ImVec4(0.914f, 0.271f, 0.376f, 1.0f), "Instructions:");
-                    ImGui::BulletText("Toggle Debug Launcher: [F1]");
-                    ImGui::BulletText("Toggle In-Game Controls Config: [F2]");
-                    ImGui::BulletText("Toggle the Mod Hub: [F4]");
-                    ImGui::BulletText("Toggle Scene & Display Toolbox: [F11]");
-                    ImGui::BulletText("Modify game speed using [-] and [0] keys.");
-                    ImGui::PopTextWrapPos();
 
-                    // ── Remaster: item showcase strip from the game's own art ──
-                    ImGui::Spacing();
-                    ImGui::Separator();
-                    ImGui::Spacing();
-                    static const char* item_labels[4] = {
-                        "Brass Sword", "Fire Trinket", "Ice Trinket", "Healing Potion"
-                    };
-                    float item_w = (ImGui::GetContentRegionAvail().x - 30.0f) / 4.0f;
-                    if (item_w < 90.0f) item_w = 90.0f;
-                    for (int i = 0; i < 4; i++) {
-                        if (i > 0) ImGui::SameLine(0, 10);
-                        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.09f, 0.12f, 0.70f));
-                        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-                        ImGui::BeginChild(("##item" + std::to_string(i)).c_str(), ImVec2(item_w, 100), ImGuiChildFlags_Borders);
-                        if (m_tex_items[i] && m_tex_items_h[i] > 0) {
-                            float disp_h = 60.0f;
-                            float disp_w = disp_h * (float)m_tex_items_w[i] / (float)m_tex_items_h[i];
-                            if (disp_w > item_w - 16.0f) {
-                                disp_w = item_w - 16.0f;
-                                disp_h = disp_w * (float)m_tex_items_h[i] / (float)m_tex_items_w[i];
-                            }
-                            ImGui::SetCursorPos(ImVec2((item_w - disp_w) * 0.5f, 6.0f));
-                            ImGui::Image((ImTextureID)(intptr_t)m_tex_items[i], ImVec2(disp_w, disp_h));
-                        } else {
-                            ImGui::SetCursorPos(ImVec2((item_w - 20.0f) * 0.5f, 18.0f));
-                            ImGui::TextColored(ImVec4(0.914f, 0.271f, 0.376f, 0.6f), ICON_FA_CUBE);
-                        }
-                        ImGui::SetCursorPosX(std::max(0.0f, (item_w - ImGui::CalcTextSize(item_labels[i]).x) * 0.5f));
-                        ImGui::TextDisabled("%s", item_labels[i]);
-                        ImGui::EndChild();
-                        ImGui::PopStyleVar();
-                        ImGui::PopStyleColor();
-                    }
+                // ── Resolve live status ──────────────────────────────────────
+                const char* cur_scene = "(unknown)";
+                if (m_scene_shifter_ready && m_guest_memory && m_ss_current_scene_va) {
+                    const char* p = (const char*)(m_guest_memory + m_ss_current_scene_va);
+                    if (p[0]) cur_scene = p;
                 }
-                ImGui::EndChild();
-                ImGui::PopStyleColor();
-                ImGui::EndTabItem();
+                const bool sre_ok      = m_scene_shifter_ready || m_console_ready;
+                const bool catalog_ok  = is_research_ready();
+                const bool shifter_ok  = m_scene_shifter_ready;
+                const bool console_ok  = m_console_ready;
+
+                const float avail_w = ImGui::GetContentRegionAvail().x;
+                const float gap     = 16.0f;
+                const float col_l   = avail_w * 0.55f;
+                const float col_r   = avail_w - col_l - gap;
+
+                // ── LEFT COLUMN — branding + status grid ─────────────────
+                ImGui::BeginGroup();
+                ImGui::TextColored(ImVec4(0.914f, 0.271f, 0.376f, 1.0f), "S W O R D F A R E   //   C O N T R O L   C E N T E R");
+                ImGui::TextColored(ImVec4(0.55f, 0.60f, 0.68f, 1.0f),
+                    "Live SRE runtime, scene teleport, render/display and diagnostics \u2014 one workspace.");
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                ImGui::TextColored(ImVec4(0.00f, 0.85f, 1.00f, 1.0f), ICON_FA_GAUGE_HIGH "  System status");
+                ImGui::Spacing();
+
+                auto status_card = [&](const char* icon, const char* name, bool ok, const char* detail) {
+                    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.11f, 0.15f, 0.70f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 7.0f);
+                    ImGui::BeginChild(name, ImVec2(col_l - 8.0f, 54.0f), ImGuiChildFlags_Borders);
+                    ImGui::TextColored(ok ? ImVec4(0.30f, 0.90f, 0.55f, 1.0f) : ImVec4(0.90f, 0.45f, 0.30f, 1.0f),
+                        "%s  %s", icon, ok ? "ONLINE" : "OFFLINE");
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.82f, 0.86f, 0.92f, 1.0f), "   %s", name);
+                    ImGui::TextDisabled("%s", detail);
+                    ImGui::EndChild();
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor();
+                    ImGui::Spacing();
+                };
+                status_card(ICON_FA_BOLT,     "SRE runtime",      sre_ok,     "Java / native bridge + guest hooks");
+                status_card(ICON_FA_FLASK,    "Recovery catalog", catalog_ok, "Embedded struct / field database");
+                status_card(ICON_FA_MAP,      "Scene shifter",    shifter_ok, "Guest scene list + gateway dispatch");
+                status_card(ICON_FA_TERMINAL, "Lua console",      console_ok, "ImGui-native REPL and TCP server");
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.00f, 0.85f, 1.00f, 1.0f), ICON_FA_LOCATION_DOT "  Live session");
+                ImGui::Spacing();
+
+                if (ImGui::BeginTable("##home_live", 2, ImGuiTableFlags_SizingFixedFit)) {
+                    auto live_row = [&](const char* k, const char* v, ImVec4 col) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::TextDisabled("%s", k);
+                        ImGui::TableSetColumnIndex(1); ImGui::TextColored(col, "%s", v);
+                    };
+                    live_row("Current scene", cur_scene, ImVec4(0.30f, 0.90f, 0.55f, 1.0f));
+                    live_row("Game speed",    mod_speed_label(), ImVec4(1.0f, 0.85f, 0.30f, 1.0f));
+                    live_row("Save directory", save_dir.c_str(), ImVec4(0.70f, 0.75f, 0.82f, 1.0f));
+                    ImGui::EndTable();
+                }
+                ImGui::EndGroup();
+
+                // ── RIGHT COLUMN — quick actions + hotkeys ───────────────
+                ImGui::SameLine(0.0f, gap);
+                ImGui::BeginGroup();
+                ImGui::TextColored(ImVec4(0.00f, 0.85f, 1.00f, 1.0f), ICON_FA_SLIDERS "  Quick actions");
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                const float bw = (col_r > 40.0f) ? col_r - 8.0f : col_r;
+                if (ImGui::Button(ICON_FA_FLASK "  Memory Research   [Insert]", ImVec2(bw, 34))) {
+                    m_research_overlay_visible = true;
+                    m_mod_overlay_visible = false;
+                    m_f11_overlay_active = false;
+                }
+                if (ImGui::Button(ICON_FA_MAP "  Scene Shifter",           ImVec2(bw, 30))) m_overlay_forced_tab = 2;
+                if (ImGui::Button(ICON_FA_GEAR "  Render & Display",        ImVec2(bw, 30))) m_overlay_forced_tab = 1;
+                if (ImGui::Button(ICON_FA_TERMINAL "  Diagnostics & Logs",  ImVec2(bw, 30))) m_overlay_forced_tab = 3;
+                ImGui::Spacing();
+                if (ImGui::Button(ICON_FA_CUBE "  Close overlay   [F11]",   ImVec2(bw, 30))) {
+                    m_mod_overlay_visible = false;
+                    m_f11_overlay_active = false;
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.00f, 0.85f, 1.00f, 1.0f), ICON_FA_BOOK_OPEN "  Hotkeys");
+                ImGui::Separator();
+                static const struct { const char* k; const char* d; } kHomeKeys[] = {
+                    {"F1",       "Debug launcher / menu bar"},
+                    {"F3",       "Debug HUD overlay"},
+                    {"F4",       "Mod Hub (this window)"},
+                    {"F8 / F9",  "Pause / step one frame"},
+                    {"F10",      "Toggle on-screen controls"},
+                    {"F11",      "Scene & Display toolbox"},
+                    {"F12",      "Fullscreen toggle"},
+                    {"Insert",   "Memory Research console"},
+                    {"\u0060",   "Lua console"},
+                };
+                if (ImGui::BeginTable("##home_keys", 2, ImGuiTableFlags_SizingFixedFit)) {
+                    for (auto& hk : kHomeKeys) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextColored(ImVec4(0.00f, 0.70f, 0.90f, 1.0f), "%-9s", hk.k);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextColored(ImVec4(0.78f, 0.82f, 0.88f, 1.0f), "%s", hk.d);
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::EndGroup();
             }
 
-            ImGuiTabItemFlags opt_flags = ImGuiTabItemFlags_None;
-            if (m_overlay_forced_tab == 1) { opt_flags |= ImGuiTabItemFlags_SetSelected; m_overlay_forced_tab = -1; }
-            if (ImGui::BeginTabItem(ICON_FA_GEAR " Options", nullptr, opt_flags)) {
+            if (m_overlay_tab == 1) {
                 ImGui::Spacing();
                 extern void apply_render_preset(int preset);
                 extern int  g_render_preset;
@@ -2278,20 +2578,14 @@ void SwordfareGUI::draw_mod_overlay(const std::string& save_dir) {
                 }
                 ImGui::EndChild();
                 ImGui::PopStyleColor();
-                ImGui::EndTabItem();
             }
 
             // ─────────────────────────────────────────────────────────────────
-            // Scene Shifter tab — ARM64 only feature
+            // Scene Shifter view — ARM64 only feature
             // Scans mod + vanilla directories for .scene files and provides
             // Normal (loading screen) and Forced (instant) teleport gateways.
             // ─────────────────────────────────────────────────────────────────
-            ImGuiTabItemFlags scene_flags = ImGuiTabItemFlags_None;
-            if (m_overlay_forced_tab == 2) {
-                scene_flags |= ImGuiTabItemFlags_SetSelected;
-                m_overlay_forced_tab = -1;
-            }
-            if (ImGui::BeginTabItem(ICON_FA_MAP " Scene Shifter", nullptr, scene_flags)) {
+            if (m_overlay_tab == 2) {
                 static bool   scene_list_loaded = false;
                 static int    selected_scene     = -1;
                 static char   spawn_buf[64]      = "start";
@@ -2528,10 +2822,9 @@ void SwordfareGUI::draw_mod_overlay(const std::string& save_dir) {
                                        p_error);
                 }
 
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("Diagnostics & Logs")) {
+            if (m_overlay_tab == 3) {
                 ImGui::Spacing();
                 if (ImGui::Button("Clear Logs")) {
                     std::string log_file_path = save_dir + "/external/sre_lua_errors.log";
@@ -2564,19 +2857,16 @@ void SwordfareGUI::draw_mod_overlay(const std::string& save_dir) {
                 }
                 ImGui::EndChild();
                 ImGui::PopStyleColor();
-                ImGui::EndTabItem();
             }
-            ImGui::EndTabBar();
-        }
+
+        ImGui::EndChild();   // ##sf_content
     }
-    ImGui::End();
+    xpera::end_window();
+
     if (!open) {
         m_mod_overlay_visible = false;
         m_f11_overlay_active = false;
     }
-
-    ImGui::PopStyleColor(4);
-    ImGui::PopStyleVar(4);
 }
 
 bool SwordfareGUI::is_input_blocked(float mx, float my) {
@@ -2586,15 +2876,15 @@ bool SwordfareGUI::is_input_blocked(float mx, float my) {
     float win_w = io.DisplaySize.x;
     float win_h = io.DisplaySize.y;
 
-    // 1. If companion mod overlay is open and mouse is inside it, block input
-    if (m_mod_overlay_visible) {
-        float panel_w = std::min(win_w - 32.0f, 1120.0f);
-        float panel_h = std::min(win_h - 32.0f, 760.0f);
-        float px = (win_w - panel_w) / 2.0f;
-        float py = (win_h - panel_h) / 2.0f;
-        if (mx >= px && mx <= px + panel_w && my >= py && my <= py + panel_h) {
+    // 1. The control-center toolbox owns the whole display, so any click while
+    //    it is open must be consumed by ImGui rather than passed to the game.
+    if (m_mod_overlay_visible) return true;
+
+    // 1b. The standalone Memory Research console is inset by 18px.
+    if (m_research_overlay_visible) {
+        const float inset = 18.0f;
+        if (mx >= inset && mx <= win_w - inset && my >= inset && my <= win_h - inset)
             return true;
-        }
     }
 
     if (!m_last_buttons_ptr || m_buttons_globally_hidden) return false;
@@ -2742,19 +3032,22 @@ bool SwordfareGUI::write_save(const std::string& path) {
 // Brand palette — lifted from the project's own README badges (#00e5ff cyan,
 // #8b3dff purple) so the overlay visually matches the rest of the project.
 // ---------------------------------------------------------------------------
+// NOTE: these are now aliases into the Xpera palette, so every consumer of
+// this namespace (About / Help / the F1 bar) is re-skinned automatically. The
+// legacy hard-coded brand values were retired in the Xpera migration.
 namespace SwordfareTheme {
-    constexpr ImVec4 kBg          = ImVec4(0.043f, 0.047f, 0.063f, 0.97f); // near-black glass
-    constexpr ImVec4 kBgPopup     = ImVec4(0.055f, 0.063f, 0.086f, 0.99f);
-    constexpr ImVec4 kBorder      = ImVec4(0.30f,  0.30f,  0.36f,  0.35f);
-    constexpr ImVec4 kCyan        = ImVec4(0.00f,  0.898f, 1.00f,  1.00f); // #00e5ff
-    constexpr ImVec4 kPurple      = ImVec4(0.545f, 0.239f, 1.00f,  1.00f); // #8b3dff
-    constexpr ImVec4 kText        = ImVec4(0.90f,  0.92f,  0.96f,  1.00f);
-    constexpr ImVec4 kTextDim     = ImVec4(0.55f,  0.58f,  0.65f,  1.00f);
-    constexpr ImVec4 kHoverTint   = ImVec4(1.00f,  1.00f,  1.00f,  0.07f); // very light — no more solid blocks
-    constexpr ImVec4 kActiveTint  = ImVec4(0.00f,  0.898f, 1.00f,  0.16f);
-    constexpr ImVec4 kDanger      = ImVec4(0.95f,  0.32f,  0.36f,  1.00f);
-    constexpr ImVec4 kDangerHover = ImVec4(0.80f,  0.16f,  0.20f,  0.55f);
-    constexpr ImVec4 kOk          = ImVec4(0.30f,  0.85f,  0.55f,  1.00f);
+    inline const ImVec4 kBg          = xpera::palette.void_bg;
+    inline const ImVec4 kBgPopup     = xpera::palette.overlay;
+    inline const ImVec4 kBorder      = xpera::palette.border;
+    inline const ImVec4 kCyan        = xpera::palette.accent;
+    inline const ImVec4 kPurple      = xpera::palette.secondary;
+    inline const ImVec4 kText        = xpera::palette.text_hi;
+    inline const ImVec4 kTextDim     = xpera::palette.text_mid;
+    inline const ImVec4 kHoverTint   = xpera::palette.elevated;
+    inline const ImVec4 kActiveTint  = xpera::palette.accent_soft;
+    inline const ImVec4 kDanger      = xpera::palette.danger;
+    inline const ImVec4 kDangerHover = xpera::palette.danger;
+    inline const ImVec4 kOk          = xpera::palette.success;
 }
 
 // Small helper: draws a 1px cyan->purple gradient line under a rect, used
@@ -2762,8 +3055,8 @@ namespace SwordfareTheme {
 // accent instead of a filled highlight block.
 static void DrawAccentUnderline(ImVec2 p0, ImVec2 p1) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImU32 c0 = ImGui::ColorConvertFloat4ToU32(SwordfareTheme::kCyan);
-    ImU32 c1 = ImGui::ColorConvertFloat4ToU32(SwordfareTheme::kPurple);
+    ImU32 c0 = ImGui::ColorConvertFloat4ToU32(xpera::palette.accent);
+    ImU32 c1 = ImGui::ColorConvertFloat4ToU32(xpera::palette.secondary);
     dl->AddLine(p0, ImVec2(p1.x, p0.y), c0, 1.5f);
     dl->AddRectFilledMultiColor(p0, p1, c0, c1, c1, c0);
 }
@@ -2782,6 +3075,7 @@ GuiAction SwordfareGUI::draw_control_panel(bool* p_open) {
 
     extern GuiRenderer g_gui;
     extern bool g_game_paused;
+    extern const char* mod_speed_label();
 
     float scale = win_h / 720.0f;
     if (scale < 1.0f) scale = 1.0f;
@@ -2791,7 +3085,7 @@ GuiAction SwordfareGUI::draw_control_panel(bool* p_open) {
     ImVec4 kBgPopup     = ImVec4(0.09f, 0.10f, 0.12f, 1.00f);
     ImVec4 kBorder      = ImVec4(0.20f, 0.22f, 0.26f, 0.50f);
     ImVec4 kText        = ImVec4(0.85f, 0.88f, 0.92f, 1.00f);
-    ImVec4 kCyan        = ImVec4(0.00f, 0.55f, 1.00f, 1.00f); // Bright blue/cyan matching the image
+    ImVec4 kCyan        = xpera::palette.accent;             // Xpera indigo accent
 
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f * scale, 3.5f * scale)); // reduced height and padding
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(14.0f * scale, 0.0f));
@@ -2848,11 +3142,22 @@ GuiAction SwordfareGUI::draw_control_panel(bool* p_open) {
         menu("Mods", [&]() {
             ImGui::TextDisabled("CHEAT TOGGLES");
             ImGui::Separator();
-            ImGui::MenuItem("God Mode",       nullptr, &g_gui.mod_god_mode);
-            ImGui::MenuItem("Infinite Mana",  nullptr, &g_gui.mod_infinite_mana);
-            ImGui::MenuItem("Fly Mode",       nullptr, &g_gui.mod_fly_mode);
-            ImGui::MenuItem("Infinite Jump",  nullptr, &g_gui.mod_infinite_jump);
-            ImGui::MenuItem("Coin Break",     nullptr, &g_gui.mod_coin_break);
+            // Provenance is per-control. Offsets cross-checked against
+            // docs/sre13/HealthComponent.md; the rest are unverified heuristics.
+            ImGui::MenuItem("God Mode       (verified)", nullptr, &g_gui.mod_god_mode);
+            ImGui::TextDisabled("    HealthComponent currentHealth @ +0x78");
+            ImGui::MenuItem("Infinite Mana  (partial)", nullptr, &g_gui.mod_infinite_mana);
+            ImGui::TextDisabled("    ManaComponent +0x40 = max (+0x3C)");
+            ImGui::MenuItem("Infinite Jump  (partial)", nullptr, &g_gui.mod_infinite_jump);
+            ImGui::TextDisabled("    clears CharController air-jump count @ +0x158");
+            {
+                bool fly_dummy  = false;
+                bool coin_dummy = false;
+                ImGui::BeginDisabled();
+                ImGui::MenuItem("Fly Mode       (not implemented)", nullptr, &fly_dummy);
+                ImGui::MenuItem("Coin Break     (not implemented)", nullptr, &coin_dummy);
+                ImGui::EndDisabled();
+            }
             
             ImGui::Separator();
             
@@ -2904,13 +3209,31 @@ GuiAction SwordfareGUI::draw_control_panel(bool* p_open) {
             if (ImGui::MenuItem("About Mod"))      m_show_about = true;
         });
 
-        // ── Right-aligned branding "Swordigo" ────────────────────────────
-        const char* brand_lbl = "Swordigo";
-        ImVec2 brand_sz = ImGui::CalcTextSize(brand_lbl);
-        float brand_x = win_w - brand_sz.x - 12.0f * scale;
+        // ── Right-aligned status + branding ──────────────────────────────
+        {
+            const char* st_lbl  = g_game_paused ? "PAUSED" : mod_speed_label();
+            ImVec4      st_col  = g_game_paused ? xpera::palette.danger : xpera::palette.success;
+            const char* sep     = "   \xC2\xB7   ";
+            const char* brand   = "SWORDFARE";
+            const float total   = ImGui::CalcTextSize(st_lbl).x
+                                + ImGui::CalcTextSize(sep).x
+                                + ImGui::CalcTextSize(brand).x;
+            const float brand_x = win_w - total - 14.0f * scale;
+            if (brand_x > 0.0f) {
+                ImGui::SameLine(brand_x);
+                ImGui::TextColored(st_col, "%s", st_lbl);
+                ImGui::SameLine(0.0f, 0.0f);
+                ImGui::TextColored(xpera::palette.text_lo, "%s", sep);
+                ImGui::SameLine(0.0f, 0.0f);
+                ImGui::TextColored(kCyan, "%s", brand);
+            }
+        }
 
-        ImGui::SameLine(brand_x);
-        ImGui::TextColored(kCyan, "%s", brand_lbl);
+        // Cyan\u2192purple accent under the whole bar.
+        {
+            const float bar_bottom = ImGui::GetWindowHeight() - 1.0f;
+            DrawAccentUnderline(ImVec2(0.0f, bar_bottom), ImVec2(win_w, bar_bottom));
+        }
 
         ImGui::EndMainMenuBar();
     }
@@ -2942,10 +3265,10 @@ void SwordfareGUI::draw_lua_script_editor() {
     ImGui::SetNextWindowBgAlpha(0.98f);
 
     // Styling matches the console
-    const ImVec4 col_bg        = ImVec4(0.040f, 0.040f, 0.060f, 1.00f);
-    const ImVec4 col_border    = ImVec4(0.180f, 0.220f, 0.380f, 1.00f);
-    const ImVec4 col_input_bg  = ImVec4(0.020f, 0.020f, 0.035f, 1.00f);
-    const ImVec4 col_accent    = ImVec4(0.36f,  0.76f,  1.00f,  1.00f);
+    const ImVec4 col_bg        = xpera::palette.base;
+    const ImVec4 col_border    = xpera::palette.border;
+    const ImVec4 col_input_bg  = xpera::palette.input;
+    const ImVec4 col_accent    = xpera::palette.accent;
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, col_bg);
     ImGui::PushStyleColor(ImGuiCol_Border, col_border);
@@ -3097,9 +3420,9 @@ void SwordfareGUI::draw_lua_script_manager() {
     ImGui::SetNextWindowSize(ImVec2(W * 0.4f, H * 0.6f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.98f);
 
-    const ImVec4 col_bg        = ImVec4(0.040f, 0.040f, 0.060f, 1.00f);
-    const ImVec4 col_border    = ImVec4(0.180f, 0.220f, 0.380f, 1.00f);
-    const ImVec4 col_accent    = ImVec4(0.36f,  0.76f,  1.00f,  1.00f);
+    const ImVec4 col_bg        = xpera::palette.base;
+    const ImVec4 col_border    = xpera::palette.border;
+    const ImVec4 col_accent    = xpera::palette.accent;
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, col_bg);
     ImGui::PushStyleColor(ImGuiCol_Border, col_border);
@@ -3866,16 +4189,16 @@ void SwordfareGUI::draw_lua_console() {
     ImGui::SetNextWindowBgAlpha(1.0f);
 
     // ── Colour palette ─────────────────────────────────────────────────────
-    const ImVec4 col_bg        = ImVec4(0.040f, 0.040f, 0.060f, 1.00f); // deep navy-black
-    const ImVec4 col_border    = ImVec4(0.180f, 0.220f, 0.380f, 1.00f); // slate blue border
-    const ImVec4 col_header_bg = ImVec4(0.060f, 0.060f, 0.090f, 1.00f); // slightly lighter header strip
-    const ImVec4 col_input_bg  = ImVec4(0.030f, 0.030f, 0.050f, 1.00f); // input even darker
-    const ImVec4 col_sep       = ImVec4(0.160f, 0.200f, 0.340f, 1.00f);
-    const ImVec4 col_prompt    = ImVec4(0.36f,  0.76f,  1.00f,  1.00f); // sky-blue prompt
-    const ImVec4 col_out       = ImVec4(0.85f,  0.97f,  0.85f,  1.00f); // faint green output
-    const ImVec4 col_err       = ImVec4(1.00f,  0.38f,  0.38f,  1.00f); // red error
-    const ImVec4 col_meta      = ImVec4(0.40f,  0.44f,  0.60f,  1.00f); // dim info lines
-    const ImVec4 col_title     = ImVec4(0.36f,  0.76f,  1.00f,  1.00f); // title accent
+    const ImVec4 col_bg        = xpera::palette.void_bg;    // app backdrop
+    const ImVec4 col_border    = xpera::palette.border;
+    const ImVec4 col_header_bg = xpera::palette.surface;    // header strip
+    const ImVec4 col_input_bg  = xpera::palette.input;
+    const ImVec4 col_sep       = xpera::palette.border_soft;
+    const ImVec4 col_prompt    = xpera::palette.accent;     // indigo prompt
+    const ImVec4 col_out       = xpera::palette.text_hi;    // primary output
+    const ImVec4 col_err       = xpera::palette.danger;     // error
+    const ImVec4 col_meta      = xpera::palette.text_lo;    // dim info
+    const ImVec4 col_title     = xpera::palette.accent;     // title accent
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg,        col_bg);
     ImGui::PushStyleColor(ImGuiCol_Border,          col_border);
@@ -4519,4 +4842,72 @@ void SwordfareGUI::tcp_server_loop() {
             m_tcp_client_fd.store(-1);
         }
     }
+}
+
+// =============================================================================
+// Memory Research Tab — SwordfareGUI bridge methods
+// =============================================================================
+
+void SwordfareGUI::init_research_tab(const uint8_t* guest_memory,
+                                      uint64_t       guest_mem_size) {
+    if (!m_research_tab)
+        m_research_tab = std::make_unique<swordfare::research::MemoryResearchTab>();
+    // Tool typography, not the game's display face.  Passed in rather than
+    // looked up so the console has no dependency on this class's internals.
+    swordfare::research::MemoryResearchTab::ConsoleFonts fonts;
+    fonts.body = m_font_ui ? m_font_ui : m_font_main;
+    fonts.mono = m_font_mono;
+    m_research_tab->set_fonts(fonts);
+    m_research_tab->init(guest_memory, guest_mem_size);
+}
+
+void SwordfareGUI::update_research_roots(const swordfare::research::LiveRoots& roots) {
+    if (m_research_tab) m_research_tab->update_roots(roots);
+}
+
+bool SwordfareGUI::is_research_ready() const {
+    return m_research_tab && m_research_tab->is_ready();
+}
+
+void SwordfareGUI::tick_research(uint64_t frame, uint8_t* guest_memory,
+                                 uint64_t guest_mem_size) {
+    if (m_research_tab) m_research_tab->tick(frame, guest_memory, guest_mem_size);
+}
+
+void SwordfareGUI::set_research_module(const std::string& name, uint64_t base_va,
+                                       uint64_t rva_begin, uint64_t rva_end,
+                                       const std::string& build_id) {
+    if (!m_research_tab) return;
+    swordfare::research::ModuleExtent e;
+    e.name      = name;
+    e.base_va   = base_va;
+    e.rva_begin = rva_begin;
+    e.rva_end   = rva_end;
+    e.build_id  = build_id;
+    m_research_tab->register_module(e);
+}
+
+void SwordfareGUI::set_research_module_symbols(const std::string& name,
+                                               const void* symtab, size_t count,
+                                               const char* strtab, size_t strtab_size,
+                                               bool is_64) {
+    if (!m_research_tab) return;
+    const bool ok = m_research_tab->register_module_symbols(name, symtab, count,
+                                                           strtab, strtab_size, is_64);
+    std::cout << "[Research] symbols for " << name << ": "
+              << (ok ? "indexed" : "none available")
+              << " (" << count << " dynsym entries)" << std::endl;
+}
+
+void SwordfareGUI::set_research_module_sections(const std::string& name,
+                                                const void* shdrs, size_t count,
+                                                const char* names, size_t names_size,
+                                                bool is_64) {
+    if (!m_research_tab) return;
+    const bool ok = m_research_tab->register_module_sections(name, shdrs, count,
+                                                            names, names_size, is_64);
+    std::cout << "[Research] sections for " << name << ": "
+              << (ok ? "indexed" : "none available")
+              << " (" << count << " shdr entries, names "
+              << (names && names_size ? "kept" : "absent") << ")" << std::endl;
 }
