@@ -201,6 +201,7 @@ See [`LICENSE.md`](LICENSE.md), [`.github/CLA.md`](.github/CLA.md), [`src/sre/LI
 * **[Project Governance Model](.github/GOVERNANCE.md)** — Administrative structure and sole decision-making authority of AevoraLabs & Lawncher Team.
 * **[Code of Conduct](.github/CODE_OF_CONDUCT.md)** — Contributor Covenant v2.1 community pledge and enforcement procedures.
 * **[Terms of Use & Online Services](.github/TERMS_OF_USE.md)** — Acceptable use policy and conditions for the Lawncher Mod Store network and online infrastructure.
+* **[Privacy Policy](PRIVACY_POLICY.md)** — Zero-telemetry policy and local data protection disclosure.
 
 ---
 
