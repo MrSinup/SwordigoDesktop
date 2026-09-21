@@ -23,6 +23,7 @@ D8="${BUILD_TOOLS_DIR}/d8"
 ZIPALIGN="${BUILD_TOOLS_DIR}/zipalign"
 APKSIGNER="${BUILD_TOOLS_DIR}/apksigner"
 ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
+STRIP="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 
 echo "=== Ruby GG Mobile Android Build System ==="
 echo "SDK:        ${ANDROID_SDK_ROOT}"
@@ -129,6 +130,12 @@ for ABI in "${ABIS[@]}"; do
     echo "Copying Qt QML plugins from ${QT_ABI_DIR}/qml..."
     if [ -d "${QT_ABI_DIR}/qml" ]; then
         find "${QT_ABI_DIR}/qml" -name "*.so" -exec cp {} "${PACKAGE_DIR}/lib/${ABI}/" \;
+    fi
+
+    # 4. Strip unneeded debug symbols from native shared libraries for release
+    echo "Stripping debug symbols from ${PACKAGE_DIR}/lib/${ABI}..."
+    if [ -x "${STRIP}" ]; then
+        find "${PACKAGE_DIR}/lib/${ABI}" -name "*.so" -exec "${STRIP}" --strip-unneeded {} + 2>/dev/null || true
     fi
 done
 
