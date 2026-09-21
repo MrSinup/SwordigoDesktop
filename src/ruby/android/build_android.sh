@@ -10,19 +10,41 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-# TVPG Android Build Tools Root
-ANDROID_SDK_ROOT="/run/media/quantumcreeper/TVPG/linuxFiles/Applications/AndroidBuildTools"
-ANDROID_NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
-BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/35.0.0"
-PLATFORM_DIR="${ANDROID_SDK_ROOT}/platforms/android-36"
+# Android Build Tools & SDK resolution (respects environment or falls back to workstation)
+ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/run/media/quantumcreeper/TVPG/linuxFiles/Applications/AndroidBuildTools}}"
+
+if [ -z "${ANDROID_NDK_ROOT:-}" ]; then
+    if [ -d "${ANDROID_SDK_ROOT}/ndk" ]; then
+        ANDROID_NDK_ROOT="$(find "${ANDROID_SDK_ROOT}/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+    else
+        ANDROID_NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/28.2.13676358"
+    fi
+fi
+
+if [ -z "${BUILD_TOOLS_DIR:-}" ]; then
+    if [ -d "${ANDROID_SDK_ROOT}/build-tools" ]; then
+        BUILD_TOOLS_DIR="$(find "${ANDROID_SDK_ROOT}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+    else
+        BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/35.0.0"
+    fi
+fi
+
+if [ -z "${PLATFORM_DIR:-}" ]; then
+    if [ -d "${ANDROID_SDK_ROOT}/platforms" ]; then
+        PLATFORM_DIR="$(find "${ANDROID_SDK_ROOT}/platforms" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+    else
+        PLATFORM_DIR="${ANDROID_SDK_ROOT}/platforms/android-36"
+    fi
+fi
+
 ANDROID_JAR="${PLATFORM_DIR}/android.jar"
 TOOLCHAIN_FILE="${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake"
 
 AAPT2="${BUILD_TOOLS_DIR}/aapt2"
 D8="${BUILD_TOOLS_DIR}/d8"
-ZIPALIGN="${BUILD_TOOLS_DIR}/zipalign"
-APKSIGNER="${BUILD_TOOLS_DIR}/apksigner"
-ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
+ZIPALIGN="$(which zipalign 2>/dev/null || echo "${BUILD_TOOLS_DIR}/zipalign")"
+APKSIGNER="$(which apksigner 2>/dev/null || echo "${BUILD_TOOLS_DIR}/apksigner")"
+ADB="$(which adb 2>/dev/null || echo "${ANDROID_SDK_ROOT}/platform-tools/adb")"
 STRIP="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 
 echo "=== Ruby GG Mobile Android Build System ==="
@@ -50,6 +72,8 @@ for ABI in "${ABIS[@]}"; do
     if [ ! -d "${QT_ABI_DIR}" ]; then
         if [ -n "${QT_DIR:-}" ] && [ -d "${QT_DIR}" ]; then
             QT_ABI_DIR="${QT_DIR}"
+        elif [ -n "${Qt6_DIR:-}" ] && [ -d "${Qt6_DIR}/../../.." ]; then
+            QT_ABI_DIR="$(cd "${Qt6_DIR}/../../.." && pwd)"
         elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}" ]; then
             QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}"
         elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a" ]; then
@@ -60,8 +84,14 @@ for ABI in "${ABIS[@]}"; do
     fi
 
     QT_HOST_DIR="${BUILD_ROOT}/qt6/6.6.3/gcc_64"
-    if [ ! -d "${QT_HOST_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64" ]; then
-        QT_HOST_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64"
+    if [ ! -d "${QT_HOST_DIR}" ]; then
+        if [ -n "${QT_HOST_PATH:-}" ] && [ -d "${QT_HOST_PATH}" ]; then
+            QT_HOST_DIR="${QT_HOST_PATH}"
+        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64" ]; then
+            QT_HOST_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64"
+        else
+            QT_HOST_DIR="/usr"
+        fi
     fi
 
     cmake -S "${SCRIPT_DIR}" -B "${ABI_BUILD_DIR}" \
@@ -142,8 +172,10 @@ done
 # Package QML assets into assets/qml
 echo "Packaging QML modules into assets/qml..."
 mkdir -p "${PACKAGE_DIR}/assets/qml"
-QT_QML_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml"
-if [ ! -d "${QT_QML_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/qml" ]; then
+QT_QML_DIR="${QT_ABI_DIR}/qml"
+if [ ! -d "${QT_QML_DIR}" ] && [ -d "${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml" ]; then
+    QT_QML_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml"
+elif [ ! -d "${QT_QML_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/qml" ]; then
     QT_QML_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/qml"
 fi
 if [ -d "${QT_QML_DIR}" ]; then
@@ -165,9 +197,12 @@ JAVA_OUT="${BUILD_ROOT}/java_classes"
 rm -rf "${JAVA_OUT}"
 mkdir -p "${JAVA_OUT}"
 
-QT_JAR_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/jar"
-QT_SRC_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/src/android/java/src"
-if [ ! -d "${QT_JAR_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/jar" ]; then
+QT_JAR_DIR="${QT_ABI_DIR}/jar"
+QT_SRC_DIR="${QT_ABI_DIR}/src/android/java/src"
+if [ ! -d "${QT_JAR_DIR}" ] && [ -d "${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/jar" ]; then
+    QT_JAR_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/jar"
+    QT_SRC_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/src/android/java/src"
+elif [ ! -d "${QT_JAR_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/jar" ]; then
     QT_JAR_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/jar"
     QT_SRC_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/src/android/java/src"
 fi
