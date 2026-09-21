@@ -45,12 +45,34 @@ for ABI in "${ABIS[@]}"; do
     ABI_BUILD_DIR="${BUILD_ROOT}/${ABI}"
     mkdir -p "${ABI_BUILD_DIR}"
 
+    QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_${ABI//-/_}"
+    if [ ! -d "${QT_ABI_DIR}" ]; then
+        if [ -n "${QT_DIR:-}" ] && [ -d "${QT_DIR}" ]; then
+            QT_ABI_DIR="${QT_DIR}"
+        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}" ]; then
+            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}"
+        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a" ]; then
+            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a"
+        else
+            QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a"
+        fi
+    fi
+
+    QT_HOST_DIR="${BUILD_ROOT}/qt6/6.6.3/gcc_64"
+    if [ ! -d "${QT_HOST_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64" ]; then
+        QT_HOST_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64"
+    fi
+
     cmake -S "${SCRIPT_DIR}" -B "${ABI_BUILD_DIR}" \
         -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
         -DANDROID_ABI="${ABI}" \
         -DANDROID_PLATFORM=android-24 \
         -DCMAKE_BUILD_TYPE=Release \
-        -DANDROID_STL=c++_shared
+        -DANDROID_STL=c++_shared \
+        -DCMAKE_FIND_ROOT_PATH="${QT_ABI_DIR}" \
+        -DCMAKE_PREFIX_PATH="${QT_ABI_DIR}" \
+        -DQT_HOST_PATH="${QT_HOST_DIR}" \
+        -DQt6_DIR="${QT_ABI_DIR}/lib/cmake/Qt6"
 
     cmake --build "${ABI_BUILD_DIR}" --config Release -j"$(nproc)"
     echo "[✓] Native library built: ${ABI_BUILD_DIR}/libruby.so"
@@ -83,7 +105,15 @@ for ABI in "${ABIS[@]}"; do
     # 3. Qt shared libraries and plugins for this ABI
     QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_${ABI//-/_}"
     if [ ! -d "${QT_ABI_DIR}" ]; then
-        QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a"
+        if [ -n "${QT_DIR:-}" ] && [ -d "${QT_DIR}" ]; then
+            QT_ABI_DIR="${QT_DIR}"
+        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}" ]; then
+            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}"
+        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a" ]; then
+            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a"
+        else
+            QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a"
+        fi
     fi
 
     echo "Copying Qt shared libraries from ${QT_ABI_DIR}/lib..."
@@ -105,8 +135,12 @@ done
 # Package QML assets into assets/qml
 echo "Packaging QML modules into assets/qml..."
 mkdir -p "${PACKAGE_DIR}/assets/qml"
-if [ -d "${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml" ]; then
-    cp -r "${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml/"* "${PACKAGE_DIR}/assets/qml/"
+QT_QML_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml"
+if [ ! -d "${QT_QML_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/qml" ]; then
+    QT_QML_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/qml"
+fi
+if [ -d "${QT_QML_DIR}" ]; then
+    cp -r "${QT_QML_DIR}/"* "${PACKAGE_DIR}/assets/qml/"
     find "${PACKAGE_DIR}/assets/qml" -name "*.so" -delete
 fi
 
@@ -126,6 +160,10 @@ mkdir -p "${JAVA_OUT}"
 
 QT_JAR_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/jar"
 QT_SRC_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/src/android/java/src"
+if [ ! -d "${QT_JAR_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/jar" ]; then
+    QT_JAR_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/jar"
+    QT_SRC_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/src/android/java/src"
+fi
 
 QT_CP=""
 for j in "${QT_JAR_DIR}"/*.jar; do

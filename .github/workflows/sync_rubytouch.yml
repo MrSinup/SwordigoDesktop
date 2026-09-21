@@ -1,0 +1,58 @@
+name: Sync Ruby Touch Mirror
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'src/ruby/**'
+      - 'src/tools/**'
+      - 'src/platform/**'
+      - 'src/stb/**'
+      - 'src/android/**'
+      - 'src/sre/base/lua/**'
+      - 'LICENSE.md'
+      - '.github/.localisation/**'
+      - 'tools/sync_rubytouch.sh'
+      - '.github/workflows/sync_rubytouch.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-rubytouch
+  cancel-in-progress: false
+
+jobs:
+  sync-to-rubytouch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SwordigoDesktop
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Checkout RubyTouch
+        uses: actions/checkout@v4
+        with:
+          repository: TheAevoraLabs/RubyTouch
+          token: ${{ secrets.RUBYTOUCH_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          path: rubytouch_dest
+          fetch-depth: 1
+
+      - name: Run Sync Script
+        run: |
+          chmod +x tools/sync_rubytouch.sh
+          ./tools/sync_rubytouch.sh rubytouch_dest
+
+      - name: Commit and Push to RubyTouch
+        run: |
+          cd rubytouch_dest
+          git config user.name "AevoraLabs"
+          git config user.email "openswordigo@gmail.com"
+          if [[ -n $(git status --porcelain) ]]; then
+            git add -A
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+            git commit -m "sync: update Ruby Touch from SwordigoDesktop commit ${SHORT_SHA}"
+            git push origin master
+          else
+            echo "No changes detected to sync."
+          fi
