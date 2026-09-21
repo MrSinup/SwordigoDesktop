@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Ambient Ruby Back-Glow -->
+    <path
+        android:fillColor="#FF2A55"
+        android:fillAlpha="0.12"
+        android:pathData="M54,26 C68,26 82,38 82,54 C82,70 68,82 54,82 C40,82 26,70 26,54 C26,38 40,26 54,26 Z" />
+
+    <!-- PAVILION (LOWER FACETS - converging to Culet at 54, 78) -->
+    <!-- Far-Left Pavilion (Reflected edge light) -->
+    <path
+        android:fillColor="#C9184A"
+        android:pathData="M27,50 L41,50 L54,78 Z" />
+
+    <!-- Center-Left Pavilion (Direct core brilliance) -->
+    <path
+        android:fillColor="#E01E5A"
+        android:pathData="M41,50 L54,50 L54,78 Z" />
+
+    <!-- Center-Right Pavilion (Core shadow depth) -->
+    <path
+        android:fillColor="#800F2F"
+        android:pathData="M54,50 L67,50 L54,78 Z" />
+
+    <!-- Far-Right Pavilion (Deep shadowed wine) -->
+    <path
+        android:fillColor="#590D22"
+        android:pathData="M67,50 L81,50 L54,78 Z" />
+
+    <!-- CROWN (UPPER FACETS) -->
+    <!-- Table Facet (Flat top crown) -->
+    <path
+        android:fillColor="#FF4D6D"
+        android:pathData="M41,32 L67,32 L60,42 L48,42 Z" />
+
+    <!-- Top-Left Crown Corner -->
+    <path
+        android:fillColor="#FF758F"
+        android:pathData="M41,32 L48,42 L27,50 Z" />
+
+    <!-- Top-Right Crown Corner -->
+    <path
+        android:fillColor="#A4133C"
+        android:pathData="M67,32 L81,50 L60,42 Z" />
+
+    <!-- Center Crown Kite (Upper Center) -->
+    <path
+        android:fillColor="#FF2A55"
+        android:pathData="M48,42 L60,42 L54,50 Z" />
+
+    <!-- Left Crown Kite -->
+    <path
+        android:fillColor="#FF5C7A"
+        android:pathData="M27,50 L48,42 L41,50 Z" />
+
+    <!-- Right Crown Kite -->
+    <path
+        android:fillColor="#C9184A"
+        android:pathData="M60,42 L81,50 L67,50 Z" />
+
+    <!-- Center Intermediate Keystone -->
+    <path
+        android:fillColor="#E01E5A"
+        android:pathData="M41,50 L48,42 L54,50 Z" />
+
+    <path
+        android:fillColor="#A4133C"
+        android:pathData="M54,50 L60,42 L67,50 Z" />
+
+    <!-- SPECULAR HIGHLIGHTS & CAUSTICS -->
+    <!-- Table Primary Glint -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.75"
+        android:pathData="M43,33 L55,33 L50,38 L43,36 Z" />
+
+    <!-- Left Angle Glint -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.45"
+        android:pathData="M41,32 L48,42 L43,40 Z" />
+
+    <!-- Bottom Culet Sparkle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.80"
+        android:pathData="M53,76 L55,76 L54,78 Z" />
+
+    <!-- PRECISION FACET WIREFRAME LINES -->
+    <!-- Table Rim Stroke -->
+    <path
+        android:strokeColor="#FFA8BA"
+        android:strokeAlpha="0.65"
+        android:strokeWidth="0.75"
+        android:pathData="M41,32 L67,32 M27,50 L81,50 M54,50 L54,78" />
+
+    <!-- Outer Contour Stroke -->
+    <path
+        android:strokeColor="#FFCCD5"
+        android:strokeAlpha="0.5"
+        android:strokeWidth="0.9"
+        android:pathData="M41,32 L67,32 L81,50 L54,78 L27,50 Z" />
+</vector>

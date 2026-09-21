@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#11141D</color>
+    <color name="ruby_primary">#E63946</color>
+    <color name="ruby_light">#FF4D6D</color>
+    <color name="ruby_dark">#A80038</color>
+    <color name="ruby_accent">#FF1E56</color>
+</resources>

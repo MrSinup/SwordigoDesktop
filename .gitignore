@@ -9,6 +9,7 @@ build/
 bin/
 rl_builder/
 build-cmake/
+build-android/
 srcs/
 *.o
 /swordigo_boot
@@ -80,8 +81,9 @@ rl_*.so
 assets/
 # -------- COPYRIGHTED GAME MUSIC --------
 # Original Swordigo + RLSwordigo music — copyrighted
-res/
-res/**
+/res/
+/res/**
+!src/ruby/android/res/
 *.mp3
 *.ogg
 # -------- COPYRIGHTED GAME ASSETS --------

@@ -60,7 +60,14 @@ Instead of relying on heavy OS virtualization, Android containers, or slow emula
 * **Inline Engine Pod (`src/ruby/emulator/`)**: Runs a headless instance of the engine communicating across shared memory POSIX rings (`pod_ipc.cpp`), enabling real-time live gameplay previews directly within an editor dock.
 * **Embedded Offline Git (`src/ruby/git/`)**: Embedded static `libgit2` implementation with zero external shared library dependencies, powering local history, visual diffing, and revision rollbacks.
 
-### 3.2 Swordigo Runtime Environment (SRE) (`src/sre/`)
+### 3.2 Ruby Touch (Ruby Mobile) (`src/ruby/android/`)
+* **Standalone Mobile Distribution**: Ruby Touch (also known as **Ruby Mobile**, formerly Ruby GG Mobile) brings the 3D scene studio and terrain modding capabilities directly to Android smartphones and tablets.
+* **Touch-Optimized Controls**: Dual floating thumbsticks for 3D camera translation, orbit, and elevation with hardware refresh rates up to 120Hz.
+* **Ground Mesh Studio**: Direct 3D vertex manipulation via ray-plane touch projection, diamond vertex selection handles, and non-destructive in-place topology updates.
+* **In-Place Biome Texturing**: Instant surface cap and vertical cliff texture swapping with 10 authentic game biome presets and local modder preset storage.
+* **Standalone Distribution**: Packaged and mirrored as the lightweight standalone repository [RubyTouch](https://github.com/TheAevoraLabs/RubyTouch).
+
+### 3.3 Swordigo Runtime Environment (SRE) (`src/sre/`)
 * **Modular Architecture**:
   * `src/sre/base/`: Shared infrastructure including vendored Lua 5.1 runtime, fake-libc POSIX headers, `sre_setjmp.S`, `toml-c`, `luasocket`, `lfs`, and `raknet`.
   * `src/sre/sre12/`: Swordigo 1.4.12 guest runtime, non-atomic string optimizations, and core gameplay hooks.

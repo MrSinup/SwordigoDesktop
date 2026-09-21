@@ -115,7 +115,7 @@ Item {
                     }
 
                     Text {
-                        text: qsTr("Welcome to Ruby GG")
+                        text: qsTr("Welcome to Ruby Touch")
                         font.pixelSize: Theme.dp(20)
                         font.weight: Font.Bold
                         color: Theme.textPrimary

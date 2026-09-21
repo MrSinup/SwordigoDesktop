@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Rounded Squircle Dark Base -->
+    <path
+        android:fillColor="#11141D"
+        android:pathData="M16,0 L92,0 A16,16 0 0 1 108,16 L108,92 A16,16 0 0 1 92,108 L16,108 A16,16 0 0 1 0,92 L0,16 A16,16 0 0 1 16,0 Z" />
+
+    <!-- Subtle Ruby Glow Center -->
+    <path
+        android:fillColor="#22121A"
+        android:pathData="M54,20 C72.78,20 88,35.22 88,54 C88,72.78 72.78,88 54,88 C35.22,88 20,72.78 20,54 C20,35.22 35.22,20 54,20 Z" />
+
+    <!-- Center Pavilion (Center Lower Body) -->
+    <path
+        android:fillColor="#E63946"
+        android:pathData="M48,48 L60,48 L54,76 Z" />
+
+    <!-- Left Pavilion (Left Lower Body) -->
+    <path
+        android:fillColor="#FF2A55"
+        android:pathData="M30,48 L48,48 L54,76 Z" />
+
+    <!-- Right Pavilion (Right Lower Shadow) -->
+    <path
+        android:fillColor="#9B002E"
+        android:pathData="M60,48 L78,48 L54,76 Z" />
+
+    <!-- Top Crown Table (Top Center) -->
+    <path
+        android:fillColor="#FF4D6D"
+        android:pathData="M42,36 L66,36 L60,48 L48,48 Z" />
+
+    <!-- Top-Left Crown (Top Left Angle) -->
+    <path
+        android:fillColor="#FF1E56"
+        android:pathData="M42,36 L48,48 L30,48 Z" />
+
+    <!-- Top-Right Crown (Top Right Angle) -->
+    <path
+        android:fillColor="#D81159"
+        android:pathData="M66,36 L78,48 L60,48 Z" />
+
+    <!-- Specular Highlight Glint -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.65"
+        android:pathData="M44,38 L54,38 L48,45 Z" />
+
+    <!-- Sharp Girdle Rim Accent -->
+    <path
+        android:strokeColor="#FF85A1"
+        android:strokeWidth="0.8"
+        android:pathData="M42,36 L66,36 M30,48 L78,48" />
+</vector>

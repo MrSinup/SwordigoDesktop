@@ -13,7 +13,7 @@ ApplicationWindow {
     visible: true
     width: 412
     height: 915
-    title: qsTr("Ruby GG")
+    title: qsTr("Ruby Touch (Ruby Mobile)")
     color: Theme.surface0
 
     // ── Material 3 dark, keyed to the promoted QSS palette ─────────────────

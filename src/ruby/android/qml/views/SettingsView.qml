@@ -449,7 +449,7 @@ Item {
             // ── Section 6: About & Community ────────────────────────────────
             SectionCard {
                 width: parent.width
-                label: qsTr("About Ruby GG Mobile")
+                label: qsTr("About Ruby Touch (Ruby Mobile)")
                 accentIcon: "info"
 
                 Row {
@@ -468,7 +468,7 @@ Item {
                         spacing: Theme.dp(2)
 
                         Text {
-                            text: qsTr("Ruby GG Mobile")
+                            text: (typeof rubySettings !== "undefined" && rubySettings && rubySettings.appName) ? rubySettings.appName : qsTr("Ruby Touch (Ruby Mobile)")
                             font.pixelSize: Theme.dp(16)
                             font.weight: Font.Bold
                             color: Theme.textPrimary
@@ -597,7 +597,7 @@ Item {
 
                 Text {
                     width: parent.width
-                    text: qsTr("Swordigo is \u00A9 Ville M\u00E4kynen / Touch Foo. Ruby GG ships no original "
+                    text: qsTr("Swordigo is \u00A9 Ville M\u00E4kynen / Touch Foo. Ruby Touch (Ruby Mobile) ships no original "
                                + "assets or binaries and is a research and preservation effort only.")
                     font.pixelSize: Theme.dp(Theme.fontXs)
                     color: Theme.textMuted

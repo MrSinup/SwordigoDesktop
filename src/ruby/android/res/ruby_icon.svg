@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <radialGradient id="bgGrad" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#26101B" />
+      <stop offset="45%" stop-color="#141824" />
+      <stop offset="100%" stop-color="#0B0D14" />
+    </radialGradient>
+    <radialGradient id="haloGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E01E5A" stop-opacity="0.35" />
+      <stop offset="70%" stop-color="#E01E5A" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#E01E5A" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="facetTable" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF5C7A" />
+      <stop offset="100%" stop-color="#E01E5A" />
+    </linearGradient>
+    <linearGradient id="facetTopLeft" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF85A1" />
+      <stop offset="100%" stop-color="#FF3366" />
+    </linearGradient>
+    <linearGradient id="facetCenterPavilion" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF1E56" />
+      <stop offset="100%" stop-color="#A4133C" />
+    </linearGradient>
+    <linearGradient id="facetDarkPavilion" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#800F2F" />
+      <stop offset="100%" stop-color="#48081A" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="16" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="512" height="512" rx="104" fill="url(#bgGrad)" />
+  <rect width="510" height="510" x="1" y="1" rx="103" fill="none" stroke="#2D3346" stroke-width="2" />
+
+  <!-- Ambient Ruby Aura -->
+  <circle cx="256" cy="260" r="180" fill="url(#haloGrad)" />
+
+  <!-- MAIN GEMSTONE (Width 280, Height 260) -->
+  <g filter="url(#glow)">
+    <!-- Pavilion (Lower Body converging to Culet at 256, 390) -->
+    <!-- Far-Left Pavilion -->
+    <polygon points="116,235 186,235 256,390" fill="#C9184A" />
+    <!-- Center-Left Pavilion -->
+    <polygon points="186,235 256,235 256,390" fill="url(#facetCenterPavilion)" />
+    <!-- Center-Right Pavilion -->
+    <polygon points="256,235 326,235 256,390" fill="#800F2F" />
+    <!-- Far-Right Pavilion -->
+    <polygon points="326,235 396,235 256,390" fill="url(#facetDarkPavilion)" />
+
+    <!-- Crown (Upper Facets) -->
+    <!-- Table (Flat top crown) -->
+    <polygon points="190,135 322,135 288,190 224,190" fill="url(#facetTable)" />
+    <!-- Top-Left Corner -->
+    <polygon points="190,135 224,190 116,235" fill="url(#facetTopLeft)" />
+    <!-- Top-Right Corner -->
+    <polygon points="322,135 396,235 288,190" fill="#A4133C" />
+    <!-- Center Crown Kite -->
+    <polygon points="224,190 288,190 256,235" fill="#FF2A55" />
+    <!-- Left Crown Kite -->
+    <polygon points="116,235 224,190 186,235" fill="#FF4D6D" />
+    <!-- Right Crown Kite -->
+    <polygon points="288,190 396,235 326,235" fill="#C9184A" />
+    <!-- Center Left Keystone -->
+    <polygon points="186,235 224,190 256,235" fill="#E01E5A" />
+    <!-- Center Right Keystone -->
+    <polygon points="256,235 288,190 326,235" fill="#A4133C" />
+
+    <!-- Specular Flare / Caustic Glints -->
+    <!-- Top Table Leading Edge -->
+    <polygon points="200,138 270,138 245,160 206,152" fill="#FFFFFF" fill-opacity="0.8" />
+    <!-- Left Facet Accent -->
+    <polygon points="190,135 224,190 198,175" fill="#FFFFFF" fill-opacity="0.4" />
+    <!-- Culet Sparkle -->
+    <polygon points="254,380 258,380 256,390" fill="#FFFFFF" fill-opacity="0.9" />
+
+    <!-- Precision Cut Facet Borders -->
+    <path d="M190,135 L322,135 M116,235 L396,235 M256,235 L256,390 M224,190 L256,235 M288,190 L256,235" 
+          stroke="#FFB3C1" stroke-opacity="0.5" stroke-width="2" fill="none" />
+    <polygon points="190,135 322,135 396,235 256,390 116,235" 
+             stroke="#FFCCD5" stroke-opacity="0.75" stroke-width="3" fill="none" />
+  </g>
+</svg>

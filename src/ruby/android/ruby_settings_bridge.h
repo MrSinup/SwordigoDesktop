@@ -21,6 +21,7 @@ class RubySettingsBridge : public QObject {
     Q_PROPERTY(int editorFontSize READ editorFontSize WRITE setEditorFontSize NOTIFY editorFontSizeChanged)
     Q_PROPERTY(bool hapticsEnabled READ hapticsEnabled WRITE setHapticsEnabled NOTIFY hapticsEnabledChanged)
     Q_PROPERTY(int nameDatabaseCount READ nameDatabaseCount CONSTANT)
+    Q_PROPERTY(QString appName READ appName CONSTANT)
     Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
     // Provenance shown on the About card.  Kept here rather than hard-coded in
     // QML so the desktop and mobile About panels cannot drift apart.
@@ -70,7 +71,12 @@ public:
     void setHapticsEnabled(bool val);
 
     int nameDatabaseCount() const;
-    QString appVersion() const { return QStringLiteral("v1.1 (Swordigo Studio)"); }
+    QString appName() const { return QStringLiteral("Ruby Touch (Ruby Mobile)"); }
+#ifdef RUBY_BUILD_VERSION
+    QString appVersion() const { return QStringLiteral(RUBY_BUILD_VERSION); }
+#else
+    QString appVersion() const { return QStringLiteral("v1.2 (Ruby Mobile)"); }
+#endif
 
     QString copyrightHolder() const { return QStringLiteral("MrSinup"); }
     QString licenseName() const { return QStringLiteral("GNU General Public License v3.0"); }

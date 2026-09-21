@@ -11,7 +11,7 @@
 
 ## 1. Introduction
 
-The Aevora Labs and the OpenSwordigo community develop and maintain **SwordigoDesktop**, an open-source cross-platform desktop suite comprising the Swordigo game recreation, the Ruby GG 3D scene studio, and modding toolchains for Linux and Windows.
+The Aevora Labs and the OpenSwordigo community develop and maintain **SwordigoDesktop**, an open-source cross-platform desktop and mobile suite comprising the Swordigo game recreation, the Ruby GG 3D scene studio, the Ruby Touch (Ruby Mobile) mobile edition, and modding toolchains for Linux, Windows, and Android.
 
 We believe user privacy is a fundamental right. This Privacy Policy details our data practices across all components of SwordigoDesktop.
 

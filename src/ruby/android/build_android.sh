@@ -53,14 +53,91 @@ echo "NDK:        ${ANDROID_NDK_ROOT}"
 echo "BuildTools: ${BUILD_TOOLS_DIR}"
 echo "Platform:   android-36"
 
-# Supported ABIs (arm64-v8a is primary, with armeabi-v7a and x86_64 support)
+# Supported ABIs: arm64-v8a (default), armeabi-v7a (arm32), x86_64, x86
+TARGET_ABI="${RUBY_TARGET_ABI:-}"
 ABIS=("arm64-v8a")
-if [[ "${1:-}" == "--all-abis" ]]; then
-    ABIS=("arm64-v8a" "armeabi-v7a" "x86_64")
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --abi)
+            TARGET_ABI="$2"
+            shift 2
+            ;;
+        --all-abis)
+            ABIS=("arm64-v8a" "armeabi-v7a" "x86_64" "x86")
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+if [ -n "${TARGET_ABI}" ]; then
+    ABIS=("${TARGET_ABI}")
 fi
 
 BUILD_ROOT="${PROJECT_ROOT}/build-android"
 mkdir -p "${BUILD_ROOT}"
+
+resolve_qt_abi_dir() {
+    local target_abi="$1"
+    local abi_normalized="${target_abi//-/_}"
+    local qt_arch_name="android_${abi_normalized}"
+    if [[ "${target_abi}" == "armeabi-v7a" ]]; then
+        qt_arch_name="android_armv7"
+    fi
+    local res=""
+
+    if [ -n "${QT_ROOT_DIR:-}" ] && [ -f "${QT_ROOT_DIR}/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+        res="${QT_ROOT_DIR}"
+    elif [ -n "${QT_DIR:-}" ] && [ -f "${QT_DIR}/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+        res="${QT_DIR}"
+    elif [ -n "${QT_DIR:-}" ] && [ -d "${QT_DIR}/6.6.3/${qt_arch_name}" ]; then
+        res="${QT_DIR}/6.6.3/${qt_arch_name}"
+    elif [ -n "${QT_DIR:-}" ] && [ -d "${QT_DIR}/6.6.3/android_${abi_normalized}" ]; then
+        res="${QT_DIR}/6.6.3/android_${abi_normalized}"
+    elif [ -n "${Qt6_DIR:-}" ] && [ -f "${Qt6_DIR}/Qt6Config.cmake" ]; then
+        res="$(cd "${Qt6_DIR}/../../.." && pwd)"
+    elif [ -d "${BUILD_ROOT}/qt6/6.6.3/${qt_arch_name}" ]; then
+        res="${BUILD_ROOT}/qt6/6.6.3/${qt_arch_name}"
+    elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/${qt_arch_name}" ]; then
+        res="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/${qt_arch_name}"
+    elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${abi_normalized}" ]; then
+        res="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${abi_normalized}"
+    fi
+
+    # Dynamic search fallback for CI environments (e.g. GitHub Actions runners)
+    if [ -z "${res}" ] || [ ! -f "${res}/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+        local search_hit
+        search_hit="$(find /home/runner/work "${BUILD_ROOT}" /opt /usr -name "Qt6Config.cmake" 2>/dev/null | grep -E "${qt_arch_name}|android_${abi_normalized}|android" | head -n 1 || true)"
+        if [ -n "${search_hit}" ]; then
+            res="$(cd "$(dirname "${search_hit}")/../../.." && pwd)"
+        fi
+    fi
+
+    if [ -z "${res}" ] || [ ! -d "${res}" ]; then
+        res="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a"
+    fi
+    echo "${res}"
+}
+
+resolve_qt_host_dir() {
+    local qt_abi="$1"
+    local res=""
+    if [ -n "${QT_HOST_PATH:-}" ] && [ -d "${QT_HOST_PATH}" ]; then
+        res="${QT_HOST_PATH}"
+    elif [ -d "${BUILD_ROOT}/qt6/6.6.3/gcc_64" ]; then
+        res="${BUILD_ROOT}/qt6/6.6.3/gcc_64"
+    elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64" ]; then
+        res="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64"
+    elif [ -n "${qt_abi}" ] && [ -d "${qt_abi}/../gcc_64" ]; then
+        res="$(cd "${qt_abi}/../gcc_64" && pwd)"
+    else
+        res="/usr"
+    fi
+    echo "${res}"
+}
 
 for ABI in "${ABIS[@]}"; do
     echo ""
@@ -68,31 +145,10 @@ for ABI in "${ABIS[@]}"; do
     ABI_BUILD_DIR="${BUILD_ROOT}/${ABI}"
     mkdir -p "${ABI_BUILD_DIR}"
 
-    QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_${ABI//-/_}"
-    if [ ! -d "${QT_ABI_DIR}" ]; then
-        if [ -n "${QT_DIR:-}" ] && [ -d "${QT_DIR}" ]; then
-            QT_ABI_DIR="${QT_DIR}"
-        elif [ -n "${Qt6_DIR:-}" ] && [ -d "${Qt6_DIR}/../../.." ]; then
-            QT_ABI_DIR="$(cd "${Qt6_DIR}/../../.." && pwd)"
-        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}" ]; then
-            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}"
-        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a" ]; then
-            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a"
-        else
-            QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a"
-        fi
-    fi
-
-    QT_HOST_DIR="${BUILD_ROOT}/qt6/6.6.3/gcc_64"
-    if [ ! -d "${QT_HOST_DIR}" ]; then
-        if [ -n "${QT_HOST_PATH:-}" ] && [ -d "${QT_HOST_PATH}" ]; then
-            QT_HOST_DIR="${QT_HOST_PATH}"
-        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64" ]; then
-            QT_HOST_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/gcc_64"
-        else
-            QT_HOST_DIR="/usr"
-        fi
-    fi
+    QT_ABI_DIR="$(resolve_qt_abi_dir "${ABI}")"
+    QT_HOST_DIR="$(resolve_qt_host_dir "${QT_ABI_DIR}")"
+    echo "Qt6 Android ABI: ${QT_ABI_DIR}"
+    echo "Qt6 Host Path:   ${QT_HOST_DIR}"
 
     cmake -S "${SCRIPT_DIR}" -B "${ABI_BUILD_DIR}" \
         -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
@@ -103,7 +159,8 @@ for ABI in "${ABIS[@]}"; do
         -DCMAKE_FIND_ROOT_PATH="${QT_ABI_DIR}" \
         -DCMAKE_PREFIX_PATH="${QT_ABI_DIR}" \
         -DQT_HOST_PATH="${QT_HOST_DIR}" \
-        -DQt6_DIR="${QT_ABI_DIR}/lib/cmake/Qt6"
+        -DQt6_DIR="${QT_ABI_DIR}/lib/cmake/Qt6" \
+        -DRUBY_BUILD_VERSION="${RUBY_VERSION_NAME:-v1.1}"
 
     cmake --build "${ABI_BUILD_DIR}" --config Release -j"$(nproc)"
     echo "[✓] Native library built: ${ABI_BUILD_DIR}/libruby.so"
@@ -131,21 +188,12 @@ for ABI in "${ABIS[@]}"; do
         cp "${LIBCXX}/arm-linux-androideabi/libc++_shared.so" "${PACKAGE_DIR}/lib/${ABI}/"
     elif [[ "${ABI}" == "x86_64" ]]; then
         cp "${LIBCXX}/x86_64-linux-android/libc++_shared.so" "${PACKAGE_DIR}/lib/${ABI}/"
+    elif [[ "${ABI}" == "x86" ]]; then
+        cp "${LIBCXX}/i686-linux-android/libc++_shared.so" "${PACKAGE_DIR}/lib/${ABI}/"
     fi
 
     # 3. Qt shared libraries and plugins for this ABI
-    QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_${ABI//-/_}"
-    if [ ! -d "${QT_ABI_DIR}" ]; then
-        if [ -n "${QT_DIR:-}" ] && [ -d "${QT_DIR}" ]; then
-            QT_ABI_DIR="${QT_DIR}"
-        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}" ]; then
-            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_${ABI//-/_}"
-        elif [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a" ]; then
-            QT_ABI_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a"
-        else
-            QT_ABI_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a"
-        fi
-    fi
+    QT_ABI_DIR="$(resolve_qt_abi_dir "${ABI}")"
 
     echo "Copying Qt shared libraries from ${QT_ABI_DIR}/lib..."
     if [ -d "${QT_ABI_DIR}/lib" ]; then
@@ -172,12 +220,7 @@ done
 # Package QML assets into assets/qml
 echo "Packaging QML modules into assets/qml..."
 mkdir -p "${PACKAGE_DIR}/assets/qml"
-QT_QML_DIR="${QT_ABI_DIR}/qml"
-if [ ! -d "${QT_QML_DIR}" ] && [ -d "${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml" ]; then
-    QT_QML_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/qml"
-elif [ ! -d "${QT_QML_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/qml" ]; then
-    QT_QML_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/qml"
-fi
+QT_QML_DIR="$(resolve_qt_abi_dir "${ABIS[0]}")/qml"
 if [ -d "${QT_QML_DIR}" ]; then
     cp -r "${QT_QML_DIR}/"* "${PACKAGE_DIR}/assets/qml/"
     find "${PACKAGE_DIR}/assets/qml" -name "*.so" -delete
@@ -185,10 +228,23 @@ fi
 
 # Compile resources using aapt2
 "${AAPT2}" compile --dir "${SCRIPT_DIR}/res" -o "${BUILD_ROOT}/compiled_res.zip"
+
+VERSION_FLAGS=()
+if [ -n "${RUBY_VERSION_CODE:-}" ]; then
+    VERSION_FLAGS+=(--version-code "${RUBY_VERSION_CODE}")
+fi
+if [ -n "${RUBY_VERSION_NAME:-}" ]; then
+    VERSION_FLAGS+=(--version-name "${RUBY_VERSION_NAME}")
+fi
+if [ ${#VERSION_FLAGS[@]} -gt 0 ]; then
+    VERSION_FLAGS+=(--replace-version)
+fi
+
 "${AAPT2}" link -o "${BUILD_ROOT}/unaligned.apk" \
     -I "${ANDROID_JAR}" \
     --manifest "${SCRIPT_DIR}/AndroidManifest.xml" \
     -A "${PACKAGE_DIR}/assets" \
+    "${VERSION_FLAGS[@]:-}" \
     "${BUILD_ROOT}/compiled_res.zip" \
     --auto-add-overlay
 
@@ -197,15 +253,9 @@ JAVA_OUT="${BUILD_ROOT}/java_classes"
 rm -rf "${JAVA_OUT}"
 mkdir -p "${JAVA_OUT}"
 
-QT_JAR_DIR="${QT_ABI_DIR}/jar"
-QT_SRC_DIR="${QT_ABI_DIR}/src/android/java/src"
-if [ ! -d "${QT_JAR_DIR}" ] && [ -d "${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/jar" ]; then
-    QT_JAR_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/jar"
-    QT_SRC_DIR="${BUILD_ROOT}/qt6/6.6.3/android_arm64_v8a/src/android/java/src"
-elif [ ! -d "${QT_JAR_DIR}" ] && [ -d "/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/jar" ]; then
-    QT_JAR_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/jar"
-    QT_SRC_DIR="/home/quantumcreeper/SwordigoDesktop/build-android/qt6/6.6.3/android_arm64_v8a/src/android/java/src"
-fi
+PRIMARY_QT_ABI="$(resolve_qt_abi_dir "arm64-v8a")"
+QT_JAR_DIR="${PRIMARY_QT_ABI}/jar"
+QT_SRC_DIR="${PRIMARY_QT_ABI}/src/android/java/src"
 
 QT_CP=""
 for j in "${QT_JAR_DIR}"/*.jar; do
@@ -240,7 +290,8 @@ done < <(find "${JAVA_OUT}" -name "*.class" -print0)
 (cd "${PACKAGE_DIR}" && zip -r -u "${BUILD_ROOT}/unaligned.apk" lib assets)
 
 # Align APK
-FINAL_APK="${PROJECT_ROOT}/bin/ruby_gg_mobile.apk"
+FINAL_APK_NAME="${RUBY_APK_NAME:-RubyTouch-${ABIS[0]}.apk}"
+FINAL_APK="${PROJECT_ROOT}/bin/${FINAL_APK_NAME}"
 mkdir -p "${PROJECT_ROOT}/bin"
 "${ZIPALIGN}" -f 4 "${BUILD_ROOT}/unaligned.apk" "${FINAL_APK}"
 
@@ -255,11 +306,11 @@ echo "[✓] Successfully built APK: ${FINAL_APK}"
 
 # Check for ADB device
 if "${ADB}" devices | grep -q -E "[a-zA-Z0-9_-]+\s+device$"; then
-    echo "Found connected ADB device. Installing..."
+    echo "[*] Connected Android device detected. Installing..."
     "${ADB}" install -r "${FINAL_APK}"
-    echo "[✓] Installed ruby_gg_mobile to device!"
-    echo "Launching in.aevora.ruby..."
-    "${ADB}" shell am start -n in.aevora.ruby/.RubyActivity || true
+    echo "[*] Launching Ruby Touch (Ruby Mobile)..."
+    "${ADB}" shell am start -n "in.aevora.ruby/.RubyActivity"
+    echo "[✓] Installed and launched Ruby Touch (Ruby Mobile) on device!"
 else
     echo "NOTE: No ADB device in 'device' state currently. Ensure USB debugging is ON."
 fi
