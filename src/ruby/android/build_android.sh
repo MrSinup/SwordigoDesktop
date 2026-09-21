@@ -229,24 +229,26 @@ fi
 # Compile resources using aapt2
 "${AAPT2}" compile --dir "${SCRIPT_DIR}/res" -o "${BUILD_ROOT}/compiled_res.zip"
 
-VERSION_FLAGS=()
+AAPT2_LINK_CMD=(
+    "${AAPT2}" link -o "${BUILD_ROOT}/unaligned.apk"
+    -I "${ANDROID_JAR}"
+    --manifest "${SCRIPT_DIR}/AndroidManifest.xml"
+    -A "${PACKAGE_DIR}/assets"
+)
 if [ -n "${RUBY_VERSION_CODE:-}" ]; then
-    VERSION_FLAGS+=(--version-code "${RUBY_VERSION_CODE}")
+    AAPT2_LINK_CMD+=(--version-code "${RUBY_VERSION_CODE}")
 fi
 if [ -n "${RUBY_VERSION_NAME:-}" ]; then
-    VERSION_FLAGS+=(--version-name "${RUBY_VERSION_NAME}")
+    AAPT2_LINK_CMD+=(--version-name "${RUBY_VERSION_NAME}")
 fi
-if [ ${#VERSION_FLAGS[@]} -gt 0 ]; then
-    VERSION_FLAGS+=(--replace-version)
+if [ -n "${RUBY_VERSION_CODE:-}" ] || [ -n "${RUBY_VERSION_NAME:-}" ]; then
+    AAPT2_LINK_CMD+=(--replace-version)
 fi
-
-"${AAPT2}" link -o "${BUILD_ROOT}/unaligned.apk" \
-    -I "${ANDROID_JAR}" \
-    --manifest "${SCRIPT_DIR}/AndroidManifest.xml" \
-    -A "${PACKAGE_DIR}/assets" \
-    "${VERSION_FLAGS[@]:-}" \
-    "${BUILD_ROOT}/compiled_res.zip" \
+AAPT2_LINK_CMD+=(
+    "${BUILD_ROOT}/compiled_res.zip"
     --auto-add-overlay
+)
+"${AAPT2_LINK_CMD[@]}"
 
 # Compile Java sources
 JAVA_OUT="${BUILD_ROOT}/java_classes"
