@@ -8,7 +8,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+if [ -d "${SCRIPT_DIR}/src/ruby/android" ]; then
+    ANDROID_SRC_DIR="${SCRIPT_DIR}/src/ruby/android"
+    PROJECT_ROOT="${SCRIPT_DIR}"
+elif [ -f "${SCRIPT_DIR}/../../../CMakeLists.txt" ]; then
+    ANDROID_SRC_DIR="${SCRIPT_DIR}"
+    PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+elif [ -f "${SCRIPT_DIR}/../../CMakeLists.txt" ]; then
+    ANDROID_SRC_DIR="${SCRIPT_DIR}"
+    PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+elif [ -f "${SCRIPT_DIR}/CMakeLists.txt" ]; then
+    ANDROID_SRC_DIR="${SCRIPT_DIR}"
+    PROJECT_ROOT="${SCRIPT_DIR}"
+else
+    ANDROID_SRC_DIR="${SCRIPT_DIR}"
+    PROJECT_ROOT="${SCRIPT_DIR}"
+fi
 
 # Android Build Tools & SDK resolution (respects environment or falls back to workstation)
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/run/media/quantumcreeper/TVPG/linuxFiles/Applications/AndroidBuildTools}}"
@@ -150,7 +165,7 @@ for ABI in "${ABIS[@]}"; do
     echo "Qt6 Android ABI: ${QT_ABI_DIR}"
     echo "Qt6 Host Path:   ${QT_HOST_DIR}"
 
-    cmake -S "${SCRIPT_DIR}" -B "${ABI_BUILD_DIR}" \
+    cmake -S "${ANDROID_SRC_DIR}" -B "${ABI_BUILD_DIR}" \
         -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
         -DANDROID_ABI="${ABI}" \
         -DANDROID_PLATFORM=android-24 \
@@ -163,7 +178,8 @@ for ABI in "${ABIS[@]}"; do
         -DRUBY_BUILD_VERSION="${RUBY_VERSION_NAME:-v1.1}"
 
     cmake --build "${ABI_BUILD_DIR}" --config Release -j"$(nproc)"
-    echo "[✓] Native library built: ${ABI_BUILD_DIR}/libruby.so"
+    LIBRUBY_SO="$(find "${ABI_BUILD_DIR}" -name "libruby.so" | head -n 1)"
+    echo "[✓] Native library built: ${LIBRUBY_SO:-${ABI_BUILD_DIR}/libruby.so}"
 done
 
 echo ""
@@ -177,8 +193,13 @@ for ABI in "${ABIS[@]}"; do
     mkdir -p "${PACKAGE_DIR}/lib/${ABI}"
     
     # 1. Main application library (both libruby.so and libruby_${ABI}.so for QtLoader compatibility)
-    cp "${BUILD_ROOT}/${ABI}/libruby.so" "${PACKAGE_DIR}/lib/${ABI}/libruby.so"
-    cp "${BUILD_ROOT}/${ABI}/libruby.so" "${PACKAGE_DIR}/lib/${ABI}/libruby_${ABI}.so"
+    LIBRUBY_SO="$(find "${BUILD_ROOT}/${ABI}" -name "libruby.so" | head -n 1)"
+    if [ -z "${LIBRUBY_SO}" ] || [ ! -f "${LIBRUBY_SO}" ]; then
+        echo "ERROR: libruby.so not found under ${BUILD_ROOT}/${ABI}" >&2
+        exit 1
+    fi
+    cp "${LIBRUBY_SO}" "${PACKAGE_DIR}/lib/${ABI}/libruby.so"
+    cp "${LIBRUBY_SO}" "${PACKAGE_DIR}/lib/${ABI}/libruby_${ABI}.so"
 
     # 2. NDK libc++_shared.so
     LIBCXX="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"
@@ -227,12 +248,12 @@ if [ -d "${QT_QML_DIR}" ]; then
 fi
 
 # Compile resources using aapt2
-"${AAPT2}" compile --dir "${SCRIPT_DIR}/res" -o "${BUILD_ROOT}/compiled_res.zip"
+"${AAPT2}" compile --dir "${ANDROID_SRC_DIR}/res" -o "${BUILD_ROOT}/compiled_res.zip"
 
 AAPT2_LINK_CMD=(
     "${AAPT2}" link -o "${BUILD_ROOT}/unaligned.apk"
     -I "${ANDROID_JAR}"
-    --manifest "${SCRIPT_DIR}/AndroidManifest.xml"
+    --manifest "${ANDROID_SRC_DIR}/AndroidManifest.xml"
     -A "${PACKAGE_DIR}/assets"
 )
 if [ -n "${RUBY_VERSION_CODE:-}" ]; then
@@ -266,7 +287,7 @@ for j in "${QT_JAR_DIR}"/*.jar; do
     fi
 done
 
-JAVA_SRCS=("${SCRIPT_DIR}/java/in/aevora/ruby/RubyActivity.java")
+JAVA_SRCS=("${ANDROID_SRC_DIR}/java/in/aevora/ruby/RubyActivity.java")
 while IFS= read -r -d '' src; do
     JAVA_SRCS+=("${src}")
 done < <(find "${QT_SRC_DIR}" -name "*.java" -print0)
